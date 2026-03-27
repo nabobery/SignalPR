@@ -2,6 +2,7 @@ pub mod discord;
 pub mod manager;
 pub mod secrets;
 pub mod slack;
+pub mod ws_manager;
 
 use serde::{Deserialize, Serialize};
 

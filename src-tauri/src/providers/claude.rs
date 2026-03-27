@@ -430,6 +430,7 @@ mod tests {
             client: reqwest::Client::new(),
         };
         let input = ReviewInput {
+            lane_id: "test".into(),
             system_prompt: "test".into(),
             diff: "diff".into(),
             output_schema: "{}".into(),

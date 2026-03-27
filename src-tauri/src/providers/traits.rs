@@ -18,6 +18,8 @@ pub struct ProviderHealth {
 /// Providers are "prompt in, JSON out" executors.
 #[derive(Debug, Clone)]
 pub struct ReviewInput {
+    /// Stable lane identifier for routing streaming/approvals to the right UI lane.
+    pub lane_id: String,
     pub system_prompt: String,
     pub diff: String,
     pub output_schema: String,

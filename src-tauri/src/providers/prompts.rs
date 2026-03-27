@@ -146,6 +146,7 @@ pub fn build_review_input_with_custom_prompt(
     preferences: Option<&str>,
     custom_prompt: Option<&str>,
 ) -> ReviewInput {
+    let lane_id = focus.name().to_string();
     let mut system_prompt = if let Some(prompt) = custom_prompt {
         prompt.to_string()
     } else {
@@ -185,6 +186,7 @@ pub fn build_review_input_with_custom_prompt(
     }
 
     ReviewInput {
+        lane_id,
         system_prompt,
         diff: diff.to_string(),
         output_schema: OUTPUT_SCHEMA.to_string(),

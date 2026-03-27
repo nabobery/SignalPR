@@ -15,15 +15,45 @@
 | `store.ts` | `ReviewContext` for workspace state                            |
 | `types.ts` | Shared TypeScript interfaces                                   |
 
+### Key Types (`types.ts`)
+
+| Type                   | Purpose                                          |
+| ---------------------- | ------------------------------------------------ |
+| `CodexApprovalRequest` | Approval queue item (request_id, method, params) |
+| `CodexLaneDelta`       | Streaming delta (lane_id, delta, buffer)         |
+| `Finding`              | Review finding with severity, location, fix      |
+| `LaneSnapshot`         | Per-lane status (security/arch/perf)             |
+| `ReviewSnapshot`       | Full review state with findings + clusters       |
+| `ChannelStatus`        | Discord/Slack connection status                  |
+
+### Key IPC Functions (`ipc.ts`)
+
+| Function                  | Purpose                             |
+| ------------------------- | ----------------------------------- |
+| `resolveCodexApproval()`  | Approve/decline Codex tool request  |
+| `startChannelListeners()` | Start background channel polling    |
+| `stopChannelListeners()`  | Stop background channel polling     |
+| `getChannelStatus()`      | Get Discord/Slack connection status |
+
 ## FEATURES
 
-| Feature       | Components                                                                                                         | Purpose                            |
-| ------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
-| `intake/`     | IntakeView                                                                                                         | PR URL input + workspace selection |
-| `onboarding/` | EnvironmentCheck                                                                                                   | Verify gh/codex CLI                |
-| `review/`     | ReviewWorkspace, FileTree, SignalBoard, DiffPanel, FindingCard, ClusterCard, LaneProgress, FixPreview, FixBatchBar | Main review UI + auto-fix          |
-| `settings/`   | SettingsView, GeneralPanel, PresetPanel, AgentPanel, ChannelPanel, AgentForm                                       | User configuration                 |
-| `submission/` | SubmitDialog                                                                                                       | Submit review to GitHub            |
+| Feature       | Components                                                                                                                                           | Purpose                                |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `intake/`     | IntakeView                                                                                                                                           | PR URL input + workspace selection     |
+| `onboarding/` | EnvironmentCheck                                                                                                                                     | Verify gh/codex CLI                    |
+| `review/`     | ReviewWorkspace, FileTree, SignalBoard, DiffPanel, FindingCard, ClusterCard, LaneProgress, StreamingActivity, ApprovalModal, FixPreview, FixBatchBar | Main review UI + streaming + approvals |
+| `settings/`   | SettingsView, GeneralPanel, PresetPanel, AgentPanel, ChannelPanel, AgentForm                                                                         | User configuration                     |
+| `submission/` | SubmitDialog                                                                                                                                         | Submit review to GitHub                |
+
+## EVENTS
+
+Frontend listens to Tauri events:
+
+| Event                      | Payload                | Consumer                     |
+| -------------------------- | ---------------------- | ---------------------------- |
+| `review_progress`          | Pipeline status        | ReviewWorkspace              |
+| `codex_lane_delta`         | `CodexLaneDelta`       | StreamingActivity (per lane) |
+| `codex_approval_requested` | `CodexApprovalRequest` | ApprovalModal                |
 
 ## CONVENTIONS
 
@@ -31,3 +61,5 @@
 - Tailwind CSS 4 for styling
 - `lucide-react` for icons
 - Never call `invoke()` directly — use `ipc.ts`
+- Event listeners use `listen<T>("event", handler)` from `@tauri-apps/api/event`
+- Always cleanup: `unlisten.then((fn) => fn())` in useEffect return

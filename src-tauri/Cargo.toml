@@ -35,3 +35,6 @@ serde_yml = "0.0.12"
 tokio-retry2 = { version = "0.5", features = ["jitter"] }
 sha2 = "0.10"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+url = "2"

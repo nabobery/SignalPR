@@ -7,13 +7,15 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 use serde::Deserialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::agents::definition::AgentDefinition;
 use crate::agents::registry::AgentRegistry;
 use crate::cleaner::CleanerConfig;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::codex::{CodexProvider, MockProvider};
+use crate::providers::codex_app_server::manager::CodexAppServerManager;
+use crate::providers::codex_app_server::provider::CodexAppServerProvider;
 use crate::providers::traits::ReviewProvider;
 use crate::storage::queries;
 
@@ -202,15 +204,33 @@ pub fn resolve_config(
 }
 
 /// Select a review provider based on preference and availability.
-/// Falls back through: preferred → codex → claude → mock.
+/// Falls back through: preferred → codex (app-server) → codex (exec) → claude → mock.
+///
+/// The `codex` preference now means "Codex App Server" (managed child process).
+/// Use `codex_exec` for the legacy one-shot `codex exec` provider.
 pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn ReviewProvider> {
     match preference {
-        "codex" => {
+        "codex" | "codex_app_server" => {
+            let manager = app.state::<Arc<CodexAppServerManager>>().inner().clone();
+            let provider = CodexAppServerProvider::new(manager);
+            if provider.health_check().await.available {
+                tracing::info!("Using Codex App Server provider");
+                return Arc::new(provider);
+            }
+            tracing::warn!("Codex App Server preferred but unavailable, trying codex exec");
+            // Fall through to codex exec
             let codex = CodexProvider::new(app.clone());
             if codex.health_check().await.available {
                 return Arc::new(codex);
             }
-            tracing::warn!("Codex preferred but unavailable, trying Claude");
+            tracing::warn!("Codex exec also unavailable, trying Claude");
+        }
+        "codex_exec" => {
+            let codex = CodexProvider::new(app.clone());
+            if codex.health_check().await.available {
+                return Arc::new(codex);
+            }
+            tracing::warn!("Codex exec preferred but unavailable, trying Claude");
         }
         "claude" => {
             let claude = ClaudeProvider::new();
@@ -219,12 +239,20 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
             }
             tracing::warn!("Claude preferred but unavailable, trying Codex");
         }
-        _ => {} // "auto" — try both in order
+        _ => {} // "auto" — try all in order
     }
 
-    // Auto fallback chain: codex → claude → mock
+    // Auto fallback chain: codex app-server → codex exec → claude → mock
+    let manager = app.state::<Arc<CodexAppServerManager>>().inner().clone();
+    let app_server = CodexAppServerProvider::new(manager);
+    if app_server.health_check().await.available {
+        tracing::info!("Using Codex App Server provider (auto-detected)");
+        return Arc::new(app_server);
+    }
+
     let codex = CodexProvider::new(app.clone());
     if codex.health_check().await.available {
+        tracing::info!("Using Codex exec provider");
         return Arc::new(codex);
     }
 

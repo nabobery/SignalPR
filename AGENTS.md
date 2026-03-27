@@ -2,11 +2,11 @@
 
 **Generated:** 2026-03-28
 **Branch:** main
-**Commit:** bece43e
+**Commit:** b070974
 
 ## OVERVIEW
 
-SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built with Tauri 2 (Rust backend + React/TypeScript frontend). Fetches GitHub PR diffs, runs AI review via Codex/Claude providers, presents findings in a structured workspace with multi-lane parallel analysis.
+SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built with Tauri 2 (Rust backend + React/TypeScript frontend). Fetches GitHub PR diffs, runs AI review via Codex/Claude providers, presents findings in a structured workspace with multi-lane parallel analysis. Supports WebSocket-based real-time streaming and interactive approval flows.
 
 ## STACK
 
@@ -22,23 +22,7 @@ SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built wi
 | Database           | SQLite (rusqlite) | 0.32         |
 | Async runtime      | Tokio             | 1.x          |
 | HTTP client        | reqwest           | 0.12         |
-| Frontend testing   | Vitest            | 4.x          |
-| Repo config        | YAML (serde_yml)  | 0.0.12       |
-
-## STACK
-
-| Layer              | Technology        | Version      |
-| ------------------ | ----------------- | ------------ |
-| Desktop shell      | Tauri             | 2.x          |
-| Frontend framework | React             | 19.x         |
-| Language (FE)      | TypeScript        | 5.8.x        |
-| Styling            | Tailwind CSS      | 4.x          |
-| Routing            | react-router      | 7.x          |
-| Build tool         | Vite              | 7.x          |
-| Language (BE)      | Rust              | Edition 2021 |
-| Database           | SQLite (rusqlite) | 0.32         |
-| Async runtime      | Tokio             | 1.x          |
-| HTTP client        | reqwest           | 0.12         |
+| WebSocket          | tokio-tungstenite | 0.26         |
 | Frontend testing   | Vitest            | 4.x          |
 | Repo config        | YAML (serde_yml)  | 0.0.12       |
 
@@ -124,6 +108,13 @@ signalpr/
 | `delete_agent`             | agents.rs      | Remove custom agent                 |
 | `apply_fix`                | autofix.rs     | Apply auto-fix patch                |
 | `get_channel_statuses`     | channels.rs    | Get Discord/Slack connection status |
+| `configure_channel`        | channels.rs    | Set webhook URL for channel         |
+| `remove_channel`           | channels.rs    | Remove channel configuration        |
+| `get_channel_status`       | channels.rs    | Get connection status array         |
+| `has_channel_token`        | channels.rs    | Check if channel has stored token   |
+| `start_channel_listeners`  | channels.rs    | Start background channel polling    |
+| `stop_channel_listeners`   | channels.rs    | Stop background channel polling     |
+| `resolve_codex_approval`   | codex.rs       | Approve/decline codex tool request  |
 | `get_preferences`          | preferences.rs | Get reviewer preference summaries   |
 
 ## CONFIGURATION
@@ -176,12 +167,13 @@ similarity_threshold: 0.80
 
 ### Providers
 
-| Provider | File      | Auth Method         | Notes                 |
-| -------- | --------- | ------------------- | --------------------- |
-| Codex    | codex.rs  | CLI subprocess      | Primary provider      |
-| Claude   | claude.rs | `ANTHROPIC_API_KEY` | Direct HTTP, tool_use |
-| GitHub   | github.rs | `gh` CLI            | PR fetching only      |
-| Mock     | codex.rs  | Built-in fixture    | Fallback for testing  |
+| Provider | File              | Auth Method         | Notes                         |
+| -------- | ----------------- | ------------------- | ----------------------------- |
+| Codex    | codex.rs          | CLI subprocess      | One-shot `codex exec`         |
+| CodexApp | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming |
+| Claude   | claude.rs         | `ANTHROPIC_API_KEY` | Direct HTTP, tool_use         |
+| GitHub   | github.rs         | `gh` CLI            | PR fetching only              |
+| Mock     | codex.rs          | Built-in fixture    | Fallback for testing          |
 
 ### TypeScript
 
@@ -204,6 +196,13 @@ similarity_threshold: 0.80
 - `pr_id` for PR identifiers
 - Findings use severity: `blocker | critical | warning | info | nitpick`
 
+## STREAMING EVENTS (Frontend)
+
+| Event                      | Payload                | Purpose                    |
+| -------------------------- | ---------------------- | -------------------------- |
+| `codex_approval_requested` | `CodexApprovalRequest` | Interactive tool approval  |
+| `codex_lane_delta`         | `CodexLaneDelta`       | Real-time streaming output |
+
 ## NEW MODULES
 
 ### `src-tauri/src/config/mod.rs`
@@ -225,11 +224,21 @@ Remaps finding anchors when PR diff changes between review start and submission:
 
 ### `src-tauri/src/channels/`
 
-Discord/Slack notification channels:
+Discord/Slack notification channels + WebSocket transport:
 
 - `ChannelManager` with broadcast events
 - `DiscordWebhook` / `SlackWebhook` implementations
+- `ws_manager.rs` — generic WebSocket loop with reconnection + exponential backoff
 - `secrets.rs` for webhook URL storage
+
+### `src-tauri/src/providers/codex_app_server/`
+
+Long-running Codex provider via JSON-RPC over stdio:
+
+- `manager.rs` — Process lifecycle, thread↔lane mapping, approval/notification broadcast
+- `provider.rs` — `ReviewProvider` impl with streaming buffer, multi-turn support
+- `transport.rs` — JSON-RPC wire protocol (requests, responses, notifications, server requests)
+- Enables interactive approval flows (`codex_approval_requested` event)
 
 ### `src-tauri/src/autofix/`
 

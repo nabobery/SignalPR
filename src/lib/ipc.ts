@@ -165,3 +165,15 @@ export async function getChannelStatus(): Promise<ChannelStatus[]> {
 export async function hasChannelToken(source: string): Promise<boolean> {
   return invoke("has_channel_token", { source });
 }
+
+export async function startChannelListeners(): Promise<void> {
+  return invoke("start_channel_listeners");
+}
+
+export async function stopChannelListeners(): Promise<void> {
+  return invoke("stop_channel_listeners");
+}
+
+export async function resolveCodexApproval(requestId: unknown, decision: string): Promise<void> {
+  return invoke("resolve_codex_approval", { requestId, decision });
+}

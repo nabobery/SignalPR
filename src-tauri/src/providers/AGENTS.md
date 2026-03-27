@@ -6,12 +6,17 @@
 
 ```
 providers/
-├── traits.rs    # ReviewProvider trait + data types
-├── codex.rs     # Codex CLI implementation
-├── claude.rs    # Direct HTTP to Anthropic API
-├── github.rs    # GitHub integration
-├── prompts.rs   # Agent focus configs (security/arch/performance)
-└── mod.rs       # Barrel exports
+├── traits.rs          # ReviewProvider trait + data types
+├── codex.rs           # Codex CLI implementation (one-shot)
+├── codex_app_server/  # Long-running Codex via JSON-RPC
+│   ├── manager.rs     # Process lifecycle, broadcast channels
+│   ├── provider.rs    # ReviewProvider implementation
+│   ├── transport.rs   # JSON-RPC wire protocol
+│   └── mod.rs         # Barrel exports
+├── claude.rs          # Direct HTTP to Anthropic API
+├── github.rs          # GitHub integration
+├── prompts.rs         # Agent focus configs (security/arch/performance)
+└── mod.rs             # Barrel exports
 ```
 
 ## TRAIT: ReviewProvider
@@ -32,10 +37,29 @@ pub trait ReviewProvider: Send + Sync {
 
 ## PROVIDERS
 
-| Provider | File      | Auth                | Method                |
-| -------- | --------- | ------------------- | --------------------- |
-| `Codex`  | codex.rs  | CLI subprocess      | Spawns `codex review` |
-| `Claude` | claude.rs | `ANTHROPIC_API_KEY` | HTTP + `tool_use`     |
+| Provider   | File              | Auth                | Method                        |
+| ---------- | ----------------- | ------------------- | ----------------------------- |
+| `Codex`    | codex.rs          | CLI subprocess      | One-shot `codex exec`         |
+| `CodexApp` | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming |
+| `Claude`   | claude.rs         | `ANTHROPIC_API_KEY` | HTTP + `tool_use`             |
+| `GitHub`   | github.rs         | `gh` CLI            | PR fetching only              |
+| `Mock`     | codex.rs          | Built-in fixture    | Fallback for testing          |
+
+### CodexAppServer Provider Details
+
+Long-running provider with interactive capabilities:
+
+- **Transport**: JSON-RPC over child process stdio
+- **Streaming**: Real-time text deltas via `CodexLaneDelta` events
+- **Approvals**: Server-initiated approval requests (`codex_approval_requested` event)
+- **Multi-turn**: Thread/turn tracking via `lane_by_thread` mapping
+- **Default model**: `gpt-5.2-codex`
+
+**Key types:**
+
+- `CodexAppServerManager` — Process lifecycle + broadcast channels
+- `JsonRpcTransport` — Wire protocol (request/response/notification/server-request)
+- `ApprovalRequest` — Forwarded approval with thread/turn/item IDs
 
 ### Claude Provider Details
 
@@ -59,3 +83,5 @@ pub trait ReviewProvider: Send + Sync {
 - Use `CancellationToken` for cancellable operations
 - Return `ProviderError` (not `AppError`) from providers
 - Health checks must not fail — return degraded status
+- Streaming providers emit `codex_lane_delta` events
+- Approval flows use `codex_approval_requested` event

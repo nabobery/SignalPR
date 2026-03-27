@@ -10,6 +10,7 @@ import { SignalBoard } from "./SignalBoard";
 import { DiffPanel } from "./DiffPanel";
 import LaneProgress from "./LaneProgress";
 import { SubmitDialog } from "../submission/SubmitDialog";
+import { ApprovalModal } from "./ApprovalModal";
 
 type Panel = "signals" | "diff";
 
@@ -216,6 +217,8 @@ export function ReviewWorkspace() {
             }}
           />
         )}
+
+        <ApprovalModal />
 
         {!batchBarDismissed && pendingFixes.length > 0 && (
           <FixBatchBar

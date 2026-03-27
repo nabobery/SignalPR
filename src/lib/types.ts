@@ -158,3 +158,20 @@ export interface AppError {
   code: string;
   message: string;
 }
+
+// Phase 4: Codex App Server approval types
+export interface CodexApprovalRequest {
+  request_id: unknown;
+  method: string;
+  thread_id: string;
+  turn_id: string;
+  item_id: string;
+  params: Record<string, unknown>;
+}
+
+// Phase 4: Codex App Server streaming delta event
+export interface CodexLaneDelta {
+  lane_id: string;
+  delta: string;
+  buffer: string;
+}

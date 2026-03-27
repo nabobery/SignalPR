@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod autofix;
 pub mod channels;
+pub mod codex;
 pub mod diagnostics;
 pub mod environment;
 pub mod findings;

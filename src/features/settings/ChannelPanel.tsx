@@ -4,6 +4,8 @@ import {
   removeChannel,
   getChannelStatus,
   hasChannelToken,
+  startChannelListeners,
+  stopChannelListeners,
   parseError,
 } from "../../lib/ipc";
 import type { ChannelStatus } from "../../lib/types";
@@ -72,7 +74,11 @@ function ChannelSection({
             }
           />
           <h3 className="text-sm font-semibold text-zinc-100">{label}</h3>
-          {configured && <span className="text-xs text-zinc-500 ml-1">Configured</span>}
+          {configured && (
+            <span className="text-xs text-zinc-500 ml-1">
+              {connected ? "Connected" : "Configured"}
+            </span>
+          )}
         </div>
         {configured && (
           <button
@@ -102,7 +108,7 @@ function ChannelSection({
           disabled={!token.trim() || saving}
           className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {saving ? "Saving..." : "Configure"}
+          {saving ? "Saving..." : configured ? "Update" : "Configure"}
         </button>
       </div>
 
@@ -116,6 +122,7 @@ export function ChannelPanel() {
   const [discordConfigured, setDiscordConfigured] = useState(false);
   const [statuses, setStatuses] = useState<ChannelStatus[]>([]);
   const [loading, setLoading] = useState(true);
+  const [toggling, setToggling] = useState(false);
 
   const loadState = async () => {
     try {
@@ -138,14 +145,37 @@ export function ChannelPanel() {
     loadState();
   }, []);
 
+  const anyConfigured = slackConfigured || discordConfigured;
+  const anyConnected = statuses.some((s) => s.connected);
+
   const handleConfigure = async (source: string, token: string) => {
     await configureChannel(source, token);
+    // Auto-start listeners after configuring a token
+    await startChannelListeners();
     await loadState();
   };
 
   const handleRemove = async (source: string) => {
     await removeChannel(source);
     await loadState();
+  };
+
+  const handleToggle = async () => {
+    setToggling(true);
+    try {
+      if (anyConnected) {
+        await stopChannelListeners();
+      } else {
+        await startChannelListeners();
+      }
+      // Give listeners a moment to connect before refreshing status
+      await new Promise((r) => setTimeout(r, 500));
+      await loadState();
+    } catch {
+      // Ignore toggle errors
+    } finally {
+      setToggling(false);
+    }
   };
 
   const slackStatus = statuses.find((s) => s.source === "slack") ?? null;
@@ -161,19 +191,33 @@ export function ChannelPanel() {
 
   return (
     <div className="space-y-4 max-w-2xl">
-      <div>
-        <h2 className="text-lg font-semibold text-zinc-100 mb-1">Notification Channels</h2>
-        <p className="text-sm text-zinc-400 mb-4">
-          Connect Slack or Discord to receive review requests and send notifications directly from
-          SignalPR.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-100 mb-1">Notification Channels</h2>
+          <p className="text-sm text-zinc-400">
+            Connect Slack or Discord to receive PR review requests via DMs and bot mentions.
+          </p>
+        </div>
+        {anyConfigured && (
+          <button
+            onClick={handleToggle}
+            disabled={toggling}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${
+              anyConnected
+                ? "bg-zinc-700 text-zinc-200 hover:bg-zinc-600"
+                : "bg-emerald-600 text-white hover:bg-emerald-500"
+            }`}
+          >
+            {toggling ? "..." : anyConnected ? "Disconnect" : "Connect"}
+          </button>
+        )}
       </div>
 
       <ChannelSection
         source="slack"
         label="Slack"
         placeholder="xapp-..."
-        description="Connect a Slack workspace to receive PR review requests via slash commands and send review summaries to channels."
+        description="Uses Socket Mode for real-time DM and @mention listening. Requires an app-level token (xapp-...) with connections:write scope."
         configured={slackConfigured}
         status={slackStatus}
         onConfigure={handleConfigure}
@@ -184,7 +228,7 @@ export function ChannelPanel() {
         source="discord"
         label="Discord"
         placeholder="Bot token..."
-        description="Connect a Discord server to listen for review requests in designated channels and post review results."
+        description="Connects to Discord Gateway for real-time DM and @mention listening. Requires a bot token with Message Content intent enabled."
         configured={discordConfigured}
         status={discordStatus}
         onConfigure={handleConfigure}

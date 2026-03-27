@@ -9,6 +9,7 @@ import {
   Clock,
 } from "lucide-react";
 import type { LaneSnapshot } from "../../lib/types";
+import { StreamingActivity } from "./StreamingActivity";
 
 interface LaneProgressProps {
   lanes: LaneSnapshot[];
@@ -77,16 +78,19 @@ export default function LaneProgress({ lanes }: LaneProgressProps) {
           return (
             <div
               key={lane.lane_id}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md ${badge.bg} border border-zinc-700/50`}
+              className={`flex flex-col gap-0.5 px-3 py-1.5 rounded-md ${badge.bg} border border-zinc-700/50 min-w-0`}
             >
-              <Icon className={`w-3.5 h-3.5 ${badge.color}`} />
-              <span className={`text-xs font-medium ${badge.color} capitalize`}>
-                {lane.lane_id.replace(/_/g, " ")}
-              </span>
-              <StatusIcon status={lane.status} />
-              {lane.status === "completed" && lane.finding_count > 0 && (
-                <span className="text-xs text-zinc-400">{lane.finding_count}</span>
-              )}
+              <div className="flex items-center gap-2 min-w-0">
+                <Icon className={`w-3.5 h-3.5 ${badge.color} shrink-0`} />
+                <span className={`text-xs font-medium ${badge.color} capitalize truncate`}>
+                  {lane.lane_id.replace(/_/g, " ")}
+                </span>
+                <StatusIcon status={lane.status} />
+                {lane.status === "completed" && lane.finding_count > 0 && (
+                  <span className="text-xs text-zinc-400">{lane.finding_count}</span>
+                )}
+              </div>
+              {lane.status === "running" && <StreamingActivity laneId={lane.lane_id} />}
             </div>
           );
         })}
