@@ -23,6 +23,35 @@ pub enum AppError {
 
     #[error("State transition error: {0}")]
     InvalidTransition(String),
+
+    #[error("Transient error: {0}")]
+    Transient(String),
+}
+
+impl AppError {
+    #[allow(dead_code)]
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            AppError::Database(_) => "database_error",
+            AppError::Io(_) => "io_error",
+            AppError::Json(_) => "json_error",
+            AppError::Provider(_) => "provider_error",
+            AppError::InvalidInput(_) => "invalid_input",
+            AppError::NotFound(_) => "not_found",
+            AppError::InvalidTransition(_) => "invalid_transition",
+            AppError::Transient(_) => "transient_error",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            AppError::Transient(_) => true,
+            AppError::Io(e) => io_is_transient(e),
+            AppError::Provider(e) => e.is_transient(),
+            _ => false,
+        }
+    }
 }
 
 impl Serialize for AppError {
@@ -30,7 +59,11 @@ impl Serialize for AppError {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(self.to_string().as_str())
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("code", self.error_code())?;
+        map.serialize_entry("message", &self.to_string())?;
+        map.end()
     }
 }
 
@@ -60,4 +93,95 @@ pub enum ProviderError {
 
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl ProviderError {
+    #[allow(dead_code)]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            ProviderError::Io(e) => io_is_transient(e),
+            ProviderError::CodexFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate")
+                    || msg.contains("429")
+                    || msg.contains("overloaded")
+                    || msg.contains("retry")
+                    || msg.contains("timeout")
+            }
+            ProviderError::ClaudeFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate") || msg.contains("529") || msg.contains("500")
+            }
+            ProviderError::GhFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate") || msg.contains("429") || msg.contains("timeout")
+            }
+            ProviderError::Cancelled | ProviderError::NotAvailable(_) => false,
+            ProviderError::SubmissionFailed(_) | ProviderError::Json(_) => false,
+        }
+    }
+}
+
+fn io_is_transient(e: &std::io::Error) -> bool {
+    // Avoid retrying on filesystem and permission errors; focus on network-ish/transient kinds.
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_error_serializes_as_json_object() {
+        let err = AppError::Database(rusqlite::Error::QueryReturnedNoRows);
+        let json = serde_json::to_string(&err).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["code"], "database_error");
+        assert!(parsed["message"].as_str().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_app_error_transient_variant() {
+        let err = AppError::Transient("timeout".into());
+        let json = serde_json::to_string(&err).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["code"], "transient_error");
+    }
+
+    #[test]
+    fn test_transient_error_classification() {
+        assert!(AppError::Transient("timeout".into()).is_transient());
+        assert!(!AppError::InvalidInput("bad".into()).is_transient());
+        assert!(
+            AppError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"))
+                .is_transient()
+        );
+        assert!(AppError::Provider(ProviderError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timeout"
+        )))
+        .is_transient());
+    }
+
+    #[test]
+    fn test_provider_error_transient_classification() {
+        assert!(
+            ProviderError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "t"))
+                .is_transient()
+        );
+        assert!(!ProviderError::Cancelled.is_transient());
+        assert!(!ProviderError::NotAvailable("x".into()).is_transient());
+        assert!(ProviderError::CodexFailed("rate limit exceeded".into()).is_transient());
+        assert!(!ProviderError::CodexFailed("invalid model".into()).is_transient());
+        assert!(ProviderError::ClaudeFailed("529 overloaded".into()).is_transient());
+    }
 }

@@ -138,6 +138,20 @@ pub fn init_db_in_memory() -> Result<AppDb, rusqlite::Error> {
     Ok(AppDb(Mutex::new(conn)))
 }
 
+const MIGRATION_V3: &str = r#"
+-- Submission tracking for idempotent retry
+ALTER TABLE submission_records ADD COLUMN idempotency_key TEXT;
+ALTER TABLE submission_records ADD COLUMN attempt_count INTEGER DEFAULT 1;
+ALTER TABLE submission_records ADD COLUMN last_attempt_at TEXT;
+
+-- Diff change detection
+ALTER TABLE pull_requests ADD COLUMN diff_hash TEXT;
+
+-- Performance indexes
+CREATE INDEX IF NOT EXISTS idx_review_runs_status ON review_runs(status);
+CREATE INDEX IF NOT EXISTS idx_findings_review_run ON findings(review_run_id);
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -159,6 +173,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V2)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (2)",
+            [],
+        )?;
+    }
+
+    if current_version < 3 {
+        conn.execute_batch(MIGRATION_V3)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (3)",
             [],
         )?;
     }
@@ -203,6 +225,48 @@ mod tests {
         let conn = db.0.lock().unwrap();
         // Running migrations again should not fail
         run_migrations(&conn).expect("Second migration run should succeed");
+    }
+
+    #[test]
+    fn test_v3_submission_columns_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+        // Insert test data to verify V3 columns exist
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url, diff_hash) VALUES ('pr', 'ws', 1, 't', 'u', 'abc123')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO review_runs (id, pr_id, status) VALUES ('run', 'pr', 'ready')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO submission_records (id, review_run_id, review_action, idempotency_key, attempt_count, last_attempt_at) VALUES ('s', 'run', 'comment', 'key123', 2, '2026-03-27T00:00:00Z')",
+            [],
+        )
+        .expect("V3 columns should exist");
+    }
+
+    #[test]
+    fn test_v3_indexes_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_review_runs_status".to_string()));
+        assert!(indexes.contains(&"idx_findings_review_run".to_string()));
     }
 
     #[test]

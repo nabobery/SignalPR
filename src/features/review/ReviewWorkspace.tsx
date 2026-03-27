@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, Loader2, Send, FileCode, List } from "lucide-react";
-import { getReviewSnapshot } from "../../lib/ipc";
+import { getReviewSnapshot, parseError } from "../../lib/ipc";
 import { ReviewContext, type ReviewState } from "../../lib/store";
 import { FileTree } from "./FileTree";
 import { SignalBoard } from "./SignalBoard";
@@ -43,7 +43,7 @@ export function ReviewWorkspace() {
             : null,
       }));
     } catch (err) {
-      setError(String(err));
+      setError(parseError(err).message);
     } finally {
       setLoading(false);
     }
@@ -170,6 +170,16 @@ export function ReviewWorkspace() {
               </p>
             </div>
           )}
+
+        {/* Degraded-mode banner */}
+        {isReady && state.laneStatuses.every((l) => l.provider_name === "mock") && (
+          <div className="px-4 py-2 border-b border-zinc-800 bg-amber-900/20 shrink-0">
+            <p className="text-xs text-amber-400">
+              Running in demo mode — no AI providers available. Install Codex CLI or set
+              ANTHROPIC_API_KEY for real analysis.
+            </p>
+          </div>
+        )}
 
         {/* Body */}
         <div className="flex flex-1 min-h-0">

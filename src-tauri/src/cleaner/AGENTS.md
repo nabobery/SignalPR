@@ -1,6 +1,6 @@
 # Cleaner Module
 
-**Finding post-processing pipeline** — dedup → normalize → rank → verify.
+**Finding post-processing pipeline** — dedup → normalize → rank → verify → remap.
 
 ## PIPELINE
 
@@ -15,20 +15,33 @@ pub fn clean(
 
 ## STAGES
 
-| Stage       | File         | Purpose                        |
-| ----------- | ------------ | ------------------------------ |
-| `dedup`     | dedup.rs     | Remove duplicate findings      |
-| `normalize` | normalize.rs | Standardize severity, format   |
-| `rank`      | rank.rs      | Score and filter by confidence |
-| `verify`    | verify.rs    | Validate findings against diff |
+| Stage       | File         | Purpose                               |
+| ----------- | ------------ | ------------------------------------- |
+| `dedup`     | dedup.rs     | Remove duplicate findings             |
+| `normalize` | normalize.rs | Standardize severity, format          |
+| `rank`      | rank.rs      | Score and filter by confidence        |
+| `verify`    | verify.rs    | Validate findings against diff        |
+| `remap`     | remap.rs     | Adjust line anchors when diff changes |
+
+## REMAP MODULE
+
+Remaps finding anchors when PR diff changes between review start and submission:
+
+| Scenario                   | Action                                |
+| -------------------------- | ------------------------------------- |
+| File removed from new diff | Orphan the finding                    |
+| Hunk shifted               | Adjust `line_start/line_end` by delta |
+| Hunk gone                  | Demote to file-level (clear anchors)  |
+| Unanchored finding         | Pass through unchanged                |
 
 ## CONFIG
 
 ```rust
 pub struct CleanerConfig {
     pub min_confidence: f64,
-    pub max_findings: usize,
-    pub dedup_threshold: f64,
+    pub max_surface_findings: usize,  // renamed from max_findings
+    pub similarity_threshold: f64,    // renamed from dedup_threshold
+    pub drop_nitpicks: bool,
 }
 ```
 

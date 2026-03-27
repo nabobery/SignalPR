@@ -2,17 +2,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
-use crate::cleaner::CleanerConfig;
+use crate::config;
 use crate::orchestration::engine;
 use crate::orchestration::lane::{AgentLaneConfig, LaneSnapshot};
-use crate::providers::claude::ClaudeProvider;
-use crate::providers::codex::{CodexProvider, MockProvider};
 use crate::providers::prompts::{self, AgentFocus};
 use crate::providers::traits::ReviewProvider;
 use crate::storage::db::AppDb;
@@ -36,7 +33,16 @@ pub struct ReviewSnapshot {
 
 pub struct ActiveReviews(pub Mutex<HashMap<String, CancellationToken>>);
 
-const LANE_TIMEOUT_SECS: u64 = 120;
+fn require_non_empty_diff(diff: Option<String>) -> Result<String, crate::errors::AppError> {
+    use crate::errors::AppError;
+    let diff = diff.unwrap_or_default();
+    if diff.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "PR diff is missing. Re-open the PR from Intake to refetch the diff.".into(),
+        ));
+    }
+    Ok(diff)
+}
 
 #[tauri::command]
 pub async fn start_review(
@@ -44,60 +50,58 @@ pub async fn start_review(
     pr_id: String,
     db: tauri::State<'_, AppDb>,
     active: tauri::State<'_, ActiveReviews>,
-) -> Result<String, String> {
+) -> Result<String, crate::errors::AppError> {
+    use crate::errors::AppError;
+
     // Get PR data
     let (diff, cwd) = {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let pr = queries::get_pull_request(&conn, &pr_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "PR not found".to_string())?;
-        let ws = conn
-            .query_row(
-                "SELECT local_path FROM workspaces WHERE id = ?1",
-                rusqlite::params![pr.workspace_id],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let diff = pr.diff_text.unwrap_or_default();
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let pr = queries::get_pull_request(&conn, &pr_id)?
+            .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        let ws = conn.query_row(
+            "SELECT local_path FROM workspaces WHERE id = ?1",
+            rusqlite::params![pr.workspace_id],
+            |row| row.get::<_, String>(0),
+        )?;
+        let diff = require_non_empty_diff(pr.diff_text)?;
         (diff, ws)
     };
 
     if cwd.trim().is_empty() {
-        return Err(
-            "Workspace local path is not set. Confirm workspace before starting review."
-                .to_string(),
-        );
+        return Err(AppError::InvalidInput(
+            "Workspace local path is not set. Confirm workspace before starting review.".into(),
+        ));
     }
 
-    // Choose provider: codex → claude → mock fallback chain
-    let provider: Arc<dyn ReviewProvider> = {
-        let codex = CodexProvider::new(app.clone());
-        let codex_health = codex.health_check().await;
-        if codex_health.available {
-            Arc::new(codex)
-        } else {
-            let claude = ClaudeProvider::new();
-            let claude_health = claude.health_check().await;
-            if claude_health.available {
-                tracing::info!("Codex not available, using Claude provider");
-                Arc::new(claude)
-            } else {
-                tracing::info!("No providers available, using mock provider");
-                Arc::new(MockProvider::with_default_fixture())
-            }
-        }
+    // Load repo-level config if available
+    let repo_config = config::load_repo_config(&PathBuf::from(&cwd));
+
+    // Resolve config from DB settings + repo config
+    let resolved = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        config::resolve_config(&conn, repo_config.as_ref())
     };
 
-    let config = CleanerConfig::default();
+    // Choose provider based on preference
+    let provider: Arc<dyn ReviewProvider> =
+        config::select_provider(&app, &resolved.preferred_provider).await;
+
     let cwd_path = PathBuf::from(&cwd);
 
     // Build multi-lane configs: Security, Architecture, Performance
-    let lanes = build_agent_lanes(&diff, provider.clone());
+    let lanes = build_agent_lanes(&diff, provider.clone(), &resolved);
+    let cleaner_config = resolved.cleaner;
 
     // Create run_id + DB record BEFORE spawning so the UI can navigate immediately.
     let run_id = uuid::Uuid::new_v4().to_string();
     {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
         queries::insert_review_run(
             &conn,
             &ReviewRun {
@@ -108,14 +112,16 @@ pub async fn start_review(
                 completed_at: None,
                 error_message: None,
             },
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     }
 
     // Register cancellation token
     let token = CancellationToken::new();
     {
-        let mut map = active.0.lock().map_err(|e| e.to_string())?;
+        let mut map = active
+            .0
+            .lock()
+            .map_err(|e| AppError::InvalidInput(e.to_string()))?;
         map.insert(run_id.clone(), token.clone());
     }
 
@@ -125,6 +131,9 @@ pub async fn start_review(
 
     tauri::async_runtime::spawn(async move {
         let db = app_clone.state::<AppDb>();
+        let event_log = app_clone
+            .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
+            .map(|s| s.inner().clone());
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -135,12 +144,12 @@ pub async fn start_review(
             engine::ReviewPipelineArgs {
                 run_id: run_id_clone.clone(),
                 cwd: cwd_path,
-                config,
+                config: cleaner_config,
                 cancel: token,
                 lanes,
                 fallback_input: None,
                 fallback_provider: None,
-                event_log: None,
+                event_log,
             },
         )
         .await;
@@ -159,21 +168,30 @@ pub async fn start_review(
     Ok(run_id)
 }
 
-fn build_agent_lanes(diff: &str, provider: Arc<dyn ReviewProvider>) -> Vec<AgentLaneConfig> {
-    let focuses = [
-        ("security", AgentFocus::Security),
-        ("architecture", AgentFocus::Architecture),
-        ("performance", AgentFocus::Performance),
-    ];
+fn build_agent_lanes(
+    diff: &str,
+    provider: Arc<dyn ReviewProvider>,
+    resolved: &config::ResolvedConfig,
+) -> Vec<AgentLaneConfig> {
+    let focuses: Vec<(String, AgentFocus)> = resolved
+        .lanes
+        .iter()
+        .filter_map(|id| match id.as_str() {
+            "security" => Some((id.clone(), AgentFocus::Security)),
+            "architecture" => Some((id.clone(), AgentFocus::Architecture)),
+            "performance" => Some((id.clone(), AgentFocus::Performance)),
+            _ => None,
+        })
+        .collect();
 
     focuses
         .into_iter()
         .map(|(id, focus)| AgentLaneConfig {
-            id: id.to_string(),
+            id,
             focus,
             provider: provider.clone(),
             input: prompts::build_review_input(focus, diff),
-            timeout: Duration::from_secs(LANE_TIMEOUT_SECS),
+            timeout: resolved.lane_timeout,
         })
         .collect()
 }
@@ -183,7 +201,9 @@ pub async fn cancel_review(
     run_id: String,
     db: tauri::State<'_, AppDb>,
     active: tauri::State<'_, ActiveReviews>,
-) -> Result<(), String> {
+) -> Result<(), crate::errors::AppError> {
+    use crate::errors::AppError;
+
     // Trigger cancellation for any in-flight review.
     if let Ok(mut map) = active.0.lock() {
         if let Some(token) = map.remove(&run_id) {
@@ -192,15 +212,15 @@ pub async fn cancel_review(
     }
 
     // Also mark failed if still in progress.
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let run = queries::get_review_run(&conn, &run_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Review run not found".to_string())?;
+    let conn =
+        db.0.lock()
+            .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let run = queries::get_review_run(&conn, &run_id)?
+        .ok_or_else(|| AppError::NotFound("Review run not found".into()))?;
 
     match run.status.as_str() {
         "created" | "running_agents" | "cleaning" | "submitting" => {
-            queries::update_review_run_status(&conn, &run_id, "failed", Some("Cancelled by user"))
-                .map_err(|e| e.to_string())?;
+            queries::update_review_run_status(&conn, &run_id, "failed", Some("Cancelled by user"))?;
         }
         _ => {}
     }
@@ -211,18 +231,20 @@ pub async fn cancel_review(
 pub async fn get_review_snapshot(
     run_id: String,
     db: tauri::State<'_, AppDb>,
-) -> Result<ReviewSnapshot, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
+) -> Result<ReviewSnapshot, crate::errors::AppError> {
+    use crate::errors::AppError;
 
-    let run = queries::get_review_run(&conn, &run_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Review run not found".to_string())?;
+    let conn =
+        db.0.lock()
+            .map_err(|e| AppError::InvalidInput(e.to_string()))?;
 
-    let pr = queries::get_pull_request(&conn, &run.pr_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "PR not found".to_string())?;
+    let run = queries::get_review_run(&conn, &run_id)?
+        .ok_or_else(|| AppError::NotFound("Review run not found".into()))?;
 
-    let findings = queries::get_findings_for_run(&conn, &run_id).map_err(|e| e.to_string())?;
+    let pr = queries::get_pull_request(&conn, &run.pr_id)?
+        .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+
+    let findings = queries::get_findings_for_run(&conn, &run_id)?;
 
     let changed_files: Vec<String> = pr
         .changed_files
@@ -231,8 +253,7 @@ pub async fn get_review_snapshot(
         .unwrap_or_default();
 
     // Build lane statuses from agent_runs
-    let agent_runs =
-        queries::get_agent_runs_for_review(&conn, &run_id).map_err(|e| e.to_string())?;
+    let agent_runs = queries::get_agent_runs_for_review(&conn, &run_id)?;
     let lane_statuses: Vec<LaneSnapshot> = agent_runs
         .iter()
         .map(|ar| LaneSnapshot {
@@ -244,7 +265,7 @@ pub async fn get_review_snapshot(
         })
         .collect();
 
-    let clusters = queries::get_clusters_for_run(&conn, &run_id).map_err(|e| e.to_string())?;
+    let clusters = queries::get_clusters_for_run(&conn, &run_id)?;
 
     Ok(ReviewSnapshot {
         run_id: run.id,
@@ -262,9 +283,14 @@ pub async fn get_review_snapshot(
 }
 
 #[tauri::command]
-pub async fn get_incomplete_reviews(db: tauri::State<'_, AppDb>) -> Result<Vec<ReviewRun>, String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    queries::get_incomplete_review_runs(&conn).map_err(|e| e.to_string())
+pub async fn get_incomplete_reviews(
+    db: tauri::State<'_, AppDb>,
+) -> Result<Vec<ReviewRun>, crate::errors::AppError> {
+    use crate::errors::AppError;
+    let conn =
+        db.0.lock()
+            .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    Ok(queries::get_incomplete_review_runs(&conn)?)
 }
 
 #[tauri::command]
@@ -273,13 +299,23 @@ pub async fn resume_review(
     run_id: String,
     db: tauri::State<'_, AppDb>,
     active: tauri::State<'_, ActiveReviews>,
-) -> Result<String, String> {
+) -> Result<String, crate::errors::AppError> {
+    use crate::errors::AppError;
+
+    // If there's an in-flight pipeline for this run, cancel it before superseding.
+    if let Ok(mut map) = active.0.lock() {
+        if let Some(token) = map.remove(&run_id) {
+            token.cancel();
+        }
+    }
+
     // Read the old run from DB
     let (old_status, pr_id) = {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let run = queries::get_review_run(&conn, &run_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Review run not found".to_string())?;
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let run = queries::get_review_run(&conn, &run_id)?
+            .ok_or_else(|| AppError::NotFound("Review run not found".into()))?;
         (run.status, run.pr_id)
     };
 
@@ -292,62 +328,57 @@ pub async fn resume_review(
     // For incomplete states (created, running_agents, cleaning):
     // Mark the old run as failed and start a fresh review with the same PR data.
     {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        queries::update_review_run_status(&conn, &run_id, "failed", Some("Superseded by resume"))
-            .map_err(|e| e.to_string())?;
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        queries::update_review_run_status(&conn, &run_id, "failed", Some("Superseded by resume"))?;
     }
 
     // Get PR data (same logic as start_review)
     let (diff, cwd) = {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let pr = queries::get_pull_request(&conn, &pr_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "PR not found".to_string())?;
-        let ws = conn
-            .query_row(
-                "SELECT local_path FROM workspaces WHERE id = ?1",
-                rusqlite::params![pr.workspace_id],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let diff = pr.diff_text.unwrap_or_default();
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let pr = queries::get_pull_request(&conn, &pr_id)?
+            .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        let ws = conn.query_row(
+            "SELECT local_path FROM workspaces WHERE id = ?1",
+            rusqlite::params![pr.workspace_id],
+            |row| row.get::<_, String>(0),
+        )?;
+        let diff = require_non_empty_diff(pr.diff_text)?;
         (diff, ws)
     };
 
     if cwd.trim().is_empty() {
-        return Err(
-            "Workspace local path is not set. Confirm workspace before resuming review."
-                .to_string(),
-        );
+        return Err(AppError::InvalidInput(
+            "Workspace local path is not set. Confirm workspace before resuming review.".into(),
+        ));
     }
 
-    // Choose provider (same chain as start_review)
-    let provider: Arc<dyn ReviewProvider> = {
-        let codex = CodexProvider::new(app.clone());
-        let codex_health = codex.health_check().await;
-        if codex_health.available {
-            Arc::new(codex)
-        } else {
-            let claude = ClaudeProvider::new();
-            let claude_health = claude.health_check().await;
-            if claude_health.available {
-                tracing::info!("Codex not available, using Claude provider");
-                Arc::new(claude)
-            } else {
-                tracing::info!("No providers available, using mock provider");
-                Arc::new(MockProvider::with_default_fixture())
-            }
-        }
-    };
+    // Load repo-level config if available
+    let repo_config = config::load_repo_config(&PathBuf::from(&cwd));
 
-    let config = CleanerConfig::default();
+    // Resolve config and choose provider
+    let resolved = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        config::resolve_config(&conn, repo_config.as_ref())
+    };
+    let provider: Arc<dyn ReviewProvider> =
+        config::select_provider(&app, &resolved.preferred_provider).await;
+
     let cwd_path = PathBuf::from(&cwd);
-    let lanes = build_agent_lanes(&diff, provider.clone());
+    let lanes = build_agent_lanes(&diff, provider.clone(), &resolved);
+    let cleaner_config = resolved.cleaner;
 
     // Create new run
     let new_run_id = uuid::Uuid::new_v4().to_string();
     {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
         queries::insert_review_run(
             &conn,
             &ReviewRun {
@@ -358,14 +389,16 @@ pub async fn resume_review(
                 completed_at: None,
                 error_message: None,
             },
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     }
 
     // Register cancellation token
     let token = CancellationToken::new();
     {
-        let mut map = active.0.lock().map_err(|e| e.to_string())?;
+        let mut map = active
+            .0
+            .lock()
+            .map_err(|e| AppError::InvalidInput(e.to_string()))?;
         map.insert(new_run_id.clone(), token.clone());
     }
 
@@ -375,6 +408,9 @@ pub async fn resume_review(
 
     tauri::async_runtime::spawn(async move {
         let db = app_clone.state::<AppDb>();
+        let event_log = app_clone
+            .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
+            .map(|s| s.inner().clone());
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -385,12 +421,12 @@ pub async fn resume_review(
             engine::ReviewPipelineArgs {
                 run_id: run_id_clone.clone(),
                 cwd: cwd_path,
-                config,
+                config: cleaner_config,
                 cancel: token,
                 lanes,
                 fallback_input: None,
                 fallback_provider: None,
-                event_log: None,
+                event_log,
             },
         )
         .await;
@@ -407,4 +443,25 @@ pub async fn resume_review(
     });
 
     Ok(new_run_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn require_non_empty_diff_rejects_none() {
+        assert!(require_non_empty_diff(None).is_err());
+    }
+
+    #[test]
+    fn require_non_empty_diff_rejects_empty_string() {
+        assert!(require_non_empty_diff(Some("   ".into())).is_err());
+    }
+
+    #[test]
+    fn require_non_empty_diff_accepts_diff() {
+        let diff = require_non_empty_diff(Some("diff --git a/a b/a".into())).unwrap();
+        assert!(diff.contains("diff --git"));
+    }
 }

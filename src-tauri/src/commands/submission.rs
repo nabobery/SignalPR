@@ -1,8 +1,10 @@
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
+use crate::cleaner::{remap, verify};
 use crate::commands::intake::parse_pr_url;
 use crate::storage::db::AppDb;
+use crate::storage::hashing::sha256_hex;
 use crate::storage::models::{Finding, SubmissionRecord};
 use crate::storage::queries;
 
@@ -11,37 +13,123 @@ pub async fn submit_review(
     app: AppHandle,
     run_id: String,
     action: String,
+    force_resubmit: Option<bool>,
     db: tauri::State<'_, AppDb>,
-) -> Result<(), String> {
-    // Check for duplicate submission
-    {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        if let Some(_existing) =
-            queries::get_submission_for_run(&conn, &run_id).map_err(|e| e.to_string())?
-        {
-            return Err(
-                "Review already submitted for this run. Use force_resubmit if intentional.".into(),
-            );
+) -> Result<(), crate::errors::AppError> {
+    use crate::errors::AppError;
+
+    let action = match action.as_str() {
+        "approve" | "comment" | "request-changes" => action,
+        _ => {
+            return Err(AppError::InvalidInput(
+                "Invalid review action. Must be approve, comment, or request-changes.".into(),
+            ))
+        }
+    };
+
+    // Check for duplicate submission (skip if force_resubmit)
+    if !force_resubmit.unwrap_or(false) {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        if let Some(_existing) = queries::get_submission_for_run(&conn, &run_id)? {
+            return Err(AppError::InvalidInput(
+                "Review already submitted for this run. Pass force_resubmit to override.".into(),
+            ));
         }
     }
 
     // Get run + PR + findings
-    let (owner, repo, pr_number, findings) = {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let run = queries::get_review_run(&conn, &run_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Review run not found")?;
-        let pr = queries::get_pull_request(&conn, &run.pr_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("PR not found")?;
-        let findings = queries::get_findings_for_run(&conn, &run_id).map_err(|e| e.to_string())?;
+    let (pr_id, owner, repo, pr_number, mut findings, old_diff, old_diff_hash) = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let run = queries::get_review_run(&conn, &run_id)?
+            .ok_or_else(|| AppError::NotFound("Review run not found".into()))?;
+        let pr = queries::get_pull_request(&conn, &run.pr_id)?
+            .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        let findings = queries::get_findings_for_run(&conn, &run_id)?;
 
-        let parsed = parse_pr_url(&pr.url).map_err(|_| "Cannot parse PR URL".to_string())?;
+        let parsed = parse_pr_url(&pr.url)?;
         let owner = parsed.owner;
         let repo = parsed.repo;
 
-        (owner, repo, pr.pr_number, findings)
+        let old_diff = pr.diff_text.clone().unwrap_or_default();
+        let old_hash = pr
+            .diff_hash
+            .clone()
+            .unwrap_or_else(|| sha256_hex(&old_diff));
+
+        (
+            run.pr_id,
+            owner,
+            repo,
+            pr.pr_number,
+            findings,
+            old_diff,
+            old_hash,
+        )
     };
+
+    // Best-effort: fetch latest diff and reconcile anchors for safe inline comments.
+    let mut anchors_verified_for_submission = false;
+    let originally_active_ids: std::collections::HashSet<String> = findings
+        .iter()
+        .filter(|f| f.status == "active")
+        .map(|f| f.id.clone())
+        .collect();
+
+    if let Ok(latest_diff) = fetch_latest_diff(&app, &owner, &repo, pr_number).await {
+        let new_hash = sha256_hex(&latest_diff);
+        let (updated, suppressed_ids) =
+            reconcile_findings_for_latest_diff(findings, &old_diff, &latest_diff);
+
+        // Persist PR diff + finding anchor updates
+        {
+            let conn =
+                db.0.lock()
+                    .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+
+            // Keep PR diff/hash fresh for future resume/submission attempts.
+            let _ = queries::update_pull_request_diff(&conn, &pr_id, &latest_diff, &new_hash);
+
+            // Update anchors for all findings we still keep (verified against latest diff).
+            for f in &updated {
+                let _ = queries::update_finding_anchor(
+                    &conn,
+                    &f.id,
+                    f.line_start,
+                    f.line_end,
+                    f.is_anchored,
+                    f.diff_side.as_deref(),
+                    f.diff_new_line,
+                );
+            }
+
+            // Suppress findings that no longer map to the latest diff.
+            for id in suppressed_ids {
+                if !originally_active_ids.contains(&id) {
+                    continue;
+                }
+                let _ = queries::update_finding(&conn, &id, None, None, Some("suppressed"));
+            }
+        }
+
+        // Refresh local copy for body/inline selection.
+        // If hashes differ, the mapping above demotes/suppresses as needed.
+        findings = updated;
+        anchors_verified_for_submission = true;
+
+        if old_diff_hash != new_hash {
+            tracing::info!(
+                "PR diff changed since intake ({} → {}), reconciled anchors before submission",
+                old_diff_hash,
+                new_hash
+            );
+        }
+    } else {
+        tracing::warn!("Failed to fetch latest PR diff; skipping anchor reconciliation");
+    }
 
     // Filter to active findings only
     let active_findings: Vec<&Finding> = findings.iter().filter(|f| f.status == "active").collect();
@@ -49,10 +137,16 @@ pub async fn submit_review(
     // Format review body
     let body = format_review_body(&active_findings);
 
+    let idempotency_key = sha256_hex(&format!("{}|{}|{}", run_id, action, body));
+
     // Create submission record
     let sub_id = uuid::Uuid::new_v4().to_string();
     {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let history = queries::get_submission_history(&conn, &run_id).unwrap_or_default();
+        let attempt = next_attempt_count(&history);
         queries::insert_submission(
             &conn,
             &SubmissionRecord {
@@ -63,9 +157,11 @@ pub async fn submit_review(
                 status: "pending".into(),
                 gh_review_id: None,
                 error_message: None,
+                idempotency_key: Some(idempotency_key),
+                attempt_count: Some(attempt),
+                last_attempt_at: Some(chrono::Utc::now().to_rfc3339()),
             },
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     }
 
     // Submit via gh
@@ -90,36 +186,54 @@ pub async fn submit_review(
         ])
         .output()
         .await
-        .map_err(|e| format!("Failed to run gh: {}", e))?;
+        .map_err(|e| AppError::Transient(format!("Failed to run gh: {}", e)))?;
 
     if output.status.success() {
         // Phase B (best-effort): attempt to post inline comments for anchored findings
-        let inline_findings: Vec<&Finding> = active_findings
-            .iter()
-            .filter(|f| f.diff_new_line.is_some() && f.file_path.is_some())
-            .copied()
-            .collect();
-        if !inline_findings.is_empty() {
-            if let Err(e) =
-                post_inline_comments(&app, &owner, &repo, pr_number, &inline_findings).await
-            {
-                tracing::warn!("Inline comments (best-effort) failed: {}", e);
+        if anchors_verified_for_submission {
+            let inline_findings: Vec<&Finding> = active_findings
+                .iter()
+                .filter(|f| f.diff_new_line.is_some() && f.file_path.is_some())
+                .copied()
+                .collect();
+            if !inline_findings.is_empty() {
+                if let Err(e) =
+                    post_inline_comments(&app, &owner, &repo, pr_number, &inline_findings).await
+                {
+                    tracing::warn!("Inline comments (best-effort) failed: {}", e);
+                }
             }
         }
 
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        queries::update_submission_status(&conn, &sub_id, "submitted", None, None)
-            .map_err(|e| e.to_string())?;
-        queries::update_review_run_status(&conn, &run_id, "submitted", None)
-            .map_err(|e| e.to_string())?;
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        queries::update_submission_status(&conn, &sub_id, "submitted", None, None)?;
+        queries::update_review_run_status(&conn, &run_id, "submitted", None)?;
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        queries::update_submission_status(&conn, &sub_id, "failed", None, Some(&stderr))
-            .map_err(|e| e.to_string())?;
-        Err(format!("gh pr review failed: {}", stderr))
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        queries::update_submission_status(&conn, &sub_id, "failed", None, Some(&stderr))?;
+        Err(AppError::Transient(format!(
+            "gh pr review failed: {}",
+            stderr
+        )))
     }
+}
+
+#[tauri::command]
+pub async fn get_submission_history(
+    run_id: String,
+    db: tauri::State<'_, AppDb>,
+) -> Result<Vec<SubmissionRecord>, crate::errors::AppError> {
+    use crate::errors::AppError;
+    let conn =
+        db.0.lock()
+            .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    Ok(queries::get_submission_history(&conn, &run_id)?)
 }
 
 /// Phase B: Post inline review comments for findings with valid diff anchors.
@@ -240,6 +354,79 @@ async fn post_inline_comments(
     }
 
     Ok(())
+}
+
+async fn fetch_latest_diff(
+    app: &AppHandle,
+    owner: &str,
+    repo: &str,
+    pr_number: i32,
+) -> Result<String, crate::errors::AppError> {
+    use crate::errors::AppError;
+    let shell = app.shell();
+    let output = shell
+        .command("gh")
+        .args([
+            "pr",
+            "diff",
+            &pr_number.to_string(),
+            "--repo",
+            &format!("{}/{}", owner, repo),
+        ])
+        .output()
+        .await
+        .map_err(|e| AppError::Transient(format!("Failed to fetch latest diff: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() {
+            "gh pr diff failed".to_string()
+        } else {
+            format!("gh pr diff failed: {}", stderr)
+        };
+        return Err(AppError::Transient(msg));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn reconcile_findings_for_latest_diff(
+    findings: Vec<Finding>,
+    old_diff: &str,
+    new_diff: &str,
+) -> (Vec<Finding>, Vec<String>) {
+    // 1. If the diff changed, try to remap anchors to account for hunk shifts.
+    // 2. Always verify against the latest diff so inline anchors are safe.
+    let (candidate, orphaned) = if old_diff == new_diff || old_diff.trim().is_empty() {
+        (findings, vec![])
+    } else {
+        let result = remap::remap_findings(findings, old_diff, new_diff);
+        let orphaned = result.orphaned.into_iter().map(|f| f.id).collect();
+        (result.remapped, orphaned)
+    };
+
+    let candidate_ids: std::collections::HashSet<String> =
+        candidate.iter().map(|f| f.id.clone()).collect();
+    let verified = verify::verify(candidate, new_diff);
+    let verified_ids: std::collections::HashSet<String> =
+        verified.iter().map(|f| f.id.clone()).collect();
+
+    // Anything orphaned or dropped by verify should be suppressed to avoid stale submissions.
+    let mut suppressed: Vec<String> = orphaned;
+    for id in candidate_ids.difference(&verified_ids) {
+        suppressed.push(id.clone());
+    }
+
+    (verified, suppressed)
+}
+
+fn next_attempt_count(history: &[SubmissionRecord]) -> i32 {
+    history
+        .iter()
+        .filter_map(|s| s.attempt_count)
+        .max()
+        .unwrap_or(0)
+        + 1
 }
 
 fn format_review_body(findings: &[&Finding]) -> String {
@@ -373,5 +560,55 @@ mod tests {
         let body = format_review_body(&findings);
         assert!(body.contains("> Edited 1\n"));
         assert!(body.contains("> Edited 2\n"));
+    }
+
+    #[test]
+    fn test_next_attempt_count_uses_max() {
+        let h = vec![
+            SubmissionRecord {
+                id: "a".into(),
+                review_run_id: "r".into(),
+                review_action: "comment".into(),
+                submitted_at: None,
+                status: "failed".into(),
+                gh_review_id: None,
+                error_message: None,
+                idempotency_key: None,
+                attempt_count: Some(2),
+                last_attempt_at: None,
+            },
+            SubmissionRecord {
+                id: "b".into(),
+                review_run_id: "r".into(),
+                review_action: "comment".into(),
+                submitted_at: None,
+                status: "failed".into(),
+                gh_review_id: None,
+                error_message: None,
+                idempotency_key: None,
+                attempt_count: Some(5),
+                last_attempt_at: None,
+            },
+        ];
+        assert_eq!(next_attempt_count(&h), 6);
+    }
+
+    #[test]
+    fn test_reconcile_findings_remaps_and_verifies() {
+        let old_diff = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -10,6 +10,8 @@ fn foo() {\n     let x = 1;\n+    let y = 2;\n     process(x);\n";
+        let new_diff = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -10,6 +15,8 @@ fn foo() {\n     let x = 1;\n+    let y = 2;\n     process(x);\n";
+
+        let mut f = make_finding("warning", "t", "b", Some("src/a.rs"));
+        f.id = "f1".into();
+        f.line_start = Some(10);
+        f.line_end = Some(10);
+        f.is_anchored = true;
+
+        let (updated, suppressed) = reconcile_findings_for_latest_diff(vec![f], old_diff, new_diff);
+        assert!(suppressed.is_empty());
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].line_start, Some(15));
+        assert_eq!(updated[0].diff_new_line, Some(15));
+        assert_eq!(updated[0].diff_side.as_deref(), Some("RIGHT"));
     }
 }

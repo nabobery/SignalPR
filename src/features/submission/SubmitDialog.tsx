@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Loader2, Send, X } from "lucide-react";
-import { submitReview } from "../../lib/ipc";
+import { submitReview, parseError } from "../../lib/ipc";
 import type { ReviewAction } from "../../lib/types";
 
 export function SubmitDialog({
@@ -23,7 +23,7 @@ export function SubmitDialog({
       await submitReview(runId, action);
       onSubmitted();
     } catch (err) {
-      setError(String(err));
+      setError(parseError(err).message);
     } finally {
       setSubmitting(false);
     }

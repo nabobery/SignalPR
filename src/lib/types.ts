@@ -99,3 +99,8 @@ export interface ReviewSnapshot {
 }
 
 export type ReviewAction = "approve" | "comment" | "request-changes";
+
+export interface AppError {
+  code: string;
+  message: string;
+}

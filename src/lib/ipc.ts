@@ -1,8 +1,34 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ToolStatus, PrIntakeResult, ReviewSnapshot, ReviewRun } from "./types";
+import type { ToolStatus, PrIntakeResult, ReviewSnapshot, ReviewRun, AppError } from "./types";
+
+export function parseError(err: unknown): AppError {
+  if (typeof err === "object" && err !== null && "code" in err && "message" in err) {
+    return err as AppError;
+  }
+  if (typeof err === "string") {
+    try {
+      const parsed = JSON.parse(err);
+      if (parsed.code && parsed.message) return parsed;
+    } catch {
+      // not JSON
+    }
+    return { code: "unknown", message: err };
+  }
+  return { code: "unknown", message: String(err) };
+}
 
 export async function inspectEnvironment(): Promise<ToolStatus[]> {
   return invoke("inspect_environment");
+}
+
+export async function getEnvironmentSummary(): Promise<{
+  can_review: boolean;
+  can_submit: boolean;
+  available_providers: string[];
+  warnings: string[];
+  tools: ToolStatus[];
+}> {
+  return invoke("get_environment_summary");
 }
 
 export async function openFromUrl(url: string): Promise<PrIntakeResult> {
@@ -34,8 +60,16 @@ export async function updateFinding(
   return invoke("update_finding", { findingId, body, severity, status });
 }
 
-export async function submitReview(runId: string, action: string): Promise<void> {
-  return invoke("submit_review", { runId, action });
+export async function submitReview(
+  runId: string,
+  action: string,
+  forceResubmit?: boolean,
+): Promise<void> {
+  return invoke("submit_review", { runId, action, forceResubmit });
+}
+
+export async function getSubmissionHistory(runId: string): Promise<unknown[]> {
+  return invoke("get_submission_history", { runId });
 }
 
 export async function getIncompleteReviews(): Promise<ReviewRun[]> {
@@ -44,4 +78,20 @@ export async function getIncompleteReviews(): Promise<ReviewRun[]> {
 
 export async function resumeReview(runId: string): Promise<string> {
   return invoke("resume_review", { runId });
+}
+
+export async function getSettings(): Promise<Record<string, string>> {
+  return invoke("get_settings");
+}
+
+export async function updateSetting(key: string, value: string): Promise<void> {
+  return invoke("update_setting", { key, value });
+}
+
+export async function exportDiagnosticBundle(runId: string): Promise<unknown> {
+  return invoke("export_diagnostic_bundle", { runId });
+}
+
+export async function getEventLog(runId: string): Promise<unknown[]> {
+  return invoke("get_event_log", { runId });
 }

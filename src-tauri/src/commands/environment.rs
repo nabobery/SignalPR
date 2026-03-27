@@ -1,10 +1,22 @@
+use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
 use crate::storage::models::ToolStatus;
 
+#[derive(Debug, Serialize)]
+pub struct EnvironmentSummary {
+    pub can_review: bool,
+    pub can_submit: bool,
+    pub available_providers: Vec<String>,
+    pub warnings: Vec<String>,
+    pub tools: Vec<ToolStatus>,
+}
+
 #[tauri::command]
-pub async fn inspect_environment(app: AppHandle) -> Result<Vec<ToolStatus>, String> {
+pub async fn inspect_environment(
+    app: AppHandle,
+) -> Result<Vec<ToolStatus>, crate::errors::AppError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut results = vec![];
 
@@ -12,6 +24,44 @@ pub async fn inspect_environment(app: AppHandle) -> Result<Vec<ToolStatus>, Stri
     results.push(check_codex(&app, &now).await);
 
     Ok(results)
+}
+
+#[tauri::command]
+pub async fn get_environment_summary(
+    app: AppHandle,
+) -> Result<EnvironmentSummary, crate::errors::AppError> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tools = vec![];
+
+    tools.push(check_gh(&app, &now).await);
+    tools.push(check_codex(&app, &now).await);
+    tools.push(check_claude(&now));
+
+    let can_submit = tools
+        .iter()
+        .any(|t| t.tool_name == "gh" && t.status == "ready");
+    let available_providers: Vec<String> = tools
+        .iter()
+        .filter(|t| (t.tool_name == "codex" || t.tool_name == "claude") && t.status == "ready")
+        .map(|t| t.tool_name.clone())
+        .collect();
+    let can_review = !available_providers.is_empty();
+
+    let mut warnings = Vec::new();
+    if !can_review {
+        warnings.push("No AI providers available".into());
+    }
+    if !can_submit {
+        warnings.push("GitHub CLI not ready".into());
+    }
+
+    Ok(EnvironmentSummary {
+        can_review,
+        can_submit,
+        available_providers,
+        warnings,
+        tools,
+    })
 }
 
 async fn check_gh(app: &AppHandle, now: &str) -> ToolStatus {
@@ -65,6 +115,25 @@ async fn check_gh(app: &AppHandle, now: &str) -> ToolStatus {
     }
 }
 
+fn check_claude(now: &str) -> ToolStatus {
+    match std::env::var("ANTHROPIC_API_KEY") {
+        Ok(val) if !val.is_empty() => ToolStatus {
+            tool_name: "claude".into(),
+            status: "ready".into(),
+            version: None,
+            message: None,
+            checked_at: now.into(),
+        },
+        _ => ToolStatus {
+            tool_name: "claude".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some("Set ANTHROPIC_API_KEY environment variable".into()),
+            checked_at: now.into(),
+        },
+    }
+}
+
 async fn check_codex(app: &AppHandle, now: &str) -> ToolStatus {
     let shell = app.shell();
 
@@ -86,5 +155,75 @@ async fn check_codex(app: &AppHandle, now: &str) -> ToolStatus {
             message: Some("Optional: Install Codex CLI from https://openai.com/codex/".into()),
             checked_at: now.into(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(name: &str, status: &str) -> crate::storage::models::ToolStatus {
+        crate::storage::models::ToolStatus {
+            tool_name: name.into(),
+            status: status.into(),
+            version: None,
+            message: None,
+            checked_at: "2026-01-01".into(),
+        }
+    }
+
+    fn build_summary(tools: &[crate::storage::models::ToolStatus]) -> EnvironmentSummary {
+        let can_submit = tools
+            .iter()
+            .any(|t| t.tool_name == "gh" && t.status == "ready");
+        let available_providers: Vec<String> = tools
+            .iter()
+            .filter(|t| (t.tool_name == "codex" || t.tool_name == "claude") && t.status == "ready")
+            .map(|t| t.tool_name.clone())
+            .collect();
+        let can_review = !available_providers.is_empty();
+        let mut warnings = Vec::new();
+        if !can_review {
+            warnings.push("No AI providers available".into());
+        }
+        if !can_submit {
+            warnings.push("GitHub CLI not ready".into());
+        }
+        EnvironmentSummary {
+            can_review,
+            can_submit,
+            available_providers,
+            warnings,
+            tools: tools.to_vec(),
+        }
+    }
+
+    #[test]
+    fn test_no_providers_cant_review() {
+        let summary = build_summary(&[tool("gh", "ready"), tool("codex", "missing")]);
+        assert!(!summary.can_review);
+        assert!(summary.can_submit);
+    }
+
+    #[test]
+    fn test_partial_providers_can_review() {
+        let summary = build_summary(&[
+            tool("gh", "ready"),
+            tool("codex", "missing"),
+            tool("claude", "ready"),
+        ]);
+        assert!(summary.can_review);
+        assert_eq!(summary.available_providers, vec!["claude"]);
+    }
+
+    #[test]
+    fn test_all_providers_ready() {
+        let summary = build_summary(&[
+            tool("gh", "ready"),
+            tool("codex", "ready"),
+            tool("claude", "ready"),
+        ]);
+        assert!(summary.can_review);
+        assert_eq!(summary.available_providers.len(), 2);
     }
 }

@@ -22,6 +22,8 @@ pub struct PullRequest {
     pub diff_text: Option<String>,
     pub changed_files: Option<String>,
     pub fetched_at: String,
+    // V3 fields
+    pub diff_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +94,10 @@ pub struct SubmissionRecord {
     pub status: String,
     pub gh_review_id: Option<String>,
     pub error_message: Option<String>,
+    // V3 fields
+    pub idempotency_key: Option<String>,
+    pub attempt_count: Option<i32>,
+    pub last_attempt_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

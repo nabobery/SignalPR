@@ -1,6 +1,7 @@
 pub mod dedup;
 pub mod normalize;
 pub mod rank;
+pub mod remap;
 pub mod synthesis;
 pub mod verify;
 

@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { useNavigate } from "react-router";
 import { Loader2 } from "lucide-react";
 import { EnvironmentCheck } from "../onboarding/EnvironmentCheck";
-import { openFromUrl, confirmWorkspace, startReview } from "../../lib/ipc";
+import { openFromUrl, confirmWorkspace, startReview, parseError } from "../../lib/ipc";
 import type { PrIntakeResult } from "../../lib/types";
 
 export function IntakeView() {
@@ -26,7 +26,7 @@ export function IntakeView() {
         setLocalPath(result.workspace_suggestion);
       }
     } catch (err) {
-      setError(String(err));
+      setError(parseError(err).message);
     } finally {
       setLoading(false);
     }
@@ -44,7 +44,7 @@ export function IntakeView() {
       const runId = await startReview(prResult.pr_id);
       navigate(`/review/${runId}`);
     } catch (err) {
-      setError(String(err));
+      setError(parseError(err).message);
       setConfirming(false);
       setStarting(false);
     }

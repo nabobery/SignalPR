@@ -40,8 +40,8 @@ pub fn get_workspace_by_remote(
 
 pub fn insert_pull_request(conn: &Connection, pr: &PullRequest) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO pull_requests (id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![pr.id, pr.workspace_id, pr.pr_number, pr.title, pr.author, pr.base_branch, pr.head_branch, pr.url, pr.diff_text, pr.changed_files, pr.fetched_at],
+        "INSERT INTO pull_requests (id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![pr.id, pr.workspace_id, pr.pr_number, pr.title, pr.author, pr.base_branch, pr.head_branch, pr.url, pr.diff_text, pr.changed_files, pr.fetched_at, pr.diff_hash],
     )?;
     Ok(())
 }
@@ -51,7 +51,7 @@ pub fn get_pull_request(
     pr_id: &str,
 ) -> Result<Option<PullRequest>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at FROM pull_requests WHERE id = ?1",
+        "SELECT id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash FROM pull_requests WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![pr_id], |row| {
         Ok(PullRequest {
@@ -66,12 +66,26 @@ pub fn get_pull_request(
             diff_text: row.get(8)?,
             changed_files: row.get(9)?,
             fetched_at: row.get(10)?,
+            diff_hash: row.get(11)?,
         })
     })?;
     match rows.next() {
         Some(result) => Ok(Some(result?)),
         None => Ok(None),
     }
+}
+
+pub fn update_pull_request_diff(
+    conn: &Connection,
+    pr_id: &str,
+    diff_text: &str,
+    diff_hash: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE pull_requests SET diff_text = ?1, diff_hash = ?2, fetched_at = datetime('now') WHERE id = ?3",
+        params![diff_text, diff_hash, pr_id],
+    )?;
+    Ok(())
 }
 
 // --- Review Runs ---
@@ -184,6 +198,22 @@ pub fn update_finding(
             params![st, finding_id],
         )?;
     }
+    Ok(())
+}
+
+pub fn update_finding_anchor(
+    conn: &Connection,
+    finding_id: &str,
+    line_start: Option<i32>,
+    line_end: Option<i32>,
+    is_anchored: bool,
+    diff_side: Option<&str>,
+    diff_new_line: Option<i32>,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE findings SET line_start = ?1, line_end = ?2, is_anchored = ?3, diff_side = ?4, diff_new_line = ?5 WHERE id = ?6",
+        params![line_start, line_end, is_anchored, diff_side, diff_new_line, finding_id],
+    )?;
     Ok(())
 }
 
@@ -322,12 +352,22 @@ pub fn upsert_setting(conn: &Connection, key: &str, value: &str) -> Result<(), r
     Ok(())
 }
 
+pub fn get_all_settings(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, String>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect::<Result<std::collections::HashMap<_, _>, _>>()
+}
+
 // --- Submission Records ---
 
 pub fn insert_submission(conn: &Connection, sub: &SubmissionRecord) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![sub.id, sub.review_run_id, sub.review_action, sub.submitted_at, sub.status, sub.gh_review_id, sub.error_message],
+        "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![sub.id, sub.review_run_id, sub.review_action, sub.submitted_at, sub.status, sub.gh_review_id, sub.error_message, sub.idempotency_key, sub.attempt_count, sub.last_attempt_at],
     )?;
     Ok(())
 }
@@ -339,10 +379,17 @@ pub fn update_submission_status(
     gh_review_id: Option<&str>,
     error_message: Option<&str>,
 ) -> Result<(), rusqlite::Error> {
-    conn.execute(
-        "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, submitted_at = datetime('now') WHERE id = ?4",
-        params![status, gh_review_id, error_message, sub_id],
-    )?;
+    if status == "submitted" {
+        conn.execute(
+            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = datetime('now'), submitted_at = datetime('now') WHERE id = ?4",
+            params![status, gh_review_id, error_message, sub_id],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = datetime('now') WHERE id = ?4",
+            params![status, gh_review_id, error_message, sub_id],
+        )?;
+    }
     Ok(())
 }
 
@@ -351,7 +398,7 @@ pub fn get_submission_for_run(
     review_run_id: &str,
 ) -> Result<Option<SubmissionRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message FROM submission_records WHERE review_run_id = ?1 AND status = 'submitted' LIMIT 1",
+        "SELECT id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 AND status = 'submitted' LIMIT 1",
     )?;
     let mut rows = stmt.query_map(params![review_run_id], |row| {
         Ok(SubmissionRecord {
@@ -362,12 +409,39 @@ pub fn get_submission_for_run(
             status: row.get(4)?,
             gh_review_id: row.get(5)?,
             error_message: row.get(6)?,
+            idempotency_key: row.get(7)?,
+            attempt_count: row.get(8)?,
+            last_attempt_at: row.get(9)?,
         })
     })?;
     match rows.next() {
         Some(result) => Ok(Some(result?)),
         None => Ok(None),
     }
+}
+
+pub fn get_submission_history(
+    conn: &Connection,
+    review_run_id: &str,
+) -> Result<Vec<SubmissionRecord>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 ORDER BY COALESCE(last_attempt_at, submitted_at) DESC",
+    )?;
+    let rows = stmt.query_map(params![review_run_id], |row| {
+        Ok(SubmissionRecord {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            review_action: row.get(2)?,
+            submitted_at: row.get(3)?,
+            status: row.get(4)?,
+            gh_review_id: row.get(5)?,
+            error_message: row.get(6)?,
+            idempotency_key: row.get(7)?,
+            attempt_count: row.get(8)?,
+            last_attempt_at: row.get(9)?,
+        })
+    })?;
+    rows.collect()
 }
 
 // --- Tool Status ---
@@ -454,6 +528,7 @@ mod tests {
             diff_text: Some("diff content".into()),
             changed_files: Some(r#"["src/auth.rs"]"#.into()),
             fetched_at: "2026-01-01T00:00:00".into(),
+            diff_hash: None,
         };
         insert_pull_request(&conn, &pr).unwrap();
         let found = get_pull_request(&conn, "pr-1")
@@ -461,6 +536,45 @@ mod tests {
             .expect("PR should exist");
         assert_eq!(found.pr_number, 42);
         assert_eq!(found.title, "Fix auth");
+    }
+
+    #[test]
+    fn test_update_pull_request_diff_updates_hash_and_text() {
+        let conn = test_db();
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: Some("old".into()),
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                diff_hash: Some("h1".into()),
+            },
+        )
+        .unwrap();
+
+        update_pull_request_diff(&conn, "pr", "new-diff", "h2").unwrap();
+        let pr = get_pull_request(&conn, "pr").unwrap().unwrap();
+        assert_eq!(pr.diff_text.as_deref(), Some("new-diff"));
+        assert_eq!(pr.diff_hash.as_deref(), Some("h2"));
     }
 
     #[test]
@@ -478,6 +592,7 @@ mod tests {
             diff_text: None,
             changed_files: None,
             fetched_at: "2026-01-01T00:00:00".into(),
+            diff_hash: None,
         };
         let result = insert_pull_request(&conn, &pr);
         assert!(result.is_err());
@@ -512,6 +627,7 @@ mod tests {
                 diff_text: None,
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
+                diff_hash: None,
             },
         )
         .unwrap();
@@ -565,6 +681,7 @@ mod tests {
                 diff_text: None,
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
+                diff_hash: None,
             },
         )
         .unwrap();
@@ -619,6 +736,13 @@ mod tests {
         update_finding(&conn, "f-1", None, None, Some("suppressed")).unwrap();
         let findings = get_findings_for_run(&conn, "run").unwrap();
         assert_eq!(findings[0].status, "suppressed");
+
+        // Demote anchor fields
+        update_finding_anchor(&conn, "f-1", None, None, false, None, None).unwrap();
+        let findings = get_findings_for_run(&conn, "run").unwrap();
+        assert_eq!(findings[0].line_start, None);
+        assert_eq!(findings[0].line_end, None);
+        assert!(!findings[0].is_anchored);
     }
 
     #[test]
@@ -649,6 +773,7 @@ mod tests {
                 diff_text: None,
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
+                diff_hash: None,
             },
         )
         .unwrap();
@@ -734,5 +859,81 @@ mod tests {
         let all = get_all_tool_status(&conn).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].status, "unauthenticated");
+    }
+
+    #[test]
+    fn test_update_submission_status_sets_last_attempt_and_only_sets_submitted_at_on_success() {
+        let conn = test_db();
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                diff_hash: None,
+            },
+        )
+        .unwrap();
+        insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run".into(),
+                pr_id: "pr".into(),
+                status: "ready".into(),
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+            },
+        )
+        .unwrap();
+
+        insert_submission(
+            &conn,
+            &SubmissionRecord {
+                id: "sub".into(),
+                review_run_id: "run".into(),
+                review_action: "comment".into(),
+                submitted_at: None,
+                status: "pending".into(),
+                gh_review_id: None,
+                error_message: None,
+                idempotency_key: Some("k".into()),
+                attempt_count: Some(1),
+                last_attempt_at: None,
+            },
+        )
+        .unwrap();
+
+        update_submission_status(&conn, "sub", "failed", None, Some("nope")).unwrap();
+        let hist = get_submission_history(&conn, "run").unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0].status, "failed");
+        assert!(hist[0].last_attempt_at.is_some());
+        assert!(hist[0].submitted_at.is_none());
+
+        update_submission_status(&conn, "sub", "submitted", Some("gh1"), None).unwrap();
+        let hist = get_submission_history(&conn, "run").unwrap();
+        assert_eq!(hist[0].status, "submitted");
+        assert!(hist[0].submitted_at.is_some());
+        assert!(hist[0].last_attempt_at.is_some());
     }
 }

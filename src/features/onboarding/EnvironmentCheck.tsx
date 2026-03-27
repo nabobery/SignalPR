@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CheckCircle, XCircle, AlertTriangle, Loader2 } from "lucide-react";
-import { inspectEnvironment } from "../../lib/ipc";
+import { inspectEnvironment, parseError } from "../../lib/ipc";
 import type { ToolStatus } from "../../lib/types";
 
 const statusConfig = {
@@ -22,7 +22,7 @@ export function EnvironmentCheck({ onReady }: { onReady: (ready: boolean) => voi
         const ghReady = result.some((t) => t.tool_name === "gh" && t.status === "ready");
         onReady(ghReady);
       })
-      .catch((err) => setError(String(err)))
+      .catch((err) => setError(parseError(err).message))
       .finally(() => setLoading(false));
   }, [onReady]);
 

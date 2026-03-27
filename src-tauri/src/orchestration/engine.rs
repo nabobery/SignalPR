@@ -20,9 +20,11 @@ use crate::storage::queries;
 #[serde(tag = "type")]
 pub enum ReviewEvent {
     StatusChanged {
+        run_id: String,
         status: String,
     },
     LaneStatusChanged {
+        run_id: String,
         lane_id: String,
         provider_name: String,
         status: String,
@@ -121,6 +123,7 @@ pub async fn run_review_pipeline(
             args.cancel.clone(),
             provider_semaphores,
             &mut emit,
+            &event_log,
         )
         .await;
         let mut all_findings = Vec::new();
@@ -260,6 +263,7 @@ fn log_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_agent_lanes(
     db: &AppDb,
     run_id: &str,
@@ -268,6 +272,7 @@ async fn run_agent_lanes(
     cancel: CancellationToken,
     provider_semaphores: &ProviderSemaphores,
     emit: &mut impl FnMut(ReviewEvent),
+    event_log: &Option<Arc<EventLog>>,
 ) -> Vec<AgentLaneResult> {
     let mut join_set: JoinSet<AgentLaneResult> = JoinSet::new();
 
@@ -308,6 +313,7 @@ async fn run_agent_lanes(
 
         // Emit lane started
         emit(ReviewEvent::LaneStatusChanged {
+            run_id: run_id.to_string(),
             lane_id: lane_id.clone(),
             provider_name: provider_name.clone(),
             status: "running".into(),
@@ -324,18 +330,55 @@ async fn run_agent_lanes(
                     Err(LaneStatus::Cancelled)
                 }
                 result = tokio::time::timeout(timeout, async {
-                    // acquire_owned avoids lifetime issues in spawned futures
-                    let _permit = sem.acquire_owned().await
-                        .map_err(|_| LaneStatus::Failed { error: "Semaphore closed".into() })?;
-                    match provider.run_review(&input, &cwd, lane_cancel.clone()).await {
-                        Ok(mut output) => {
-                            // Tag findings with lane/provider attribution (Fix 4)
-                            for f in &mut output.findings {
-                                f.lane_id = Some(lane_id.clone());
-                                f.provider_name = Some(provider_name.clone());
-                            }
-                            Ok(output.findings)
+                    // Retry transient errors up to 3 times with exponential backoff + jitter.
+                    //
+                    // Important: semaphore permits are acquired per-attempt so backoff sleeps
+                    // don't monopolize permits and reduce effective concurrency.
+                    use tokio_retry2::strategy::{jitter_range, ExponentialFactorBackoff};
+                    use tokio_retry2::{Retry, RetryError};
+                    let retry_strategy = ExponentialFactorBackoff::from_millis(500, 2.0)
+                        .max_delay(std::time::Duration::from_secs(10))
+                        .map(jitter_range(0.8, 1.2))
+                        .take(3);
+
+                    let lane_id_ref = &lane_id;
+                    let provider_name_ref = &provider_name;
+                    let retry_result: Result<Vec<crate::providers::traits::RawFinding>, ProviderError> =
+                        Retry::spawn(retry_strategy, || async {
+                        if lane_cancel.is_cancelled() {
+                            return Err(RetryError::permanent(ProviderError::Cancelled));
                         }
+
+                        // acquire_owned avoids lifetime issues in spawned futures
+                        let _permit: tokio::sync::OwnedSemaphorePermit = sem
+                            .clone()
+                            .acquire_owned()
+                            .await
+                            .map_err(|_| {
+                                RetryError::permanent(ProviderError::Io(std::io::Error::other(
+                                    "Semaphore closed",
+                                )))
+                            })?;
+
+                        match provider.run_review(&input, &cwd, lane_cancel.clone()).await {
+                            Ok(mut output) => {
+                                for f in &mut output.findings {
+                                    f.lane_id = Some(lane_id_ref.clone());
+                                    f.provider_name = Some(provider_name_ref.clone());
+                                }
+                                Ok(output.findings)
+                            }
+                            Err(e) if e.is_transient() => {
+                                tracing::warn!("Transient provider error on lane {}, retrying: {}", lane_id_ref, e);
+                                Err(RetryError::transient(e))
+                            }
+                            Err(e) => Err(RetryError::permanent(e)),
+                        }
+                    })
+                    .await;
+
+                    match retry_result {
+                        Ok(findings) => Ok(findings),
                         Err(ProviderError::Cancelled) => Err(LaneStatus::Cancelled),
                         Err(e) => Err(LaneStatus::Failed { error: e.to_string() }),
                     }
@@ -380,12 +423,35 @@ async fn run_agent_lanes(
                 // Emit lane completed/failed
                 let snapshot = LaneSnapshot::from(&lane_result);
                 emit(ReviewEvent::LaneStatusChanged {
+                    run_id: run_id.to_string(),
                     lane_id: snapshot.lane_id,
                     provider_name: snapshot.provider_name,
                     status: snapshot.status,
                     finding_count: snapshot.finding_count,
                     error_message: snapshot.error_message,
                 });
+
+                // Best-effort lane event log (for diagnostics + partial resume).
+                let event_type = match &lane_result.status {
+                    LaneStatus::Completed { .. } => "lane_completed",
+                    LaneStatus::TimedOut => "lane_timed_out",
+                    LaneStatus::Cancelled => "lane_cancelled",
+                    LaneStatus::Failed { .. } => "lane_failed",
+                    LaneStatus::Running => "lane_running",
+                    LaneStatus::Pending => "lane_pending",
+                };
+                log_event(
+                    event_log,
+                    run_id,
+                    event_type,
+                    serde_json::json!({
+                        "lane_id": lane_result.lane_id,
+                        "provider_name": lane_result.provider_name,
+                        "status": lane_result.status.as_str(),
+                        "finding_count": lane_result.findings.len(),
+                    }),
+                );
+
                 results.push(lane_result);
             }
             Err(e) => {
@@ -408,6 +474,7 @@ fn update_status(
             .map_err(|e| AppError::InvalidInput(e.to_string()))?;
     queries::update_review_run_status(&conn, run_id, status, None)?;
     emit(ReviewEvent::StatusChanged {
+        run_id: run_id.to_string(),
         status: status.into(),
     });
     Ok(())
@@ -523,6 +590,58 @@ mod tests {
         }
     }
 
+    struct TransientThenSuccessProvider {
+        fail_count: std::sync::atomic::AtomicU32,
+        max_fails: u32,
+    }
+
+    impl TransientThenSuccessProvider {
+        fn new(max_fails: u32) -> Self {
+            Self {
+                fail_count: std::sync::atomic::AtomicU32::new(0),
+                max_fails,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ReviewProvider for TransientThenSuccessProvider {
+        fn provider_name(&self) -> &str {
+            "transient"
+        }
+
+        async fn health_check(&self) -> crate::providers::traits::ProviderHealth {
+            crate::providers::traits::ProviderHealth {
+                available: true,
+                version: None,
+                message: None,
+            }
+        }
+
+        async fn run_review(
+            &self,
+            _input: &ReviewInput,
+            _cwd: &Path,
+            _cancel: CancellationToken,
+        ) -> Result<crate::providers::traits::CodexReviewOutput, ProviderError> {
+            let count = self
+                .fail_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count < self.max_fails {
+                Err(ProviderError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "transient failure",
+                )))
+            } else {
+                Ok(crate::providers::traits::CodexReviewOutput {
+                    findings: vec![],
+                    overall_assessment: None,
+                    overall_confidence: None,
+                })
+            }
+        }
+    }
+
     fn seed_db(db: &AppDb, run_id: &str, pr_id: &str) {
         let conn = db.0.lock().unwrap();
         insert_workspace(
@@ -550,6 +669,7 @@ mod tests {
                 diff_text: Some("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n".into()),
                 changed_files: Some(r#"["a"]"#.into()),
                 fetched_at: "2026-01-01T00:00:00Z".into(),
+                diff_hash: None,
             },
         )
         .unwrap();
@@ -1013,5 +1133,89 @@ mod tests {
         assert_eq!(agent_runs[0].status, "completed");
         assert!(agent_runs[0].started_at.is_some());
         assert!(agent_runs[0].completed_at.is_some());
+    }
+
+    // --- Retry tests ---
+
+    #[tokio::test]
+    async fn test_retry_on_transient_error_succeeds() {
+        let db = init_db_in_memory().unwrap();
+        seed_db(&db, "run9", "pr9");
+
+        // Fails twice (transient IO error), succeeds on 3rd attempt
+        let provider: Arc<dyn ReviewProvider> = Arc::new(TransientThenSuccessProvider::new(2));
+
+        let lanes = vec![make_lane(
+            "security",
+            prompts::AgentFocus::Security,
+            provider,
+        )];
+
+        let sems = build_provider_semaphores(&lanes);
+        let mut events = Vec::<ReviewEvent>::new();
+        let token = CancellationToken::new();
+
+        run_review_pipeline(
+            &db,
+            |e| events.push(e),
+            &sems,
+            ReviewPipelineArgs {
+                run_id: "run9".into(),
+                cwd: PathBuf::from("/tmp"),
+                config: CleanerConfig::default(),
+                cancel: token,
+                lanes,
+                fallback_input: None,
+                fallback_provider: None,
+                event_log: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let conn = db.0.lock().unwrap();
+        let run = get_review_run(&conn, "run9").unwrap().unwrap();
+        assert_eq!(run.status, "ready"); // succeeded after retries
+    }
+
+    #[tokio::test]
+    async fn test_no_retry_on_permanent_error() {
+        let db = init_db_in_memory().unwrap();
+        seed_db(&db, "run10", "pr10");
+
+        // FailingProvider returns CodexFailed("Simulated failure") which is NOT transient
+        let provider: Arc<dyn ReviewProvider> = Arc::new(FailingProvider);
+
+        let lanes = vec![make_lane(
+            "security",
+            prompts::AgentFocus::Security,
+            provider,
+        )];
+
+        let sems = build_provider_semaphores(&lanes);
+        let mut events = Vec::<ReviewEvent>::new();
+        let token = CancellationToken::new();
+
+        let result = run_review_pipeline(
+            &db,
+            |e| events.push(e),
+            &sems,
+            ReviewPipelineArgs {
+                run_id: "run10".into(),
+                cwd: PathBuf::from("/tmp"),
+                config: CleanerConfig::default(),
+                cancel: token,
+                lanes,
+                fallback_input: None,
+                fallback_provider: None,
+                event_log: None,
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        let conn = db.0.lock().unwrap();
+        let run = get_review_run(&conn, "run10").unwrap().unwrap();
+        assert_eq!(run.status, "failed");
     }
 }
