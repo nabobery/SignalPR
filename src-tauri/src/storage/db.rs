@@ -152,6 +152,39 @@ CREATE INDEX IF NOT EXISTS idx_review_runs_status ON review_runs(status);
 CREATE INDEX IF NOT EXISTS idx_findings_review_run ON findings(review_run_id);
 "#;
 
+const MIGRATION_V4: &str = r#"
+-- Phase 4: Reviewer preference learning
+CREATE TABLE IF NOT EXISTS reviewer_decisions (
+  id TEXT PRIMARY KEY,
+  finding_id TEXT NOT NULL REFERENCES findings(id),
+  review_run_id TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  original_severity TEXT NOT NULL,
+  original_agent_type TEXT NOT NULL,
+  category_tag TEXT,
+  time_to_decision_ms INTEGER,
+  decided_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_agent_type ON reviewer_decisions(original_agent_type);
+CREATE INDEX IF NOT EXISTS idx_decisions_category ON reviewer_decisions(category_tag);
+
+CREATE TABLE IF NOT EXISTS preference_summaries (
+  id TEXT PRIMARY KEY,
+  agent_type TEXT NOT NULL,
+  category_tag TEXT,
+  accept_rate REAL NOT NULL DEFAULT 0.0,
+  total_decisions INTEGER NOT NULL DEFAULT 0,
+  last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(agent_type, category_tag)
+);
+
+-- Phase 4: Auto-fix columns on findings
+ALTER TABLE findings ADD COLUMN fix_search TEXT;
+ALTER TABLE findings ADD COLUMN fix_replace TEXT;
+ALTER TABLE findings ADD COLUMN fix_explanation TEXT;
+ALTER TABLE findings ADD COLUMN fix_status TEXT DEFAULT 'none';
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -181,6 +214,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V3)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (3)",
+            [],
+        )?;
+    }
+
+    if current_version < 4 {
+        conn.execute_batch(MIGRATION_V4)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (4)",
             [],
         )?;
     }
@@ -217,6 +258,9 @@ mod tests {
         assert!(tables.contains(&"finding_clusters".to_string()));
         assert!(tables.contains(&"settings".to_string()));
         assert!(tables.contains(&"embedding_cache".to_string()));
+        // V4 tables
+        assert!(tables.contains(&"reviewer_decisions".to_string()));
+        assert!(tables.contains(&"preference_summaries".to_string()));
     }
 
     #[test]
@@ -267,6 +311,66 @@ mod tests {
             .unwrap();
         assert!(indexes.contains(&"idx_review_runs_status".to_string()));
         assert!(indexes.contains(&"idx_findings_review_run".to_string()));
+    }
+
+    #[test]
+    fn test_v4_preference_tables_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+
+        // Set up required parent rows
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url) VALUES ('pr', 'ws', 1, 't', 'u')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO review_runs (id, pr_id, status) VALUES ('run', 'pr', 'ready')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO findings (id, review_run_id, agent_type, severity, confidence, title, body) VALUES ('f1', 'run', 'security', 'warning', 0.8, 'Test', 'Body')",
+            [],
+        ).unwrap();
+
+        // Test reviewer_decisions insert
+        conn.execute(
+            "INSERT INTO reviewer_decisions (id, finding_id, review_run_id, decision, original_severity, original_agent_type, category_tag, time_to_decision_ms) VALUES ('d1', 'f1', 'run', 'accept', 'warning', 'security', 'auth', 1500)",
+            [],
+        ).expect("V4 reviewer_decisions table should exist");
+
+        // Test preference_summaries insert
+        conn.execute(
+            "INSERT INTO preference_summaries (id, agent_type, category_tag, accept_rate, total_decisions, last_updated) VALUES ('ps1', 'security', 'auth', 0.75, 10, '2026-03-27T00:00:00Z')",
+            [],
+        ).expect("V4 preference_summaries table should exist");
+
+        // Test fix columns on findings
+        conn.execute(
+            "UPDATE findings SET fix_search = 'old', fix_replace = 'new', fix_explanation = 'reason', fix_status = 'pending' WHERE id = 'f1'",
+            [],
+        ).expect("V4 fix columns should exist on findings");
+    }
+
+    #[test]
+    fn test_v4_indexes_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+        let indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_decisions_%'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_decisions_agent_type".to_string()));
+        assert!(indexes.contains(&"idx_decisions_category".to_string()));
     }
 
     #[test]

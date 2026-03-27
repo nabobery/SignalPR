@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+
+vi.mock("./FixPreview", () => ({
+  FixPreview: () => <div>FixPreview</div>,
+}));
+
 import { FindingCard } from "./FindingCard";
 import type { Finding } from "../../lib/types";
 
@@ -31,6 +36,10 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     provider_name: null,
     diff_side: null,
     diff_new_line: null,
+    fix_search: null,
+    fix_replace: null,
+    fix_explanation: null,
+    fix_status: null,
     ...overrides,
   };
 }
@@ -140,5 +149,50 @@ describe("FindingCard", () => {
       />,
     );
     expect(screen.getByText("Custom body text")).toBeInTheDocument();
+  });
+
+  it("shows fix affordance when pending fix exists", () => {
+    render(
+      <FindingCard
+        finding={makeFinding({
+          fix_search: "old",
+          fix_replace: "new",
+          fix_status: "pending",
+        })}
+        onUpdated={onUpdated}
+      />,
+    );
+    expect(screen.getByText("Fix available")).toBeInTheDocument();
+  });
+
+  it("does not show fix affordance when fix_replace is missing", () => {
+    render(
+      <FindingCard
+        finding={makeFinding({
+          fix_search: "old",
+          fix_replace: null,
+          fix_status: "pending",
+        })}
+        onUpdated={onUpdated}
+      />,
+    );
+    expect(screen.queryByText("Fix available")).not.toBeInTheDocument();
+  });
+
+  it("renders FixPreview when fix affordance is toggled", async () => {
+    const user = userEvent.setup();
+    render(
+      <FindingCard
+        finding={makeFinding({
+          fix_search: "old",
+          fix_replace: "new",
+          fix_status: "pending",
+        })}
+        onUpdated={onUpdated}
+      />,
+    );
+
+    await user.click(screen.getByText("Fix available"));
+    expect(screen.getByText("FixPreview")).toBeInTheDocument();
   });
 });

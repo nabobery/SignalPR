@@ -1,9 +1,13 @@
+mod agents;
+mod autofix;
+mod channels;
 mod cleaner;
 mod commands;
 mod config;
 mod errors;
 mod notifications;
 mod orchestration;
+mod preferences;
 mod providers;
 mod storage;
 mod tray;
@@ -11,9 +15,12 @@ mod tray;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use channels::manager::ChannelManager;
+
 use commands::review::ActiveReviews;
 use storage::db::init_db;
 use storage::event_log::EventLog;
+use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,6 +41,28 @@ pub fn run() {
             // Event log for review pipeline diagnostics
             let event_log = Arc::new(EventLog::new(&app_dir));
             app.manage(event_log);
+
+            // Channel manager for Slack/Discord listeners
+            let channel_manager = Arc::new(ChannelManager::new());
+            app.manage(channel_manager);
+
+            // Forward channel events to the frontend event bus.
+            {
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<ChannelManager>>().inner().clone();
+                let mut rx = manager.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                let _ = app_handle.emit("channel_review_requested", event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
+                    }
+                });
+            }
 
             // Set up system tray
             tray::setup_tray(app.handle())?;
@@ -61,6 +90,19 @@ pub fn run() {
             commands::settings::update_setting,
             commands::diagnostics::export_diagnostic_bundle,
             commands::diagnostics::get_event_log,
+            commands::preferences::record_decision,
+            commands::preferences::get_preferences,
+            commands::autofix::preview_fix,
+            commands::autofix::apply_fix,
+            commands::autofix::accept_fix,
+            commands::autofix::reject_fix,
+            commands::agents::get_agent_definitions,
+            commands::agents::save_agent_definition,
+            commands::agents::delete_agent_definition,
+            commands::channels::configure_channel,
+            commands::channels::remove_channel,
+            commands::channels::get_channel_status,
+            commands::channels::has_channel_token,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

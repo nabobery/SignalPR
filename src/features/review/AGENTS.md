@@ -13,6 +13,8 @@
 | `FindingCard`     | FindingCard.tsx     | Individual finding display                        |
 | `ClusterCard`     | ClusterCard.tsx     | Grouped findings with expand/collapse             |
 | `LaneProgress`    | LaneProgress.tsx    | Multi-lane status indicators (security/arch/perf) |
+| `FixPreview`      | FixPreview.tsx      | Auto-fix preview modal                            |
+| `FixBatchBar`     | FixBatchBar.tsx     | Batch fix actions bar                             |
 
 ## STATE FLOW
 
@@ -22,7 +24,8 @@ ReviewContext.Provider (ReviewWorkspace)
   ├── SignalBoard → findings[] → activePanel="signals"
   │     └── ClusterCard / FindingCard
   ├── DiffPanel → selectedFile → activePanel="diff"
-  └── LaneProgress → lanes[] (LaneSnapshot[])
+  ├── LaneProgress → lanes[] (LaneSnapshot[])
+  └── FixPreview / FixBatchBar → auto-fix workflow
 ```
 
 ## EVENTS
@@ -39,3 +42,4 @@ ReviewContext.Provider (ReviewWorkspace)
 - Status indicators in header (running, failed, submitted)
 - ClusterCard suppresses entire cluster by suppressing representative finding
 - LaneProgress shows per-lane icons: Shield (security), Layers (arch), Gauge (perf)
+- FixPreview/FixBatchBar handle auto-fix suggestions via `apply_fix` IPC

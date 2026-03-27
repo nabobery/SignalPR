@@ -688,7 +688,7 @@ mod tests {
     }
 
     fn test_input() -> ReviewInput {
-        prompts::build_review_input(prompts::AgentFocus::General, "diff")
+        prompts::build_review_input(prompts::AgentFocus::General, "diff", None)
     }
 
     fn make_lane(
@@ -696,14 +696,16 @@ mod tests {
         focus: prompts::AgentFocus,
         provider: Arc<dyn ReviewProvider>,
     ) -> AgentLaneConfig {
+        let input = prompts::build_review_input(
+            focus.clone(),
+            "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n",
+            None,
+        );
         AgentLaneConfig {
             id: id.to_string(),
             focus,
             provider,
-            input: prompts::build_review_input(
-                focus,
-                "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n",
-            ),
+            input,
             timeout: Duration::from_secs(30),
         }
     }
@@ -809,6 +811,7 @@ mod tests {
                 agent_type: "security".into(),
                 lane_id: None,
                 provider_name: None,
+                fix_suggestion: None,
             }],
         ));
 
@@ -884,6 +887,7 @@ mod tests {
                 agent_type: "security".into(),
                 lane_id: None,
                 provider_name: None,
+                fix_suggestion: None,
             }],
         ));
         let bad_provider: Arc<dyn ReviewProvider> = Arc::new(FailingProvider);
@@ -995,6 +999,7 @@ mod tests {
             input: prompts::build_review_input(
                 prompts::AgentFocus::Security,
                 "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n",
+                None,
             ),
             timeout: Duration::from_millis(50),
         }];

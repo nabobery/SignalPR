@@ -26,6 +26,9 @@ pub enum AppError {
 
     #[error("Transient error: {0}")]
     Transient(String),
+
+    #[error("Channel error: {0}")]
+    Channel(String),
 }
 
 impl AppError {
@@ -40,6 +43,7 @@ impl AppError {
             AppError::NotFound(_) => "not_found",
             AppError::InvalidTransition(_) => "invalid_transition",
             AppError::Transient(_) => "transient_error",
+            AppError::Channel(_) => "channel_error",
         }
     }
 
@@ -49,6 +53,10 @@ impl AppError {
             AppError::Transient(_) => true,
             AppError::Io(e) => io_is_transient(e),
             AppError::Provider(e) => e.is_transient(),
+            AppError::Channel(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("timeout") || msg.contains("rate") || msg.contains("retry")
+            }
             _ => false,
         }
     }

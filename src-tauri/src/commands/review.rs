@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -7,9 +7,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
+use rusqlite::Connection;
+
+use crate::agents::definition::AgentDefinition;
 use crate::config;
 use crate::orchestration::engine;
 use crate::orchestration::lane::{AgentLaneConfig, LaneSnapshot};
+use crate::preferences::scoring;
 use crate::providers::prompts::{self, AgentFocus};
 use crate::providers::traits::ReviewProvider;
 use crate::storage::db::AppDb;
@@ -83,7 +87,7 @@ pub async fn start_review(
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        config::resolve_config(&conn, repo_config.as_ref())
+        config::resolve_config(&conn, repo_config.as_ref(), Some(Path::new(&cwd)))
     };
 
     // Choose provider based on preference
@@ -93,7 +97,12 @@ pub async fn start_review(
     let cwd_path = PathBuf::from(&cwd);
 
     // Build multi-lane configs: Security, Architecture, Performance
-    let lanes = build_agent_lanes(&diff, provider.clone(), &resolved);
+    let lanes = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        build_agent_lanes(&diff, provider.clone(), &resolved, &conn)
+    };
     let cleaner_config = resolved.cleaner;
 
     // Create run_id + DB record BEFORE spawning so the UI can navigate immediately.
@@ -172,7 +181,14 @@ fn build_agent_lanes(
     diff: &str,
     provider: Arc<dyn ReviewProvider>,
     resolved: &config::ResolvedConfig,
+    conn: &Connection,
 ) -> Vec<AgentLaneConfig> {
+    // Load reviewer preference decisions and build prompt section
+    let preferences = queries::get_all_decisions(conn).ok().and_then(|decisions| {
+        let summaries = scoring::compute_preference_summaries(&decisions);
+        scoring::build_preference_prompt_section(&summaries)
+    });
+
     let focuses: Vec<(String, AgentFocus)> = resolved
         .lanes
         .iter()
@@ -184,14 +200,58 @@ fn build_agent_lanes(
         })
         .collect();
 
-    focuses
+    let mut lanes: Vec<AgentLaneConfig> = focuses
         .into_iter()
-        .map(|(id, focus)| AgentLaneConfig {
-            id,
-            focus,
-            provider: provider.clone(),
-            input: prompts::build_review_input(focus, diff),
-            timeout: resolved.lane_timeout,
+        .map(|(id, focus)| {
+            let input = prompts::build_review_input(focus.clone(), diff, preferences.as_deref());
+            AgentLaneConfig {
+                id,
+                focus,
+                provider: provider.clone(),
+                input,
+                timeout: resolved.lane_timeout,
+            }
+        })
+        .collect();
+
+    // Append custom agent lanes
+    let custom_lanes = build_custom_agent_lanes(
+        &resolved.custom_agents,
+        diff,
+        preferences.as_deref(),
+        provider,
+        resolved.lane_timeout,
+    );
+    lanes.extend(custom_lanes);
+
+    lanes
+}
+
+/// Build lane configs for custom agents defined in repo/project configuration.
+fn build_custom_agent_lanes(
+    custom_agents: &[AgentDefinition],
+    diff: &str,
+    preferences: Option<&str>,
+    provider: Arc<dyn ReviewProvider>,
+    timeout: std::time::Duration,
+) -> Vec<AgentLaneConfig> {
+    custom_agents
+        .iter()
+        .map(|def| {
+            let focus = AgentFocus::Custom(def.agent_type.clone());
+            let input = prompts::build_review_input_with_custom_prompt(
+                focus.clone(),
+                diff,
+                preferences,
+                Some(&def.system_prompt),
+            );
+            AgentLaneConfig {
+                id: def.name.clone(),
+                focus,
+                provider: provider.clone(),
+                input,
+                timeout,
+            }
         })
         .collect()
 }
@@ -364,13 +424,18 @@ pub async fn resume_review(
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        config::resolve_config(&conn, repo_config.as_ref())
+        config::resolve_config(&conn, repo_config.as_ref(), Some(Path::new(&cwd)))
     };
     let provider: Arc<dyn ReviewProvider> =
         config::select_provider(&app, &resolved.preferred_provider).await;
 
     let cwd_path = PathBuf::from(&cwd);
-    let lanes = build_agent_lanes(&diff, provider.clone(), &resolved);
+    let lanes = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        build_agent_lanes(&diff, provider.clone(), &resolved, &conn)
+    };
     let cleaner_config = resolved.cleaner;
 
     // Create new run
@@ -448,6 +513,7 @@ pub async fn resume_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::definition::AgentDefinition;
 
     #[test]
     fn require_non_empty_diff_rejects_none() {
@@ -463,5 +529,95 @@ mod tests {
     fn require_non_empty_diff_accepts_diff() {
         let diff = require_non_empty_diff(Some("diff --git a/a b/a".into())).unwrap();
         assert!(diff.contains("diff --git"));
+    }
+
+    #[test]
+    fn build_custom_agent_lanes_empty_agents_returns_empty() {
+        let provider = crate::providers::mock::mock_provider();
+        let lanes = build_custom_agent_lanes(
+            &[],
+            "diff --git a/x b/x",
+            None,
+            provider,
+            std::time::Duration::from_secs(60),
+        );
+        assert!(lanes.is_empty());
+    }
+
+    #[test]
+    fn build_custom_agent_lanes_creates_lanes_from_definitions() {
+        let provider = crate::providers::mock::mock_provider();
+        let agents = vec![
+            AgentDefinition {
+                name: "a11y-checker".into(),
+                system_prompt: "You review accessibility issues.".into(),
+                agent_type: "accessibility".into(),
+                severity_rules: None,
+                provider: None,
+            },
+            AgentDefinition {
+                name: "i18n-checker".into(),
+                system_prompt: "You review internationalization.".into(),
+                agent_type: "i18n".into(),
+                severity_rules: None,
+                provider: None,
+            },
+        ];
+        let lanes = build_custom_agent_lanes(
+            &agents,
+            "diff --git a/x b/x",
+            None,
+            provider,
+            std::time::Duration::from_secs(120),
+        );
+
+        assert_eq!(lanes.len(), 2);
+
+        // First lane
+        assert_eq!(lanes[0].id, "a11y-checker");
+        assert_eq!(lanes[0].focus, AgentFocus::Custom("accessibility".into()));
+        assert!(lanes[0]
+            .input
+            .system_prompt
+            .contains("You review accessibility issues."));
+        assert_eq!(lanes[0].timeout, std::time::Duration::from_secs(120));
+
+        // Second lane
+        assert_eq!(lanes[1].id, "i18n-checker");
+        assert_eq!(lanes[1].focus, AgentFocus::Custom("i18n".into()));
+        assert!(lanes[1]
+            .input
+            .system_prompt
+            .contains("You review internationalization."));
+    }
+
+    #[test]
+    fn build_custom_agent_lanes_includes_preferences() {
+        let provider = crate::providers::mock::mock_provider();
+        let agents = vec![AgentDefinition {
+            name: "test-agent".into(),
+            system_prompt: "Custom prompt.".into(),
+            agent_type: "custom".into(),
+            severity_rules: None,
+            provider: None,
+        }];
+        let lanes = build_custom_agent_lanes(
+            &agents,
+            "diff",
+            Some("Prefer short findings"),
+            provider,
+            std::time::Duration::from_secs(60),
+        );
+
+        assert_eq!(lanes.len(), 1);
+        assert!(lanes[0].input.system_prompt.contains("Custom prompt."));
+        assert!(lanes[0]
+            .input
+            .system_prompt
+            .contains("Reviewer Preferences"));
+        assert!(lanes[0]
+            .input
+            .system_prompt
+            .contains("Prefer short findings"));
     }
 }

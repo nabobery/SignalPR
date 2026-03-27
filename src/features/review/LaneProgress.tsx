@@ -1,4 +1,13 @@
-import { Shield, Layers, Gauge, Loader2, CheckCircle2, XCircle, Clock } from "lucide-react";
+import {
+  Shield,
+  Layers,
+  Gauge,
+  Sparkles,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Clock,
+} from "lucide-react";
 import type { LaneSnapshot } from "../../lib/types";
 
 interface LaneProgressProps {
@@ -64,7 +73,7 @@ export default function LaneProgress({ lanes }: LaneProgressProps) {
       <div className="flex gap-2">
         {lanes.map((lane) => {
           const badge = statusBadge(lane.status);
-          const Icon = LANE_ICONS[lane.lane_id] ?? Shield;
+          const Icon = LANE_ICONS[lane.lane_id] ?? Sparkles;
           return (
             <div
               key={lane.lane_id}
@@ -72,7 +81,7 @@ export default function LaneProgress({ lanes }: LaneProgressProps) {
             >
               <Icon className={`w-3.5 h-3.5 ${badge.color}`} />
               <span className={`text-xs font-medium ${badge.color} capitalize`}>
-                {lane.lane_id}
+                {lane.lane_id.replace(/_/g, " ")}
               </span>
               <StatusIcon status={lane.status} />
               {lane.status === "completed" && lane.finding_count > 0 && (

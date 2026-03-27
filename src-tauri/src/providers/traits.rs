@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
+use crate::autofix::patch::FixSuggestion;
 use crate::errors::ProviderError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +46,8 @@ pub struct RawFinding {
     pub lane_id: Option<String>,
     #[serde(default)]
     pub provider_name: Option<String>,
+    #[serde(default)]
+    pub fix_suggestion: Option<FixSuggestion>,
 }
 
 #[async_trait]

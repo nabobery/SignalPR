@@ -56,6 +56,11 @@ export interface Finding {
   provider_name: string | null;
   diff_side: string | null;
   diff_new_line: number | null;
+  // V4 fields: auto-fix
+  fix_search: string | null;
+  fix_replace: string | null;
+  fix_explanation: string | null;
+  fix_status: FixStatus | null;
 }
 
 export interface LaneSnapshot {
@@ -98,7 +103,56 @@ export interface ReviewSnapshot {
   clusters: FindingCluster[];
 }
 
+export interface ReviewerDecision {
+  id: string;
+  finding_id: string;
+  review_run_id: string;
+  decision: "accept" | "reject" | "edit" | "skip";
+  original_severity: string;
+  original_agent_type: string;
+  category_tag: string | null;
+  time_to_decision_ms: number | null;
+  decided_at: string;
+}
+
+export interface PreferenceSummary {
+  id: string;
+  agent_type: string;
+  category_tag: string | null;
+  accept_rate: number;
+  total_decisions: number;
+  last_updated: string;
+}
+
+export type FixStatus = "none" | "pending" | "applied" | "accepted" | "rejected";
+
 export type ReviewAction = "approve" | "comment" | "request-changes";
+
+export interface AgentDefinition {
+  name: string;
+  system_prompt: string;
+  agent_type: string;
+  provider: string | null;
+  is_builtin: boolean;
+}
+
+export interface AgentDefinitionsResponse {
+  agents: AgentDefinition[];
+}
+
+export interface ChannelStatus {
+  source: string;
+  connected: boolean;
+  message: string | null;
+}
+
+export interface ChannelEvent {
+  source: string;
+  pr_url: string;
+  requester: string | null;
+  channel: string | null;
+  received_at: string;
+}
 
 export interface AppError {
   code: string;

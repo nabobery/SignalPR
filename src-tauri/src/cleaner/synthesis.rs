@@ -241,6 +241,10 @@ mod tests {
             provider_name: None,
             diff_side: None,
             diff_new_line: None,
+            fix_search: None,
+            fix_replace: None,
+            fix_explanation: None,
+            fix_status: None,
         }
     }
 

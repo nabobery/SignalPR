@@ -1,7 +1,20 @@
 import { useState } from "react";
-import { AlertTriangle, ShieldAlert, Zap, Info, Sparkles, X, Check, Pencil } from "lucide-react";
+import {
+  AlertTriangle,
+  ShieldAlert,
+  Zap,
+  Info,
+  Sparkles,
+  X,
+  Check,
+  Pencil,
+  Wrench,
+} from "lucide-react";
 import { updateFinding } from "../../lib/ipc";
 import type { Finding } from "../../lib/types";
+import { FixPreview } from "./FixPreview";
+
+const STANDARD_AGENT_TYPES = new Set(["security", "architecture", "performance"]);
 
 const severityConfig: Record<string, { icon: typeof AlertTriangle; color: string; bg: string }> = {
   blocker: { icon: ShieldAlert, color: "text-red-400", bg: "bg-red-900/30" },
@@ -15,6 +28,12 @@ export function FindingCard({ finding, onUpdated }: { finding: Finding; onUpdate
   const [editing, setEditing] = useState(false);
   const [editBody, setEditBody] = useState(finding.user_edited_body ?? finding.body);
   const [saving, setSaving] = useState(false);
+  const [showFix, setShowFix] = useState(false);
+
+  const hasPendingFix =
+    finding.fix_status === "pending" && finding.fix_search !== null && finding.fix_replace !== null;
+  const fixApplied = finding.fix_status === "applied" || finding.fix_status === "accepted";
+  const fixRejected = finding.fix_status === "rejected";
 
   const effectiveSeverity = finding.user_severity_override ?? finding.severity;
   const config = severityConfig[effectiveSeverity] ?? severityConfig.info;
@@ -48,6 +67,11 @@ export function FindingCard({ finding, onUpdated }: { finding: Finding; onUpdate
             <span className={`text-xs font-semibold uppercase ${config.color}`}>
               {effectiveSeverity}
             </span>
+            {!STANDARD_AGENT_TYPES.has(finding.agent_type) && (
+              <span className="bg-violet-900/40 text-violet-300 text-xs px-1.5 py-0.5 rounded capitalize">
+                {finding.agent_type.replace(/_/g, " ")}
+              </span>
+            )}
             <span className="text-sm font-medium text-zinc-100 truncate">{finding.title}</span>
             <span className="text-xs text-zinc-500 ml-auto shrink-0">
               {Math.round(finding.confidence * 100)}%
@@ -100,7 +124,7 @@ export function FindingCard({ finding, onUpdated }: { finding: Finding; onUpdate
           )}
 
           {!editing && (
-            <div className="flex gap-3 mt-2">
+            <div className="flex gap-3 mt-2 items-center">
               <button
                 onClick={() => setEditing(true)}
                 className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
@@ -113,7 +137,42 @@ export function FindingCard({ finding, onUpdated }: { finding: Finding; onUpdate
               >
                 <X className="w-3 h-3" /> Suppress
               </button>
+              {hasPendingFix && (
+                <button
+                  onClick={() => setShowFix((v) => !v)}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-400 hover:bg-amber-900/50"
+                >
+                  <Wrench className="w-3 h-3" /> Fix available
+                </button>
+              )}
+              {fixApplied && (
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-emerald-900/30 text-emerald-400">
+                  <Check className="w-3 h-3" /> Fix applied
+                </span>
+              )}
+              {fixRejected && (
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-zinc-700 text-zinc-500">
+                  Fix rejected
+                </span>
+              )}
             </div>
+          )}
+
+          {showFix && hasPendingFix && (
+            <FixPreview
+              findingId={finding.id}
+              fixSearch={finding.fix_search!}
+              fixReplace={finding.fix_replace!}
+              fixExplanation={finding.fix_explanation}
+              onAccept={() => {
+                setShowFix(false);
+                onUpdated();
+              }}
+              onReject={() => {
+                setShowFix(false);
+                onUpdated();
+              }}
+            />
           )}
         </div>
       </div>

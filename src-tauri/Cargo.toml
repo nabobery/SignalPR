@@ -29,8 +29,9 @@ regex = "1"
 tempfile = "3"
 async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 tauri-plugin-notification = "2"
 serde_yml = "0.0.12"
 tokio-retry2 = { version = "0.5", features = ["jitter"] }
 sha2 = "0.10"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

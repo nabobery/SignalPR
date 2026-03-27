@@ -162,12 +162,13 @@ pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, r
 
 pub fn insert_finding(conn: &Connection, f: &Finding) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         params![
             f.id, f.review_run_id, f.agent_type, f.file_path, f.line_start, f.line_end,
             f.severity, f.confidence, f.title, f.body, f.evidence, f.status,
             f.user_edited_body, f.user_severity_override, f.is_anchored, f.created_at,
-            f.cluster_id, f.lane_id, f.provider_name, f.diff_side, f.diff_new_line
+            f.cluster_id, f.lane_id, f.provider_name, f.diff_side, f.diff_new_line,
+            f.fix_search, f.fix_replace, f.fix_explanation, f.fix_status
         ],
     )?;
     Ok(())
@@ -222,7 +223,7 @@ pub fn get_findings_for_run(
     review_run_id: &str,
 ) -> Result<Vec<Finding>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
+        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
     )?;
     let rows = stmt.query_map(params![review_run_id], |row| {
         Ok(Finding {
@@ -247,9 +248,55 @@ pub fn get_findings_for_run(
             provider_name: row.get(18)?,
             diff_side: row.get(19)?,
             diff_new_line: row.get(20)?,
+            fix_search: row.get(21)?,
+            fix_replace: row.get(22)?,
+            fix_explanation: row.get(23)?,
+            fix_status: row.get(24)?,
         })
     })?;
     rows.collect()
+}
+
+pub fn get_finding_by_id(
+    conn: &Connection,
+    finding_id: &str,
+) -> Result<Option<Finding>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status FROM findings WHERE id = ?1 LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![finding_id], |row| {
+        Ok(Finding {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            agent_type: row.get(2)?,
+            file_path: row.get(3)?,
+            line_start: row.get(4)?,
+            line_end: row.get(5)?,
+            severity: row.get(6)?,
+            confidence: row.get(7)?,
+            title: row.get(8)?,
+            body: row.get(9)?,
+            evidence: row.get(10)?,
+            status: row.get(11)?,
+            user_edited_body: row.get(12)?,
+            user_severity_override: row.get(13)?,
+            is_anchored: row.get(14)?,
+            created_at: row.get(15)?,
+            cluster_id: row.get(16)?,
+            lane_id: row.get(17)?,
+            provider_name: row.get(18)?,
+            diff_side: row.get(19)?,
+            diff_new_line: row.get(20)?,
+            fix_search: row.get(21)?,
+            fix_replace: row.get(22)?,
+            fix_explanation: row.get(23)?,
+            fix_status: row.get(24)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
 }
 
 // --- Agent Runs ---
@@ -362,6 +409,23 @@ pub fn get_all_settings(
     rows.collect::<Result<std::collections::HashMap<_, _>, _>>()
 }
 
+pub fn delete_setting(conn: &Connection, key: &str) -> Result<bool, rusqlite::Error> {
+    let count = conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+    Ok(count > 0)
+}
+
+pub fn get_settings_by_prefix(
+    conn: &Connection,
+    prefix: &str,
+) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    let pattern = format!("{}%", prefix);
+    let mut stmt = conn.prepare("SELECT key, value FROM settings WHERE key LIKE ?1")?;
+    let rows = stmt.query_map(params![pattern], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
 // --- Submission Records ---
 
 pub fn insert_submission(conn: &Connection, sub: &SubmissionRecord) -> Result<(), rusqlite::Error> {
@@ -454,6 +518,114 @@ pub fn upsert_tool_status(conn: &Connection, ts: &ToolStatus) -> Result<(), rusq
     Ok(())
 }
 
+// --- Reviewer Decisions ---
+
+pub fn insert_decision(conn: &Connection, d: &ReviewerDecision) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO reviewer_decisions (id, finding_id, review_run_id, decision, original_severity, original_agent_type, category_tag, time_to_decision_ms, decided_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![d.id, d.finding_id, d.review_run_id, d.decision, d.original_severity, d.original_agent_type, d.category_tag, d.time_to_decision_ms, d.decided_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_decisions_for_run(
+    conn: &Connection,
+    review_run_id: &str,
+) -> Result<Vec<ReviewerDecision>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, finding_id, review_run_id, decision, original_severity, original_agent_type, category_tag, time_to_decision_ms, decided_at FROM reviewer_decisions WHERE review_run_id = ?1 ORDER BY decided_at DESC",
+    )?;
+    let rows = stmt.query_map(params![review_run_id], |row| {
+        Ok(ReviewerDecision {
+            id: row.get(0)?,
+            finding_id: row.get(1)?,
+            review_run_id: row.get(2)?,
+            decision: row.get(3)?,
+            original_severity: row.get(4)?,
+            original_agent_type: row.get(5)?,
+            category_tag: row.get(6)?,
+            time_to_decision_ms: row.get(7)?,
+            decided_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_all_decisions(conn: &Connection) -> Result<Vec<ReviewerDecision>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, finding_id, review_run_id, decision, original_severity, original_agent_type, category_tag, time_to_decision_ms, decided_at FROM reviewer_decisions ORDER BY decided_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ReviewerDecision {
+            id: row.get(0)?,
+            finding_id: row.get(1)?,
+            review_run_id: row.get(2)?,
+            decision: row.get(3)?,
+            original_severity: row.get(4)?,
+            original_agent_type: row.get(5)?,
+            category_tag: row.get(6)?,
+            time_to_decision_ms: row.get(7)?,
+            decided_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+// --- Preference Summaries ---
+
+pub fn upsert_preference_summary(
+    conn: &Connection,
+    ps: &PreferenceSummary,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO preference_summaries (id, agent_type, category_tag, accept_rate, total_decisions, last_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![ps.id, ps.agent_type, ps.category_tag, ps.accept_rate, ps.total_decisions, ps.last_updated],
+    )?;
+    Ok(())
+}
+
+pub fn get_preference_summaries(
+    conn: &Connection,
+) -> Result<Vec<PreferenceSummary>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_type, category_tag, accept_rate, total_decisions, last_updated FROM preference_summaries ORDER BY agent_type, category_tag",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(PreferenceSummary {
+            id: row.get(0)?,
+            agent_type: row.get(1)?,
+            category_tag: row.get(2)?,
+            accept_rate: row.get(3)?,
+            total_decisions: row.get(4)?,
+            last_updated: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_decisions_for_agent_type(
+    conn: &Connection,
+    agent_type: &str,
+) -> Result<Vec<ReviewerDecision>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, finding_id, review_run_id, decision, original_severity, original_agent_type, category_tag, time_to_decision_ms, decided_at FROM reviewer_decisions WHERE original_agent_type = ?1 ORDER BY decided_at DESC",
+    )?;
+    let rows = stmt.query_map(params![agent_type], |row| {
+        Ok(ReviewerDecision {
+            id: row.get(0)?,
+            finding_id: row.get(1)?,
+            review_run_id: row.get(2)?,
+            decision: row.get(3)?,
+            original_severity: row.get(4)?,
+            original_agent_type: row.get(5)?,
+            category_tag: row.get(6)?,
+            time_to_decision_ms: row.get(7)?,
+            decided_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
 pub fn get_all_tool_status(conn: &Connection) -> Result<Vec<ToolStatus>, rusqlite::Error> {
     let mut stmt =
         conn.prepare("SELECT tool_name, status, version, message, checked_at FROM tool_status")?;
@@ -467,6 +639,44 @@ pub fn get_all_tool_status(conn: &Connection) -> Result<Vec<ToolStatus>, rusqlit
         })
     })?;
     rows.collect()
+}
+
+// --- Workspaces (by ID) ---
+
+pub fn get_workspace_by_id(
+    conn: &Connection,
+    workspace_id: &str,
+) -> Result<Option<Workspace>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, local_path, remote_owner, remote_repo, created_at FROM workspaces WHERE id = ?1 LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![workspace_id], |row| {
+        Ok(Workspace {
+            id: row.get(0)?,
+            local_path: row.get(1)?,
+            remote_owner: row.get(2)?,
+            remote_repo: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+// --- Finding Fix Status ---
+
+pub fn update_finding_fix_status(
+    conn: &Connection,
+    finding_id: &str,
+    status: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE findings SET fix_status = ?1 WHERE id = ?2",
+        params![status, finding_id],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -720,6 +930,10 @@ mod tests {
             provider_name: None,
             diff_side: None,
             diff_new_line: None,
+            fix_search: None,
+            fix_replace: None,
+            fix_explanation: None,
+            fix_status: None,
         };
         insert_finding(&conn, &finding).unwrap();
 
@@ -820,6 +1034,10 @@ mod tests {
                     provider_name: None,
                     diff_side: None,
                     diff_new_line: None,
+                    fix_search: None,
+                    fix_replace: None,
+                    fix_explanation: None,
+                    fix_status: None,
                 },
             )
             .unwrap();
@@ -935,5 +1153,139 @@ mod tests {
         assert_eq!(hist[0].status, "submitted");
         assert!(hist[0].submitted_at.is_some());
         assert!(hist[0].last_attempt_at.is_some());
+    }
+
+    #[test]
+    fn test_decision_insert_and_query() {
+        let conn = test_db();
+        // Setup chain
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00".into(),
+                diff_hash: None,
+            },
+        )
+        .unwrap();
+        insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run".into(),
+                pr_id: "pr".into(),
+                status: "ready".into(),
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+            },
+        )
+        .unwrap();
+        insert_finding(
+            &conn,
+            &Finding {
+                id: "f1".into(),
+                review_run_id: "run".into(),
+                agent_type: "security".into(),
+                file_path: None,
+                line_start: None,
+                line_end: None,
+                severity: "warning".into(),
+                confidence: 0.8,
+                title: "Test".into(),
+                body: "Body".into(),
+                evidence: None,
+                status: "active".into(),
+                user_edited_body: None,
+                user_severity_override: None,
+                is_anchored: false,
+                created_at: "2026-01-01T00:00:00".into(),
+                cluster_id: None,
+                lane_id: None,
+                provider_name: None,
+                diff_side: None,
+                diff_new_line: None,
+                fix_search: None,
+                fix_replace: None,
+                fix_explanation: None,
+                fix_status: None,
+            },
+        )
+        .unwrap();
+
+        let decision = ReviewerDecision {
+            id: "d1".into(),
+            finding_id: "f1".into(),
+            review_run_id: "run".into(),
+            decision: "accept".into(),
+            original_severity: "warning".into(),
+            original_agent_type: "security".into(),
+            category_tag: Some("auth".into()),
+            time_to_decision_ms: Some(1500),
+            decided_at: "2026-03-27T00:00:00".into(),
+        };
+        insert_decision(&conn, &decision).unwrap();
+
+        let decisions = get_decisions_for_run(&conn, "run").unwrap();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].decision, "accept");
+        assert_eq!(decisions[0].original_agent_type, "security");
+        assert_eq!(decisions[0].category_tag.as_deref(), Some("auth"));
+
+        let all = get_all_decisions(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn test_preference_summary_upsert() {
+        let conn = test_db();
+        let ps = PreferenceSummary {
+            id: "ps1".into(),
+            agent_type: "security".into(),
+            category_tag: Some("auth".into()),
+            accept_rate: 0.75,
+            total_decisions: 10,
+            last_updated: "2026-03-27T00:00:00".into(),
+        };
+        upsert_preference_summary(&conn, &ps).unwrap();
+
+        let summaries = get_preference_summaries(&conn).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].accept_rate, 0.75);
+        assert_eq!(summaries[0].total_decisions, 10);
+
+        // Update accept_rate
+        let ps2 = PreferenceSummary {
+            id: "ps1".into(),
+            agent_type: "security".into(),
+            category_tag: Some("auth".into()),
+            accept_rate: 0.85,
+            total_decisions: 15,
+            last_updated: "2026-03-28T00:00:00".into(),
+        };
+        upsert_preference_summary(&conn, &ps2).unwrap();
+        let summaries = get_preference_summaries(&conn).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].accept_rate, 0.85);
+        assert_eq!(summaries[0].total_decisions, 15);
     }
 }

@@ -60,6 +60,11 @@ pub struct Finding {
     pub provider_name: Option<String>,
     pub diff_side: Option<String>,
     pub diff_new_line: Option<i32>,
+    // V4 fields: auto-fix
+    pub fix_search: Option<String>,
+    pub fix_replace: Option<String>,
+    pub fix_explanation: Option<String>,
+    pub fix_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +103,31 @@ pub struct SubmissionRecord {
     pub idempotency_key: Option<String>,
     pub attempt_count: Option<i32>,
     pub last_attempt_at: Option<String>,
+}
+
+// V4 models: Preference learning
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewerDecision {
+    pub id: String,
+    pub finding_id: String,
+    pub review_run_id: String,
+    pub decision: String, // "accept" | "reject" | "edit" | "skip"
+    pub original_severity: String,
+    pub original_agent_type: String,
+    pub category_tag: Option<String>,
+    pub time_to_decision_ms: Option<i64>,
+    pub decided_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreferenceSummary {
+    pub id: String,
+    pub agent_type: String,
+    pub category_tag: Option<String>,
+    pub accept_rate: f64,
+    pub total_decisions: i32,
+    pub last_updated: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

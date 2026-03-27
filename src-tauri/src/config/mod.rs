@@ -1,3 +1,6 @@
+pub mod merge;
+pub mod presets;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,6 +9,8 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use tauri::AppHandle;
 
+use crate::agents::definition::AgentDefinition;
+use crate::agents::registry::AgentRegistry;
 use crate::cleaner::CleanerConfig;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::codex::{CodexProvider, MockProvider};
@@ -18,11 +23,93 @@ pub struct ResolvedConfig {
     pub preferred_provider: String,
     pub lane_timeout: Duration,
     pub lanes: Vec<String>,
+    pub custom_agents: Vec<AgentDefinition>,
+}
+
+const CUSTOM_AGENT_PREFIX: &str = "custom_agent_";
+
+#[derive(Debug, Deserialize)]
+struct StoredAgentDefinition {
+    name: String,
+    system_prompt: String,
+    agent_type: String,
+    #[serde(default)]
+    provider: Option<String>,
+}
+
+fn load_custom_agents_from_settings(conn: &Connection) -> Vec<AgentDefinition> {
+    let entries = queries::get_settings_by_prefix(conn, CUSTOM_AGENT_PREFIX).unwrap_or_default();
+    let mut out = Vec::new();
+    for (_key, value) in entries {
+        match serde_json::from_str::<StoredAgentDefinition>(&value) {
+            Ok(parsed) => {
+                if parsed.name.trim().is_empty() || parsed.system_prompt.trim().is_empty() {
+                    tracing::warn!("Skipping invalid custom agent definition (missing fields)");
+                    continue;
+                }
+                if parsed.agent_type.trim().is_empty() {
+                    tracing::warn!(
+                        "Skipping custom agent '{}' with empty agent_type",
+                        parsed.name
+                    );
+                    continue;
+                }
+                out.push(AgentDefinition {
+                    name: parsed.name,
+                    system_prompt: parsed.system_prompt,
+                    agent_type: parsed.agent_type,
+                    severity_rules: None,
+                    provider: parsed.provider,
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Skipping malformed custom agent JSON: {}", e);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Resolve config by merging: built-in defaults < user settings (DB) < repo config.
 /// Invalid or missing values fall back to defaults silently.
-pub fn resolve_config(conn: &Connection, repo: Option<&RepoConfig>) -> ResolvedConfig {
+/// If `workspace_path` is provided and the repo config uses `extends`, the parent
+/// config is resolved and merged before applying to the final config.
+pub fn resolve_config(
+    conn: &Connection,
+    repo: Option<&RepoConfig>,
+    workspace_path: Option<&Path>,
+) -> ResolvedConfig {
+    // If the repo config has an `extends` field, resolve inheritance first
+    let resolved_repo: Option<RepoConfig>;
+    let repo = if let Some(repo) = repo {
+        if let (Some(ref extends_val), Some(ws)) = (&repo.extends, workspace_path) {
+            let cache_dir = ws.join(".signalpr_cache").join("preset_cache");
+            if let Some(parent) = presets::resolve_extends(extends_val, ws, &cache_dir, 0) {
+                // Clone the current repo config fields into a new owned config
+                let overlay = RepoConfig {
+                    extends: None, // already resolved
+                    lanes: repo.lanes.clone(),
+                    max_findings: repo.max_findings,
+                    similarity_threshold: repo.similarity_threshold,
+                    drop_nitpicks: repo.drop_nitpicks,
+                    min_confidence: repo.min_confidence,
+                    lane_timeout_secs: repo.lane_timeout_secs,
+                    preferred_provider: repo.preferred_provider.clone(),
+                    custom_agents: repo.custom_agents.clone(),
+                };
+                resolved_repo = Some(merge::deep_merge_configs(parent, overlay));
+                resolved_repo.as_ref()
+            } else {
+                Some(repo)
+            }
+        } else {
+            Some(repo)
+        }
+    } else {
+        None
+    };
+
     let defaults = CleanerConfig::default();
     let default_timeout: u64 = 120;
     let default_lanes: Vec<String> = vec![
@@ -84,6 +171,22 @@ pub fn resolve_config(conn: &Connection, repo: Option<&RepoConfig>) -> ResolvedC
         }
     }
 
+    let repo_agents = repo
+        .and_then(|r| r.custom_agents.clone())
+        .unwrap_or_default();
+    let settings_agents = load_custom_agents_from_settings(conn);
+
+    // Settings agents override repo agents with the same name.
+    let mut merged_agents: Vec<AgentDefinition> = Vec::new();
+    for def in repo_agents.into_iter().chain(settings_agents) {
+        if let Some(pos) = merged_agents.iter().position(|d| d.name == def.name) {
+            merged_agents.remove(pos);
+        }
+        merged_agents.push(def);
+    }
+    let registry = AgentRegistry::load_from_config(&merged_agents);
+    let custom_agents = registry.definitions().to_vec();
+
     ResolvedConfig {
         cleaner: CleanerConfig {
             similarity_threshold,
@@ -94,6 +197,7 @@ pub fn resolve_config(conn: &Connection, repo: Option<&RepoConfig>) -> ResolvedC
         preferred_provider,
         lane_timeout: Duration::from_secs(lane_timeout_secs),
         lanes,
+        custom_agents,
     }
 }
 
@@ -140,6 +244,7 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct RepoConfig {
+    pub extends: Option<String>,
     pub lanes: Option<Vec<String>>,
     pub max_findings: Option<usize>,
     pub similarity_threshold: Option<f64>,
@@ -147,6 +252,8 @@ pub struct RepoConfig {
     pub min_confidence: Option<f64>,
     pub lane_timeout_secs: Option<u64>,
     pub preferred_provider: Option<String>,
+    #[serde(default)]
+    pub custom_agents: Option<Vec<AgentDefinition>>,
 }
 
 /// Load `.signalpr.yml` from the workspace root. Returns None if file
@@ -180,7 +287,7 @@ mod tests {
     fn test_resolve_config_defaults() {
         let db = init_db_in_memory().unwrap();
         let conn = db.0.lock().unwrap();
-        let config = resolve_config(&conn, None);
+        let config = resolve_config(&conn, None, None);
         assert_eq!(config.cleaner.max_surface_findings, 8);
         assert!((config.cleaner.similarity_threshold - 0.70).abs() < f64::EPSILON);
         assert_eq!(config.preferred_provider, "auto");
@@ -203,7 +310,7 @@ mod tests {
         queries::upsert_setting(&conn, "max_surface_findings", "15").unwrap();
         queries::upsert_setting(&conn, "preferred_provider", "claude").unwrap();
         queries::upsert_setting(&conn, "lane_timeout_secs", "60").unwrap();
-        let config = resolve_config(&conn, None);
+        let config = resolve_config(&conn, None, None);
         assert_eq!(config.cleaner.max_surface_findings, 15);
         assert_eq!(config.preferred_provider, "claude");
         assert_eq!(config.lane_timeout.as_secs(), 60);
@@ -215,7 +322,7 @@ mod tests {
         let conn = db.0.lock().unwrap();
         queries::upsert_setting(&conn, "max_surface_findings", "not_a_number").unwrap();
         queries::upsert_setting(&conn, "similarity_threshold", "abc").unwrap();
-        let config = resolve_config(&conn, None);
+        let config = resolve_config(&conn, None, None);
         assert_eq!(config.cleaner.max_surface_findings, 8); // default
         assert!((config.cleaner.similarity_threshold - 0.70).abs() < f64::EPSILON);
         // default
@@ -226,7 +333,7 @@ mod tests {
         let db = init_db_in_memory().unwrap();
         let conn = db.0.lock().unwrap();
         queries::upsert_setting(&conn, "drop_nitpicks", "false").unwrap();
-        let config = resolve_config(&conn, None);
+        let config = resolve_config(&conn, None, None);
         assert!(!config.cleaner.drop_nitpicks);
         assert_eq!(config.cleaner.max_surface_findings, 8);
     }
@@ -262,7 +369,7 @@ mod tests {
             max_findings: Some(3),
             ..Default::default()
         };
-        let config = resolve_config(&conn, Some(&repo));
+        let config = resolve_config(&conn, Some(&repo), None);
         assert_eq!(config.cleaner.max_surface_findings, 3);
     }
 
@@ -272,7 +379,7 @@ mod tests {
         let conn = db.0.lock().unwrap();
         queries::upsert_setting(&conn, "max_surface_findings", "15").unwrap();
         let repo = RepoConfig::default();
-        let config = resolve_config(&conn, Some(&repo));
+        let config = resolve_config(&conn, Some(&repo), None);
         assert_eq!(config.cleaner.max_surface_findings, 15);
     }
 
@@ -288,7 +395,7 @@ mod tests {
             ]),
             ..Default::default()
         };
-        let config = resolve_config(&conn, Some(&repo));
+        let config = resolve_config(&conn, Some(&repo), None);
         assert_eq!(
             config.lanes,
             vec!["performance".to_string(), "security".to_string()]

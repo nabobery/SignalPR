@@ -36,6 +36,17 @@ pub fn normalize(raw: Vec<RawFinding>, review_run_id: &str) -> Vec<Finding> {
                 provider_name: r.provider_name,
                 diff_side: None,
                 diff_new_line: None,
+                fix_search: r.fix_suggestion.as_ref().map(|f| f.search.clone()),
+                fix_replace: r.fix_suggestion.as_ref().map(|f| f.replace.clone()),
+                fix_explanation: r
+                    .fix_suggestion
+                    .as_ref()
+                    .and_then(|f| f.explanation.clone()),
+                fix_status: if r.fix_suggestion.is_some() {
+                    Some("pending".to_string())
+                } else {
+                    None
+                },
             }
         })
         .collect()
@@ -70,6 +81,7 @@ mod tests {
             agent_type: agent.to_string(),
             lane_id: None,
             provider_name: None,
+            fix_suggestion: None,
         }
     }
 
@@ -118,6 +130,7 @@ mod tests {
             agent_type: "security".into(),
             lane_id: None,
             provider_name: None,
+            fix_suggestion: None,
         };
         let findings = normalize(vec![r], "run-1");
         assert!(!findings[0].is_anchored);
@@ -140,5 +153,51 @@ mod tests {
         r2.confidence = -0.5;
         let findings2 = normalize(vec![r2], "run-1");
         assert_eq!(findings2[0].confidence, 0.0);
+    }
+
+    #[test]
+    fn test_normalize_with_fix_suggestion() {
+        use crate::autofix::patch::FixSuggestion;
+
+        let mut r = raw("Bug", "warning", "security");
+        r.fix_suggestion = Some(FixSuggestion {
+            search: "old_code()".to_string(),
+            replace: "new_code()".to_string(),
+            file_path: "src/main.rs".to_string(),
+            explanation: Some("Fix the call".to_string()),
+        });
+        let findings = normalize(vec![r], "run-1");
+        assert_eq!(findings[0].fix_search.as_deref(), Some("old_code()"));
+        assert_eq!(findings[0].fix_replace.as_deref(), Some("new_code()"));
+        assert_eq!(findings[0].fix_explanation.as_deref(), Some("Fix the call"));
+        assert_eq!(findings[0].fix_status.as_deref(), Some("pending"));
+    }
+
+    #[test]
+    fn test_normalize_without_fix_suggestion() {
+        let r = raw("Bug", "warning", "security");
+        let findings = normalize(vec![r], "run-1");
+        assert!(findings[0].fix_search.is_none());
+        assert!(findings[0].fix_replace.is_none());
+        assert!(findings[0].fix_explanation.is_none());
+        assert!(findings[0].fix_status.is_none());
+    }
+
+    #[test]
+    fn test_normalize_fix_suggestion_no_explanation() {
+        use crate::autofix::patch::FixSuggestion;
+
+        let mut r = raw("Bug", "warning", "security");
+        r.fix_suggestion = Some(FixSuggestion {
+            search: "old()".to_string(),
+            replace: "new()".to_string(),
+            file_path: "lib.rs".to_string(),
+            explanation: None,
+        });
+        let findings = normalize(vec![r], "run-1");
+        assert_eq!(findings[0].fix_search.as_deref(), Some("old()"));
+        assert_eq!(findings[0].fix_replace.as_deref(), Some("new()"));
+        assert!(findings[0].fix_explanation.is_none());
+        assert_eq!(findings[0].fix_status.as_deref(), Some("pending"));
     }
 }

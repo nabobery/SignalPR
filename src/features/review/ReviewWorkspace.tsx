@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, Loader2, Send, FileCode, List } from "lucide-react";
-import { getReviewSnapshot, parseError } from "../../lib/ipc";
+import { getReviewSnapshot, acceptFix, parseError } from "../../lib/ipc";
+import { FixBatchBar } from "./FixBatchBar";
 import { ReviewContext, type ReviewState } from "../../lib/store";
 import { FileTree } from "./FileTree";
 import { SignalBoard } from "./SignalBoard";
@@ -20,6 +21,7 @@ export function ReviewWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<Panel>("signals");
   const [showSubmit, setShowSubmit] = useState(false);
+  const [batchBarDismissed, setBatchBarDismissed] = useState(false);
 
   const refreshSnapshot = useCallback(async () => {
     if (!runId) return;
@@ -94,6 +96,16 @@ export function ReviewWorkspace() {
   const isRunning =
     state.status === "created" || state.status === "running_agents" || state.status === "cleaning";
   const activeCount = state.findings.filter((f) => f.status === "active").length;
+  const pendingFixes = state.findings.filter(
+    (f) => f.fix_search && !["applied", "accepted", "rejected"].includes(f.fix_status ?? ""),
+  );
+
+  const handleAcceptAllFixes = async () => {
+    for (const f of pendingFixes) {
+      await acceptFix(f.id);
+    }
+    await refreshSnapshot();
+  };
 
   return (
     <ReviewContext.Provider value={{ state, setSelectedFile, refreshSnapshot }}>
@@ -202,6 +214,14 @@ export function ReviewWorkspace() {
               setShowSubmit(false);
               refreshSnapshot();
             }}
+          />
+        )}
+
+        {!batchBarDismissed && pendingFixes.length > 0 && (
+          <FixBatchBar
+            fixCount={pendingFixes.length}
+            onAcceptAll={handleAcceptAllFixes}
+            onDismiss={() => setBatchBarDismissed(true)}
           />
         )}
       </div>

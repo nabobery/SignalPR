@@ -5,7 +5,7 @@
 ## ENTRY
 
 - `main.tsx` — React DOM render
-- `App.tsx` — Router (`/` → IntakeView, `/review/:runId` → ReviewWorkspace)
+- `App.tsx` — Router (`/` → IntakeView, `/review/:runId` → ReviewWorkspace, `/settings` → SettingsView)
 
 ## LIB MODULES
 
@@ -17,12 +17,13 @@
 
 ## FEATURES
 
-| Feature       | Components                                                     | Purpose                            |
-| ------------- | -------------------------------------------------------------- | ---------------------------------- |
-| `intake/`     | IntakeView                                                     | PR URL input + workspace selection |
-| `onboarding/` | EnvironmentCheck                                               | Verify gh/codex CLI                |
-| `review/`     | ReviewWorkspace, FileTree, SignalBoard, DiffPanel, FindingCard | Main review UI                     |
-| `submission/` | SubmitDialog                                                   | Submit review to GitHub            |
+| Feature       | Components                                                                                                         | Purpose                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| `intake/`     | IntakeView                                                                                                         | PR URL input + workspace selection |
+| `onboarding/` | EnvironmentCheck                                                                                                   | Verify gh/codex CLI                |
+| `review/`     | ReviewWorkspace, FileTree, SignalBoard, DiffPanel, FindingCard, ClusterCard, LaneProgress, FixPreview, FixBatchBar | Main review UI + auto-fix          |
+| `settings/`   | SettingsView, GeneralPanel, PresetPanel, AgentPanel, ChannelPanel, AgentForm                                       | User configuration                 |
+| `submission/` | SubmitDialog                                                                                                       | Submit review to GitHub            |
 
 ## CONVENTIONS
 

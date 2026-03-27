@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router";
 import { ErrorBoundary } from "react-error-boundary";
 import { IntakeView } from "./features/intake/IntakeView";
 import { ReviewWorkspace } from "./features/review/ReviewWorkspace";
+import { SettingsView } from "./features/settings/SettingsView";
 import "./App.css";
 
 function ErrorFallback({
@@ -33,6 +34,7 @@ function App() {
         <Routes>
           <Route path="/" element={<IntakeView />} />
           <Route path="/review/:runId" element={<ReviewWorkspace />} />
+          <Route path="/settings" element={<SettingsView />} />
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>

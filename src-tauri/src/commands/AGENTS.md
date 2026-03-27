@@ -14,6 +14,10 @@
 | `submission.rs`  | `submit_review`                                        | Submit to GitHub                  |
 | `settings.rs`    | `get_settings`, `update_setting`                       | User settings CRUD                |
 | `diagnostics.rs` | `export_diagnostic_bundle`, `get_event_log`            | Debug/export pipeline events      |
+| `agents.rs`      | `get_agents`, `save_agent`, `delete_agent`             | Custom agent management           |
+| `autofix.rs`     | `apply_fix`                                            | Apply auto-fix patch              |
+| `channels.rs`    | `get_channel_statuses`                                 | Discord/Slack connection status   |
+| `preferences.rs` | `get_preferences`                                      | Reviewer preference summaries     |
 
 ## PATTERNS
 

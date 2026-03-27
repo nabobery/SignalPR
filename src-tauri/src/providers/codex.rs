@@ -217,6 +217,7 @@ impl ReviewProvider for MockProvider {
                     agent_type: "security".into(),
                     lane_id: None,
                     provider_name: None,
+                    fix_suggestion: None,
                 },
                 RawFinding {
                     title: "N+1 query in user list endpoint".into(),
@@ -230,6 +231,7 @@ impl ReviewProvider for MockProvider {
                     agent_type: "performance".into(),
                     lane_id: None,
                     provider_name: None,
+                    fix_suggestion: None,
                 },
                 RawFinding {
                     title: "Direct dependency on internal module".into(),
@@ -243,6 +245,7 @@ impl ReviewProvider for MockProvider {
                     agent_type: "architecture".into(),
                     lane_id: None,
                     provider_name: None,
+                    fix_suggestion: None,
                 },
             ],
             overall_assessment: Some("The PR introduces a security risk that should be addressed before merging. Performance and architecture findings are lower priority.".into()),
@@ -258,7 +261,8 @@ mod tests {
 
     #[test]
     fn test_prompt_concatenation() {
-        let input = prompts::build_review_input(prompts::AgentFocus::General, &"x".repeat(600_000));
+        let input =
+            prompts::build_review_input(prompts::AgentFocus::General, &"x".repeat(600_000), None);
         let prompt = format!("{}\n\nPR Diff:\n{}", input.system_prompt, input.diff);
         assert!(prompt.len() > 600_000);
         assert!(prompt.contains("code reviewer"));
@@ -271,7 +275,7 @@ mod tests {
         assert!(health.available);
         assert_eq!(provider.provider_name(), "mock");
 
-        let input = prompts::build_review_input(prompts::AgentFocus::General, "some diff");
+        let input = prompts::build_review_input(prompts::AgentFocus::General, "some diff", None);
         let result = provider
             .run_review(&input, Path::new("/tmp"), CancellationToken::new())
             .await
@@ -292,7 +296,7 @@ mod tests {
         .unwrap();
 
         let provider = MockProvider::new(fixture);
-        let input = prompts::build_review_input(prompts::AgentFocus::Security, "diff");
+        let input = prompts::build_review_input(prompts::AgentFocus::Security, "diff", None);
         let result = provider
             .run_review(&input, Path::new("/tmp"), CancellationToken::new())
             .await

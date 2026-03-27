@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ToolStatus, PrIntakeResult, ReviewSnapshot, ReviewRun, AppError } from "./types";
+import type {
+  ToolStatus,
+  PrIntakeResult,
+  ReviewSnapshot,
+  ReviewRun,
+  PreferenceSummary,
+  AgentDefinitionsResponse,
+  ChannelStatus,
+  AppError,
+} from "./types";
 
 export function parseError(err: unknown): AppError {
   if (typeof err === "object" && err !== null && "code" in err && "message" in err) {
@@ -94,4 +103,65 @@ export async function exportDiagnosticBundle(runId: string): Promise<unknown> {
 
 export async function getEventLog(runId: string): Promise<unknown[]> {
   return invoke("get_event_log", { runId });
+}
+
+export async function recordDecision(
+  findingId: string,
+  decision: string,
+  timeToDecisionMs?: number,
+): Promise<void> {
+  return invoke("record_decision", { findingId, decision, timeToDecisionMs });
+}
+
+export async function getPreferences(): Promise<PreferenceSummary[]> {
+  return invoke("get_preferences");
+}
+
+export async function previewFix(findingId: string): Promise<string> {
+  return invoke("preview_fix", { findingId });
+}
+
+export async function applyFix(findingId: string): Promise<void> {
+  return invoke("apply_fix", { findingId });
+}
+
+export async function acceptFix(findingId: string): Promise<void> {
+  return invoke("accept_fix", { findingId });
+}
+
+export async function rejectFix(findingId: string): Promise<void> {
+  return invoke("reject_fix", { findingId });
+}
+
+export async function getAgentDefinitions(): Promise<AgentDefinitionsResponse> {
+  return invoke("get_agent_definitions");
+}
+
+export async function saveAgentDefinition(
+  name: string,
+  systemPrompt: string,
+  agentType: string,
+  provider?: string,
+): Promise<void> {
+  return invoke("save_agent_definition", { name, systemPrompt, agentType, provider });
+}
+
+export async function deleteAgentDefinition(name: string): Promise<void> {
+  return invoke("delete_agent_definition", { name });
+}
+
+export async function configureChannel(source: string, token: string): Promise<void> {
+  return invoke("configure_channel", { source, token });
+}
+
+export async function removeChannel(source: string): Promise<void> {
+  return invoke("remove_channel", { source });
+}
+
+export async function getChannelStatus(): Promise<ChannelStatus[]> {
+  return invoke("get_channel_status");
+}
+
+export async function hasChannelToken(source: string): Promise<boolean> {
+  return invoke("has_channel_token", { source });
 }

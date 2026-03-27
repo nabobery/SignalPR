@@ -1,9 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router";
-import { Loader2 } from "lucide-react";
+import { Loader2, Settings } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { EnvironmentCheck } from "../onboarding/EnvironmentCheck";
 import { openFromUrl, confirmWorkspace, startReview, parseError } from "../../lib/ipc";
-import type { PrIntakeResult } from "../../lib/types";
+import type { PrIntakeResult, ChannelEvent } from "../../lib/types";
 
 export function IntakeView() {
   const navigate = useNavigate();
@@ -15,6 +16,19 @@ export function IntakeView() {
   const [localPath, setLocalPath] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [channelToast, setChannelToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unlisten = listen<ChannelEvent>("channel_review_requested", (event) => {
+      const { source, pr_url, requester } = event.payload;
+      setUrl(pr_url);
+      setChannelToast(`Review requested via ${source}${requester ? ` from ${requester}` : ""}`);
+      setTimeout(() => setChannelToast(null), 5000);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   const handleFetch = async () => {
     setError(null);
@@ -53,7 +67,14 @@ export function IntakeView() {
   const onEnvReady = useCallback((ready: boolean) => setEnvReady(ready), []);
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-8">
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-8 relative">
+      <button
+        onClick={() => navigate("/settings")}
+        className="absolute top-4 right-4 text-zinc-500 hover:text-zinc-200 transition-colors"
+        title="Settings"
+      >
+        <Settings className="w-5 h-5" />
+      </button>
       <h1 className="text-3xl font-bold mb-2">SignalPR</h1>
       <p className="text-zinc-400 mb-6 text-center max-w-md">
         Paste a GitHub PR URL to start a reviewer-first, AI-assisted code review.
@@ -132,6 +153,12 @@ export function IntakeView() {
         <p className="text-zinc-600 text-xs mt-4">
           gh CLI must be authenticated before you can start a review.
         </p>
+      )}
+
+      {channelToast && (
+        <div className="fixed bottom-6 right-6 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-100 shadow-lg animate-in fade-in slide-in-from-bottom-2">
+          {channelToast}
+        </div>
       )}
     </main>
   );

@@ -3,6 +3,7 @@ use tauri_plugin_shell::ShellExt;
 
 use crate::cleaner::{remap, verify};
 use crate::commands::intake::parse_pr_url;
+use crate::preferences::{decisions, scoring};
 use crate::storage::db::AppDb;
 use crate::storage::hashing::sha256_hex;
 use crate::storage::models::{Finding, SubmissionRecord};
@@ -210,6 +211,12 @@ pub async fn submit_review(
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
         queries::update_submission_status(&conn, &sub_id, "submitted", None, None)?;
         queries::update_review_run_status(&conn, &run_id, "submitted", None)?;
+
+        // Best-effort: record reviewer decisions from the final submitted set.
+        if let Err(e) = record_decisions_for_submission(&conn, &active_findings) {
+            tracing::warn!("Failed to record reviewer decisions: {}", e);
+        }
+
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -222,6 +229,31 @@ pub async fn submit_review(
             stderr
         )))
     }
+}
+
+fn record_decisions_for_submission(
+    conn: &rusqlite::Connection,
+    active_findings: &[&Finding],
+) -> Result<(), crate::errors::AppError> {
+    // Insert accept/edit decisions for all findings that made it into the final review body.
+    for f in active_findings {
+        let decision = if f.user_edited_body.is_some() || f.user_severity_override.is_some() {
+            "edit"
+        } else {
+            "accept"
+        };
+        let d = decisions::build_decision(f, decision, None);
+        let _ = queries::insert_decision(conn, &d);
+    }
+
+    // Refresh preference summaries for prompt-injection on subsequent runs.
+    let all = queries::get_all_decisions(conn)?;
+    let summaries = scoring::compute_preference_summaries(&all);
+    for s in &summaries {
+        let _ = queries::upsert_preference_summary(conn, s);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -504,6 +536,10 @@ mod tests {
             provider_name: None,
             diff_side: None,
             diff_new_line: None,
+            fix_search: None,
+            fix_replace: None,
+            fix_explanation: None,
+            fix_status: None,
         }
     }
 

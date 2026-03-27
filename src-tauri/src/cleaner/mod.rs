@@ -103,6 +103,7 @@ diff --git a/src/db.rs b/src/db.rs
             agent_type: agent.to_string(),
             lane_id: None,
             provider_name: None,
+            fix_suggestion: None,
         }
     }
 
