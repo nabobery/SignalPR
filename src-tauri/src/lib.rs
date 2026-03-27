@@ -1,14 +1,42 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+mod cleaner;
+mod commands;
+mod errors;
+mod orchestration;
+mod providers;
+mod storage;
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use commands::review::ActiveReviews;
+use storage::db::init_db;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    tracing_subscriber::fmt::init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            let app_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&app_dir)?;
+            let db = init_db(&app_dir)?;
+            app.manage(db);
+            app.manage(ActiveReviews(Mutex::new(HashMap::new())));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::environment::inspect_environment,
+            commands::intake::open_from_url,
+            commands::intake::confirm_workspace,
+            commands::review::start_review,
+            commands::review::cancel_review,
+            commands::review::get_review_snapshot,
+            commands::findings::update_finding,
+            commands::submission::submit_review,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -7,20 +7,42 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "format": "prettier --write 'src/**/*.{ts,tsx,css}'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx,css}'",
+    "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "format:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "typecheck": "tsc --noEmit",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "pnpm test:rust",
+    "check:frontend": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "check:rust": "pnpm lint:rust && pnpm format:rust:check && pnpm test:rust",
+    "check": "pnpm check:frontend && pnpm check:rust"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "lucide-react": "^1.7.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "react-router": "^7.13.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.2.2",
+    "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "eslint": "^10.1.0",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "prettier": "^3.8.1",
+    "tailwindcss": "^4.2.2",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "@tauri-apps/cli": "^2"
+    "typescript-eslint": "^8.57.2",
+    "vite": "^7.0.4"
   }
 }

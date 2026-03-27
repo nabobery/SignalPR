@@ -1,0 +1,605 @@
+#![allow(dead_code)]
+use rusqlite::{params, Connection};
+
+use super::models::*;
+
+// --- Workspaces ---
+
+pub fn insert_workspace(conn: &Connection, ws: &Workspace) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![ws.id, ws.local_path, ws.remote_owner, ws.remote_repo, ws.created_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_workspace_by_remote(
+    conn: &Connection,
+    owner: &str,
+    repo: &str,
+) -> Result<Option<Workspace>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, local_path, remote_owner, remote_repo, created_at FROM workspaces WHERE remote_owner = ?1 AND remote_repo = ?2 LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![owner, repo], |row| {
+        Ok(Workspace {
+            id: row.get(0)?,
+            local_path: row.get(1)?,
+            remote_owner: row.get(2)?,
+            remote_repo: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+// --- Pull Requests ---
+
+pub fn insert_pull_request(conn: &Connection, pr: &PullRequest) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO pull_requests (id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![pr.id, pr.workspace_id, pr.pr_number, pr.title, pr.author, pr.base_branch, pr.head_branch, pr.url, pr.diff_text, pr.changed_files, pr.fetched_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_pull_request(
+    conn: &Connection,
+    pr_id: &str,
+) -> Result<Option<PullRequest>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at FROM pull_requests WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![pr_id], |row| {
+        Ok(PullRequest {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            pr_number: row.get(2)?,
+            title: row.get(3)?,
+            author: row.get(4)?,
+            base_branch: row.get(5)?,
+            head_branch: row.get(6)?,
+            url: row.get(7)?,
+            diff_text: row.get(8)?,
+            changed_files: row.get(9)?,
+            fetched_at: row.get(10)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+// --- Review Runs ---
+
+pub fn insert_review_run(conn: &Connection, run: &ReviewRun) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO review_runs (id, pr_id, status, started_at) VALUES (?1, ?2, ?3, ?4)",
+        params![run.id, run.pr_id, run.status, run.started_at],
+    )?;
+    Ok(())
+}
+
+pub fn update_review_run_status(
+    conn: &Connection,
+    run_id: &str,
+    status: &str,
+    error_message: Option<&str>,
+) -> Result<(), rusqlite::Error> {
+    if status == "ready" || status == "submitted" || status == "failed" {
+        conn.execute(
+            "UPDATE review_runs SET status = ?1, completed_at = datetime('now'), error_message = ?2 WHERE id = ?3",
+            params![status, error_message, run_id],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE review_runs SET status = ?1 WHERE id = ?2",
+            params![status, run_id],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn get_review_run(
+    conn: &Connection,
+    run_id: &str,
+) -> Result<Option<ReviewRun>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, pr_id, status, started_at, completed_at, error_message FROM review_runs WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![run_id], |row| {
+        Ok(ReviewRun {
+            id: row.get(0)?,
+            pr_id: row.get(1)?,
+            status: row.get(2)?,
+            started_at: row.get(3)?,
+            completed_at: row.get(4)?,
+            error_message: row.get(5)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+// --- Findings ---
+
+pub fn insert_finding(conn: &Connection, f: &Finding) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        params![
+            f.id, f.review_run_id, f.agent_type, f.file_path, f.line_start, f.line_end,
+            f.severity, f.confidence, f.title, f.body, f.evidence, f.status,
+            f.user_edited_body, f.user_severity_override, f.is_anchored, f.created_at
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn update_finding(
+    conn: &Connection,
+    finding_id: &str,
+    body: Option<&str>,
+    severity: Option<&str>,
+    status: Option<&str>,
+) -> Result<(), rusqlite::Error> {
+    if let Some(b) = body {
+        conn.execute(
+            "UPDATE findings SET user_edited_body = ?1 WHERE id = ?2",
+            params![b, finding_id],
+        )?;
+    }
+    if let Some(s) = severity {
+        conn.execute(
+            "UPDATE findings SET user_severity_override = ?1 WHERE id = ?2",
+            params![s, finding_id],
+        )?;
+    }
+    if let Some(st) = status {
+        conn.execute(
+            "UPDATE findings SET status = ?1 WHERE id = ?2",
+            params![st, finding_id],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn get_findings_for_run(
+    conn: &Connection,
+    review_run_id: &str,
+) -> Result<Vec<Finding>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
+    )?;
+    let rows = stmt.query_map(params![review_run_id], |row| {
+        Ok(Finding {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            agent_type: row.get(2)?,
+            file_path: row.get(3)?,
+            line_start: row.get(4)?,
+            line_end: row.get(5)?,
+            severity: row.get(6)?,
+            confidence: row.get(7)?,
+            title: row.get(8)?,
+            body: row.get(9)?,
+            evidence: row.get(10)?,
+            status: row.get(11)?,
+            user_edited_body: row.get(12)?,
+            user_severity_override: row.get(13)?,
+            is_anchored: row.get(14)?,
+            created_at: row.get(15)?,
+        })
+    })?;
+    rows.collect()
+}
+
+// --- Submission Records ---
+
+pub fn insert_submission(conn: &Connection, sub: &SubmissionRecord) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![sub.id, sub.review_run_id, sub.review_action, sub.submitted_at, sub.status, sub.gh_review_id, sub.error_message],
+    )?;
+    Ok(())
+}
+
+pub fn update_submission_status(
+    conn: &Connection,
+    sub_id: &str,
+    status: &str,
+    gh_review_id: Option<&str>,
+    error_message: Option<&str>,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, submitted_at = datetime('now') WHERE id = ?4",
+        params![status, gh_review_id, error_message, sub_id],
+    )?;
+    Ok(())
+}
+
+pub fn get_submission_for_run(
+    conn: &Connection,
+    review_run_id: &str,
+) -> Result<Option<SubmissionRecord>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message FROM submission_records WHERE review_run_id = ?1 AND status = 'submitted' LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![review_run_id], |row| {
+        Ok(SubmissionRecord {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            review_action: row.get(2)?,
+            submitted_at: row.get(3)?,
+            status: row.get(4)?,
+            gh_review_id: row.get(5)?,
+            error_message: row.get(6)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+// --- Tool Status ---
+
+pub fn upsert_tool_status(conn: &Connection, ts: &ToolStatus) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO tool_status (tool_name, status, version, message, checked_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![ts.tool_name, ts.status, ts.version, ts.message, ts.checked_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_all_tool_status(conn: &Connection) -> Result<Vec<ToolStatus>, rusqlite::Error> {
+    let mut stmt =
+        conn.prepare("SELECT tool_name, status, version, message, checked_at FROM tool_status")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ToolStatus {
+            tool_name: row.get(0)?,
+            status: row.get(1)?,
+            version: row.get(2)?,
+            message: row.get(3)?,
+            checked_at: row.get(4)?,
+        })
+    })?;
+    rows.collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::db::init_db_in_memory;
+
+    fn test_db() -> Connection {
+        let db = init_db_in_memory().unwrap();
+        db.0.into_inner().unwrap()
+    }
+
+    #[test]
+    fn test_workspace_round_trip() {
+        let conn = test_db();
+        let ws = Workspace {
+            id: "ws-1".into(),
+            local_path: "/home/user/repo".into(),
+            remote_owner: "octocat".into(),
+            remote_repo: "hello-world".into(),
+            created_at: "2026-03-27T00:00:00".into(),
+        };
+        insert_workspace(&conn, &ws).unwrap();
+        let found = get_workspace_by_remote(&conn, "octocat", "hello-world")
+            .unwrap()
+            .expect("workspace should exist");
+        assert_eq!(found.id, "ws-1");
+        assert_eq!(found.local_path, "/home/user/repo");
+    }
+
+    #[test]
+    fn test_workspace_not_found() {
+        let conn = test_db();
+        let found = get_workspace_by_remote(&conn, "nobody", "nothing").unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_pull_request_round_trip() {
+        let conn = test_db();
+        let ws = Workspace {
+            id: "ws-1".into(),
+            local_path: "/tmp".into(),
+            remote_owner: "o".into(),
+            remote_repo: "r".into(),
+            created_at: "2026-01-01T00:00:00".into(),
+        };
+        insert_workspace(&conn, &ws).unwrap();
+
+        let pr = PullRequest {
+            id: "pr-1".into(),
+            workspace_id: "ws-1".into(),
+            pr_number: 42,
+            title: "Fix auth".into(),
+            author: Some("alice".into()),
+            base_branch: Some("main".into()),
+            head_branch: Some("fix-auth".into()),
+            url: "https://github.com/o/r/pull/42".into(),
+            diff_text: Some("diff content".into()),
+            changed_files: Some(r#"["src/auth.rs"]"#.into()),
+            fetched_at: "2026-01-01T00:00:00".into(),
+        };
+        insert_pull_request(&conn, &pr).unwrap();
+        let found = get_pull_request(&conn, "pr-1")
+            .unwrap()
+            .expect("PR should exist");
+        assert_eq!(found.pr_number, 42);
+        assert_eq!(found.title, "Fix auth");
+    }
+
+    #[test]
+    fn test_foreign_key_constraint_rejects_orphan_pr() {
+        let conn = test_db();
+        let pr = PullRequest {
+            id: "pr-orphan".into(),
+            workspace_id: "nonexistent-ws".into(),
+            pr_number: 1,
+            title: "orphan".into(),
+            author: None,
+            base_branch: None,
+            head_branch: None,
+            url: "https://example.com".into(),
+            diff_text: None,
+            changed_files: None,
+            fetched_at: "2026-01-01T00:00:00".into(),
+        };
+        let result = insert_pull_request(&conn, &pr);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_review_run_status_transitions() {
+        let conn = test_db();
+        // Setup workspace + PR
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+
+        let run = ReviewRun {
+            id: "run-1".into(),
+            pr_id: "pr".into(),
+            status: "created".into(),
+            started_at: Some("2026-01-01T00:00:00".into()),
+            completed_at: None,
+            error_message: None,
+        };
+        insert_review_run(&conn, &run).unwrap();
+
+        update_review_run_status(&conn, "run-1", "running_agents", None).unwrap();
+        let updated = get_review_run(&conn, "run-1").unwrap().unwrap();
+        assert_eq!(updated.status, "running_agents");
+
+        update_review_run_status(&conn, "run-1", "ready", None).unwrap();
+        let updated = get_review_run(&conn, "run-1").unwrap().unwrap();
+        assert_eq!(updated.status, "ready");
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[test]
+    fn test_findings_crud() {
+        let conn = test_db();
+        // Setup chain: workspace → PR → review run
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+        insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run".into(),
+                pr_id: "pr".into(),
+                status: "ready".into(),
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+            },
+        )
+        .unwrap();
+
+        let finding = Finding {
+            id: "f-1".into(),
+            review_run_id: "run".into(),
+            agent_type: "security".into(),
+            file_path: Some("src/auth.rs".into()),
+            line_start: Some(10),
+            line_end: Some(20),
+            severity: "blocker".into(),
+            confidence: 0.95,
+            title: "Token bypass".into(),
+            body: "Auth is bypassed".into(),
+            evidence: Some(r#"["middleware skipped"]"#.into()),
+            status: "active".into(),
+            user_edited_body: None,
+            user_severity_override: None,
+            is_anchored: true,
+            created_at: "2026-01-01T00:00:00".into(),
+        };
+        insert_finding(&conn, &finding).unwrap();
+
+        let findings = get_findings_for_run(&conn, "run").unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].title, "Token bypass");
+
+        // Update finding
+        update_finding(&conn, "f-1", Some("Edited body"), None, None).unwrap();
+        let findings = get_findings_for_run(&conn, "run").unwrap();
+        assert_eq!(findings[0].user_edited_body.as_deref(), Some("Edited body"));
+
+        // Suppress finding
+        update_finding(&conn, "f-1", None, None, Some("suppressed")).unwrap();
+        let findings = get_findings_for_run(&conn, "run").unwrap();
+        assert_eq!(findings[0].status, "suppressed");
+    }
+
+    #[test]
+    fn test_findings_ordered_by_severity() {
+        let conn = test_db();
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+        insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run".into(),
+                pr_id: "pr".into(),
+                status: "ready".into(),
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+            },
+        )
+        .unwrap();
+
+        // Insert in reverse severity order
+        for (id, sev, conf) in [
+            ("f1", "info", 0.5),
+            ("f2", "blocker", 0.9),
+            ("f3", "warning", 0.7),
+        ] {
+            insert_finding(
+                &conn,
+                &Finding {
+                    id: id.into(),
+                    review_run_id: "run".into(),
+                    agent_type: "security".into(),
+                    file_path: None,
+                    line_start: None,
+                    line_end: None,
+                    severity: sev.into(),
+                    confidence: conf,
+                    title: format!("{} finding", sev),
+                    body: "body".into(),
+                    evidence: None,
+                    status: "active".into(),
+                    user_edited_body: None,
+                    user_severity_override: None,
+                    is_anchored: false,
+                    created_at: "2026-01-01T00:00:00".into(),
+                },
+            )
+            .unwrap();
+        }
+
+        let findings = get_findings_for_run(&conn, "run").unwrap();
+        assert_eq!(findings[0].severity, "blocker");
+        assert_eq!(findings[1].severity, "warning");
+        assert_eq!(findings[2].severity, "info");
+    }
+
+    #[test]
+    fn test_tool_status_upsert() {
+        let conn = test_db();
+        let ts = ToolStatus {
+            tool_name: "gh".into(),
+            status: "ready".into(),
+            version: Some("2.50.0".into()),
+            message: None,
+            checked_at: "2026-01-01T00:00:00".into(),
+        };
+        upsert_tool_status(&conn, &ts).unwrap();
+
+        let all = get_all_tool_status(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].status, "ready");
+
+        // Upsert with new status
+        let ts2 = ToolStatus {
+            tool_name: "gh".into(),
+            status: "unauthenticated".into(),
+            version: Some("2.50.0".into()),
+            message: Some("Run: gh auth login".into()),
+            checked_at: "2026-01-01T01:00:00".into(),
+        };
+        upsert_tool_status(&conn, &ts2).unwrap();
+        let all = get_all_tool_status(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].status, "unauthenticated");
+    }
+}
