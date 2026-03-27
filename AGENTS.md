@@ -5,7 +5,7 @@
 
 ## OVERVIEW
 
-SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built with Tauri 2 (Rust backend + React/TypeScript frontend). Fetches GitHub PR diffs, runs AI review via Codex provider, presents findings in a structured workspace.
+SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built with Tauri 2 (Rust backend + React/TypeScript frontend). Fetches GitHub PR diffs, runs AI review via Codex/Claude providers, presents findings in a structured workspace with multi-lane parallel analysis.
 
 ## STACK
 
@@ -20,6 +20,7 @@ SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built wi
 | Language (BE)      | Rust              | Edition 2021 |
 | Database           | SQLite (rusqlite) | 0.32         |
 | Async runtime      | Tokio             | 1.x          |
+| HTTP client        | reqwest           | 0.12         |
 
 ## STRUCTURE
 
@@ -27,38 +28,42 @@ SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built wi
 signalpr/
 ├── src/                    # React frontend
 │   ├── main.tsx            # Entry point
-│   ├── App.tsx             # Router setup (/ and /review/:runId)
+│   ├── App.tsx             # Router (/ and /review/:runId)
 │   ├── features/           # Feature modules
 │   │   ├── intake/         # PR URL input + workspace selection
 │   │   ├── onboarding/     # Environment checks (gh, codex CLI)
-│   │   ├── review/         # Main review workspace (5 components)
+│   │   ├── review/         # Main workspace (7 components)
 │   │   └── submission/     # Submit review dialog
 │   ├── lib/                # Shared utilities
 │   │   ├── ipc.ts          # Tauri invoke wrappers
 │   │   ├── store.ts        # React context for review state
 │   │   └── types.ts        # Shared TypeScript interfaces
-│   └── ui/                 # Reusable UI components
+│   └── ui/                 # Reusable UI components (empty)
 ├── src-tauri/              # Rust backend
 │   ├── src/main.rs         # Windows subsystem entry
 │   ├── src/lib.rs          # Tauri builder + command registration
 │   ├── src/commands/       # IPC handlers (6 files)
-│   ├── src/providers/      # AI provider abstraction (trait-based)
-│   ├── src/orchestration/  # Review pipeline engine
+│   ├── src/providers/      # AI providers (Codex, Claude, GitHub)
+│   ├── src/orchestration/  # Multi-lane review pipeline
 │   ├── src/storage/        # SQLite layer (models, queries)
-│   └── src/cleaner/        # Finding dedup/rank/normalize/verify
-└── docs/                   # Documentation
+│   ├── src/cleaner/        # Finding dedup/rank/normalize/verify
+│   └── src/notifications/  # GitHub poll notifications
+└── docs/                   # PRD + implementation docs
 ```
 
 ## WHERE TO LOOK
 
-| Task                  | Location                            | Notes                                    |
-| --------------------- | ----------------------------------- | ---------------------------------------- |
-| Add new Tauri command | `src-tauri/src/commands/`           | Register in lib.rs `invoke_handler`      |
-| Modify review UI      | `src/features/review/`              | ReviewWorkspace is the main orchestrator |
-| Add AI provider       | `src-tauri/src/providers/`          | Implement `ReviewProvider` trait         |
-| Change IPC contract   | `src/lib/ipc.ts` + matching command | Types in `src/lib/types.ts`              |
-| Modify data pipeline  | `src-tauri/src/cleaner/`            | dedup → normalize → rank → verify        |
-| Database schema       | `src-tauri/src/storage/models.rs`   | rusqlite, no migrations yet              |
+| Task                  | Location                              | Notes                                |
+| --------------------- | ------------------------------------- | ------------------------------------ |
+| Add new Tauri command | `src-tauri/src/commands/`             | Register in lib.rs `invoke_handler`  |
+| Modify review UI      | `src/features/review/`                | ReviewWorkspace is main orchestrator |
+| Add AI provider       | `src-tauri/src/providers/`            | Implement `ReviewProvider` trait     |
+| Claude provider       | `src-tauri/src/providers/claude.rs`   | Direct HTTP to Anthropic API         |
+| Change IPC contract   | `src/lib/ipc.ts` + matching command   | Types in `src/lib/types.ts`          |
+| Modify data pipeline  | `src-tauri/src/cleaner/`              | dedup → normalize → rank → verify    |
+| Multi-lane system     | `src-tauri/src/orchestration/lane.rs` | Security/arch/performance lanes      |
+| Database schema       | `src-tauri/src/storage/models.rs`     | rusqlite, no migrations yet          |
+| Notification polling  | `src-tauri/src/notifications/`        | GitHub review request poller         |
 
 ## IPC COMMANDS (Frontend → Backend)
 
@@ -82,6 +87,16 @@ signalpr/
 - `tokio_util::sync::CancellationToken` for cancellation
 - Custom errors via `thiserror` (`AppError`, `ProviderError`)
 - Tests use `init_db_in_memory()` for isolation
+- Multi-lane parallel reviews: `security`, `architecture`, `performance`
+- `LaneStatus` enum for per-lane progress tracking
+
+### Providers
+
+| Provider | File      | Auth Method         | Notes                 |
+| -------- | --------- | ------------------- | --------------------- |
+| Codex    | codex.rs  | CLI subprocess      | Primary provider      |
+| Claude   | claude.rs | `ANTHROPIC_API_KEY` | Direct HTTP, tool_use |
+| GitHub   | github.rs | `gh` CLI            | PR fetching only      |
 
 ### TypeScript
 

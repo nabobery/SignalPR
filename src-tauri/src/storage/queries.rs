@@ -127,15 +127,33 @@ pub fn get_review_run(
     }
 }
 
+pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, pr_id, status, started_at, completed_at, error_message FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ReviewRun {
+            id: row.get(0)?,
+            pr_id: row.get(1)?,
+            status: row.get(2)?,
+            started_at: row.get(3)?,
+            completed_at: row.get(4)?,
+            error_message: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
 // --- Findings ---
 
 pub fn insert_finding(conn: &Connection, f: &Finding) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
             f.id, f.review_run_id, f.agent_type, f.file_path, f.line_start, f.line_end,
             f.severity, f.confidence, f.title, f.body, f.evidence, f.status,
-            f.user_edited_body, f.user_severity_override, f.is_anchored, f.created_at
+            f.user_edited_body, f.user_severity_override, f.is_anchored, f.created_at,
+            f.cluster_id, f.lane_id, f.provider_name, f.diff_side, f.diff_new_line
         ],
     )?;
     Ok(())
@@ -174,7 +192,7 @@ pub fn get_findings_for_run(
     review_run_id: &str,
 ) -> Result<Vec<Finding>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
+        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
     )?;
     let rows = stmt.query_map(params![review_run_id], |row| {
         Ok(Finding {
@@ -194,9 +212,114 @@ pub fn get_findings_for_run(
             user_severity_override: row.get(13)?,
             is_anchored: row.get(14)?,
             created_at: row.get(15)?,
+            cluster_id: row.get(16)?,
+            lane_id: row.get(17)?,
+            provider_name: row.get(18)?,
+            diff_side: row.get(19)?,
+            diff_new_line: row.get(20)?,
         })
     })?;
     rows.collect()
+}
+
+// --- Agent Runs ---
+
+pub fn insert_agent_run(conn: &Connection, ar: &AgentRun) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO agent_runs (id, review_run_id, lane_id, provider_name, status, started_at, completed_at, finding_count, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![ar.id, ar.review_run_id, ar.lane_id, ar.provider_name, ar.status, ar.started_at, ar.completed_at, ar.finding_count, ar.error_message],
+    )?;
+    Ok(())
+}
+
+pub fn update_agent_run(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    completed_at: Option<&str>,
+    finding_count: i32,
+    error_message: Option<&str>,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE agent_runs SET status = ?1, completed_at = ?2, finding_count = ?3, error_message = ?4 WHERE id = ?5",
+        params![status, completed_at, finding_count, error_message, id],
+    )?;
+    Ok(())
+}
+
+pub fn get_agent_runs_for_review(
+    conn: &Connection,
+    review_run_id: &str,
+) -> Result<Vec<AgentRun>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, review_run_id, lane_id, provider_name, status, started_at, completed_at, finding_count, error_message FROM agent_runs WHERE review_run_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![review_run_id], |row| {
+        Ok(AgentRun {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            lane_id: row.get(2)?,
+            provider_name: row.get(3)?,
+            status: row.get(4)?,
+            started_at: row.get(5)?,
+            completed_at: row.get(6)?,
+            finding_count: row.get(7)?,
+            error_message: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+// --- Finding Clusters ---
+
+pub fn insert_finding_cluster(
+    conn: &Connection,
+    fc: &FindingCluster,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO finding_clusters (id, review_run_id, label, representative_finding_id, member_count, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![fc.id, fc.review_run_id, fc.label, fc.representative_finding_id, fc.member_count, fc.created_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_clusters_for_run(
+    conn: &Connection,
+    review_run_id: &str,
+) -> Result<Vec<FindingCluster>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, review_run_id, label, representative_finding_id, member_count, created_at FROM finding_clusters WHERE review_run_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![review_run_id], |row| {
+        Ok(FindingCluster {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            label: row.get(2)?,
+            representative_finding_id: row.get(3)?,
+            member_count: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+// --- Settings ---
+
+pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+    let mut rows = stmt.query_map(params![key], |row| row.get::<_, String>(0))?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+pub fn upsert_setting(conn: &Connection, key: &str, value: &str) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
+        params![key, value],
+    )?;
+    Ok(())
 }
 
 // --- Submission Records ---
@@ -475,6 +598,11 @@ mod tests {
             user_severity_override: None,
             is_anchored: true,
             created_at: "2026-01-01T00:00:00".into(),
+            cluster_id: None,
+            lane_id: None,
+            provider_name: None,
+            diff_side: None,
+            diff_new_line: None,
         };
         insert_finding(&conn, &finding).unwrap();
 
@@ -562,6 +690,11 @@ mod tests {
                     user_severity_override: None,
                     is_anchored: false,
                     created_at: "2026-01-01T00:00:00".into(),
+                    cluster_id: None,
+                    lane_id: None,
+                    provider_name: None,
+                    diff_side: None,
+                    diff_new_line: None,
                 },
             )
             .unwrap();

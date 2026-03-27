@@ -86,6 +86,11 @@ mod tests {
             user_severity_override: None,
             is_anchored: true,
             created_at: "2026-01-01".to_string(),
+            cluster_id: None,
+            lane_id: None,
+            provider_name: None,
+            diff_side: None,
+            diff_new_line: None,
         }
     }
 

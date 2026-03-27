@@ -40,6 +40,9 @@ pub enum ProviderError {
     #[error("Codex execution failed: {0}")]
     CodexFailed(String),
 
+    #[error("Claude API failed: {0}")]
+    ClaudeFailed(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 

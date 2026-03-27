@@ -35,11 +35,19 @@ pub fn verify(findings: Vec<Finding>, diff: &str) -> Vec<Finding> {
                     start <= hunk_end && end >= h.new_start
                 });
 
-                if !in_hunk {
+                if in_hunk {
+                    // Anchored: set diff_new_line to line_start (already in
+                    // new-file coordinates from +new_start,new_count) and
+                    // diff_side to RIGHT for additions/modifications.
+                    f.diff_new_line = Some(start);
+                    f.diff_side = Some("RIGHT".to_string());
+                } else {
                     // Lines not in any hunk → demote to file-level
                     f.line_start = None;
                     f.line_end = None;
                     f.is_anchored = false;
+                    f.diff_new_line = None;
+                    f.diff_side = None;
                 }
             }
 
@@ -177,6 +185,11 @@ index 2222222..3333333 100644
             user_severity_override: None,
             is_anchored: file.is_some() && line_start.is_some(),
             created_at: "2026-01-01".to_string(),
+            cluster_id: None,
+            lane_id: None,
+            provider_name: None,
+            diff_side: None,
+            diff_new_line: None,
         }
     }
 
@@ -271,5 +284,32 @@ index 2222222..3333333 100644
         let findings = vec![make_finding(Some("src/auth.rs"), Some(10), Some(12))];
         let result = verify(findings, "");
         assert!(result.is_empty()); // file not found in empty diff
+    }
+
+    #[test]
+    fn test_anchored_finding_gets_diff_new_line_and_side() {
+        let findings = vec![make_finding(Some("src/auth.rs"), Some(10), Some(12))];
+        let result = verify(findings, SAMPLE_DIFF);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].is_anchored);
+        assert_eq!(result[0].diff_new_line, Some(10));
+        assert_eq!(result[0].diff_side.as_deref(), Some("RIGHT"));
+    }
+
+    #[test]
+    fn test_demoted_finding_clears_diff_fields() {
+        let findings = vec![make_finding(Some("src/auth.rs"), Some(30), Some(35))];
+        let result = verify(findings, SAMPLE_DIFF);
+        assert_eq!(result.len(), 1);
+        assert!(!result[0].is_anchored);
+        assert_eq!(result[0].diff_new_line, None);
+        assert_eq!(result[0].diff_side, None);
+    }
+
+    #[test]
+    fn test_file_not_in_diff_drops_entirely() {
+        let findings = vec![make_finding(Some("src/missing.rs"), Some(1), Some(5))];
+        let result = verify(findings, SAMPLE_DIFF);
+        assert!(result.is_empty());
     }
 }

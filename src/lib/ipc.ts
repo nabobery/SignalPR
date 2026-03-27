@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ToolStatus, PrIntakeResult, ReviewSnapshot } from "./types";
+import type { ToolStatus, PrIntakeResult, ReviewSnapshot, ReviewRun } from "./types";
 
 export async function inspectEnvironment(): Promise<ToolStatus[]> {
   return invoke("inspect_environment");
@@ -36,4 +36,12 @@ export async function updateFinding(
 
 export async function submitReview(runId: string, action: string): Promise<void> {
   return invoke("submit_review", { runId, action });
+}
+
+export async function getIncompleteReviews(): Promise<ReviewRun[]> {
+  return invoke("get_incomplete_reviews");
+}
+
+export async function resumeReview(runId: string): Promise<string> {
+  return invoke("resume_review", { runId });
 }

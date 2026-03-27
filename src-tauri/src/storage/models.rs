@@ -52,6 +52,35 @@ pub struct Finding {
     pub user_severity_override: Option<String>,
     pub is_anchored: bool,
     pub created_at: String,
+    // V2 fields (nullable for backward compat with Phase 1 data)
+    pub cluster_id: Option<String>,
+    pub lane_id: Option<String>,
+    pub provider_name: Option<String>,
+    pub diff_side: Option<String>,
+    pub diff_new_line: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRun {
+    pub id: String,
+    pub review_run_id: String,
+    pub lane_id: String,
+    pub provider_name: String,
+    pub status: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub finding_count: i32,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindingCluster {
+    pub id: String,
+    pub review_run_id: String,
+    pub label: Option<String>,
+    pub representative_finding_id: Option<String>,
+    pub member_count: i32,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

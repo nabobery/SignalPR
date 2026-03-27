@@ -7,6 +7,7 @@ import { ReviewContext, type ReviewState } from "../../lib/store";
 import { FileTree } from "./FileTree";
 import { SignalBoard } from "./SignalBoard";
 import { DiffPanel } from "./DiffPanel";
+import LaneProgress from "./LaneProgress";
 import { SubmitDialog } from "../submission/SubmitDialog";
 
 type Panel = "signals" | "diff";
@@ -34,6 +35,8 @@ export function ReviewWorkspace() {
         changedFiles: snap.changed_files,
         findings: snap.findings,
         errorMessage: snap.error_message,
+        laneStatuses: snap.lane_statuses,
+        clusters: snap.clusters,
         selectedFile:
           prev?.selectedFile && snap.changed_files.includes(prev.selectedFile)
             ? prev.selectedFile
@@ -51,13 +54,18 @@ export function ReviewWorkspace() {
   }, [refreshSnapshot]);
 
   useEffect(() => {
-    const unlisten = listen("review_progress", () => {
-      refreshSnapshot();
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const unlisten = listen<{ run_id?: string }>("review_progress", (event) => {
+      // Ignore events for other runs
+      if (event.payload?.run_id && event.payload.run_id !== runId) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => refreshSnapshot(), 300);
     });
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       unlisten.then((fn) => fn());
     };
-  }, [refreshSnapshot]);
+  }, [refreshSnapshot, runId]);
 
   const setSelectedFile = (file: string | null) => {
     setState((prev) => (prev ? { ...prev, selectedFile: file } : prev));
@@ -143,6 +151,25 @@ export function ReviewWorkspace() {
             )}
           </div>
         </header>
+
+        {/* Lane progress */}
+        {isRunning && state.laneStatuses.length > 0 && (
+          <div className="px-4 py-2 border-b border-zinc-800 shrink-0">
+            <LaneProgress lanes={state.laneStatuses} />
+          </div>
+        )}
+
+        {/* Partial success banner */}
+        {isReady &&
+          state.laneStatuses.some((l) => l.status === "failed" || l.status === "timed_out") && (
+            <div className="px-4 py-2 border-b border-zinc-800 bg-yellow-900/20 shrink-0">
+              <p className="text-xs text-yellow-400">
+                {state.laneStatuses.filter((l) => l.status === "completed").length} of{" "}
+                {state.laneStatuses.length} analysis lanes completed. Some lanes failed — findings
+                from successful lanes are still submittable.
+              </p>
+            </div>
+          )}
 
         {/* Body */}
         <div className="flex flex-1 min-h-0">

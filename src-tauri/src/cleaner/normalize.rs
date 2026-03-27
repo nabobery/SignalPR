@@ -31,6 +31,11 @@ pub fn normalize(raw: Vec<RawFinding>, review_run_id: &str) -> Vec<Finding> {
                 user_severity_override: None,
                 is_anchored: has_anchor,
                 created_at: chrono::Utc::now().to_rfc3339(),
+                cluster_id: None,
+                lane_id: r.lane_id,
+                provider_name: r.provider_name,
+                diff_side: None,
+                diff_new_line: None,
             }
         })
         .collect()
@@ -63,6 +68,8 @@ mod tests {
             confidence: 0.8,
             evidence: Some(vec!["evidence".to_string()]),
             agent_type: agent.to_string(),
+            lane_id: None,
+            provider_name: None,
         }
     }
 
@@ -109,6 +116,8 @@ mod tests {
             confidence: 0.5,
             evidence: None,
             agent_type: "security".into(),
+            lane_id: None,
+            provider_name: None,
         };
         let findings = normalize(vec![r], "run-1");
         assert!(!findings[0].is_anchored);

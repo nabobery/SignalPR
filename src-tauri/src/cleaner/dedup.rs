@@ -1,7 +1,9 @@
 use crate::storage::models::Finding;
 use std::collections::HashSet;
 
-pub fn dedup(findings: Vec<Finding>, threshold: f64) -> Vec<Finding> {
+/// Jaccard word-set similarity deduplication (Phase 1 fallback).
+/// For semantic embedding-based dedup, see `dedup_semantic` (WS3/WS4).
+pub fn dedup_jaccard(findings: Vec<Finding>, threshold: f64) -> Vec<Finding> {
     if findings.len() <= 1 {
         return findings;
     }
@@ -128,6 +130,11 @@ mod tests {
             user_severity_override: None,
             is_anchored: file.is_some() && line_start.is_some(),
             created_at: "2026-01-01".to_string(),
+            cluster_id: None,
+            lane_id: None,
+            provider_name: None,
+            diff_side: None,
+            diff_new_line: None,
         }
     }
 
@@ -155,7 +162,7 @@ mod tests {
                 0.8,
             ),
         ];
-        let result = dedup(findings, 0.70);
+        let result = dedup_jaccard(findings, 0.70);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].confidence, 0.9); // keeps highest
     }
@@ -184,7 +191,7 @@ mod tests {
                 0.85,
             ),
         ];
-        let result = dedup(findings, 0.70);
+        let result = dedup_jaccard(findings, 0.70);
         assert_eq!(result.len(), 1);
         // Line range should expand
         assert_eq!(result[0].line_start, Some(10));
@@ -215,7 +222,7 @@ mod tests {
                 0.8,
             ),
         ];
-        let result = dedup(findings, 0.70);
+        let result = dedup_jaccard(findings, 0.70);
         assert_eq!(result.len(), 2);
     }
 
@@ -243,7 +250,7 @@ mod tests {
                 0.8,
             ),
         ];
-        let result = dedup(findings, 0.70);
+        let result = dedup_jaccard(findings, 0.70);
         assert_eq!(result.len(), 2);
     }
 
@@ -271,7 +278,7 @@ mod tests {
                 0.8,
             ),
         ];
-        let result = dedup(findings, 0.70);
+        let result = dedup_jaccard(findings, 0.70);
         assert_eq!(result.len(), 2);
     }
 
@@ -287,13 +294,13 @@ mod tests {
             Some(20),
             0.9,
         )];
-        let result = dedup(findings, 0.70);
+        let result = dedup_jaccard(findings, 0.70);
         assert_eq!(result.len(), 1);
     }
 
     #[test]
     fn test_empty_input() {
-        let result = dedup(vec![], 0.70);
+        let result = dedup_jaccard(vec![], 0.70);
         assert!(result.is_empty());
     }
 
@@ -321,7 +328,7 @@ mod tests {
                 0.8,
             ),
         ];
-        let result = dedup(findings, 0.70);
+        let result = dedup_jaccard(findings, 0.70);
         assert_eq!(result.len(), 2);
     }
 }

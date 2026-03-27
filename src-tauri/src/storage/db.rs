@@ -79,6 +79,49 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 "#;
 
+const MIGRATION_V2: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  review_run_id TEXT NOT NULL REFERENCES review_runs(id),
+  lane_id TEXT NOT NULL,
+  provider_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  started_at TEXT,
+  completed_at TEXT,
+  finding_count INTEGER DEFAULT 0,
+  error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS finding_clusters (
+  id TEXT PRIMARY KEY,
+  review_run_id TEXT NOT NULL REFERENCES review_runs(id),
+  label TEXT,
+  representative_finding_id TEXT,
+  member_count INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS embedding_cache (
+  text_hash TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Add Phase 2 columns to findings (nullable for backward compat with V1 data)
+ALTER TABLE findings ADD COLUMN cluster_id TEXT REFERENCES finding_clusters(id);
+ALTER TABLE findings ADD COLUMN lane_id TEXT;
+ALTER TABLE findings ADD COLUMN provider_name TEXT;
+ALTER TABLE findings ADD COLUMN diff_side TEXT;
+ALTER TABLE findings ADD COLUMN diff_new_line INTEGER;
+"#;
+
 pub fn init_db(app_data_dir: &Path) -> Result<AppDb, rusqlite::Error> {
     let db_path = app_data_dir.join("signalpr.db");
     let conn = Connection::open(db_path)?;
@@ -112,6 +155,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    if current_version < 2 {
+        conn.execute_batch(MIGRATION_V2)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (2)",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -139,6 +190,11 @@ mod tests {
         assert!(tables.contains(&"findings".to_string()));
         assert!(tables.contains(&"submission_records".to_string()));
         assert!(tables.contains(&"tool_status".to_string()));
+        // V2 tables
+        assert!(tables.contains(&"agent_runs".to_string()));
+        assert!(tables.contains(&"finding_clusters".to_string()));
+        assert!(tables.contains(&"settings".to_string()));
+        assert!(tables.contains(&"embedding_cache".to_string()));
     }
 
     #[test]

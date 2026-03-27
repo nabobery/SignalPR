@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { Finding } from "./types";
+import type { Finding, FindingCluster, LaneSnapshot } from "./types";
 
 export interface ReviewState {
   runId: string;
@@ -11,6 +11,8 @@ export interface ReviewState {
   changedFiles: string[];
   findings: Finding[];
   errorMessage: string | null;
+  laneStatuses: LaneSnapshot[];
+  clusters: FindingCluster[];
   selectedFile: string | null;
 }
 

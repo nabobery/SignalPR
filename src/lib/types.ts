@@ -50,6 +50,29 @@ export interface Finding {
   user_severity_override: string | null;
   is_anchored: boolean;
   created_at: string;
+  // V2 fields
+  cluster_id: string | null;
+  lane_id: string | null;
+  provider_name: string | null;
+  diff_side: string | null;
+  diff_new_line: number | null;
+}
+
+export interface LaneSnapshot {
+  lane_id: string;
+  status: string;
+  finding_count: number;
+  provider_name: string;
+  error_message: string | null;
+}
+
+export interface FindingCluster {
+  id: string;
+  review_run_id: string;
+  label: string | null;
+  representative_finding_id: string | null;
+  member_count: number;
+  created_at: string;
 }
 
 export interface ReviewRun {
@@ -71,6 +94,8 @@ export interface ReviewSnapshot {
   changed_files: string[];
   findings: Finding[];
   error_message: string | null;
+  lane_statuses: LaneSnapshot[];
+  clusters: FindingCluster[];
 }
 
 export type ReviewAction = "approve" | "comment" | "request-changes";

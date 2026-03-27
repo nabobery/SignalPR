@@ -7,52 +7,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::errors::ProviderError;
 
-use super::traits::{CodexReviewOutput, ProviderHealth, RawFinding, ReviewProvider};
-
-const REVIEW_PROMPT_TEMPLATE: &str = r#"You are a code reviewer analyzing a pull request diff. Focus on:
-1. Security: auth bypass, injection, IDOR, secret exposure, logic flaws
-2. Architecture: boundary violations, coupling drift, design inconsistencies
-3. Performance: inefficient loops, N+1 patterns, memory pressure, needless I/O
-
-Rules:
-- Only flag actionable issues introduced by this change
-- Provide file path and line range for each finding
-- Prioritize severe issues over nitpicks
-- Assign a confidence score 0-1 for each finding
-- Assign agent_type as "security", "architecture", or "performance"
-- Assign severity as "blocker", "critical", "warning", "info", or "nitpick"
-
-PR Diff:
-"#;
-
-const REVIEW_OUTPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "findings": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "title": { "type": "string" },
-          "body": { "type": "string" },
-          "file_path": { "type": "string" },
-          "line_start": { "type": "integer" },
-          "line_end": { "type": "integer" },
-          "severity": { "type": "string", "enum": ["blocker", "critical", "warning", "info", "nitpick"] },
-          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "evidence": { "type": "array", "items": { "type": "string" } },
-          "agent_type": { "type": "string", "enum": ["security", "architecture", "performance"] }
-        },
-        "required": ["title", "body", "severity", "confidence", "agent_type"]
-      }
-    },
-    "overall_assessment": { "type": "string" },
-    "overall_confidence": { "type": "number" }
-  },
-  "required": ["findings"]
-}"#;
+use super::prompts::OUTPUT_SCHEMA;
+use super::traits::{CodexReviewOutput, ProviderHealth, RawFinding, ReviewInput, ReviewProvider};
 
 /// Live Codex provider using `codex exec` CLI with structured output schema.
+/// Providers are "prompt in, JSON out" — prompt construction is owned by the
+/// orchestration layer via `providers::prompts`.
 #[allow(dead_code)]
 pub struct CodexProvider {
     app_handle: tauri::AppHandle,
@@ -76,6 +36,10 @@ impl CodexProvider {
 
 #[async_trait]
 impl ReviewProvider for CodexProvider {
+    fn provider_name(&self) -> &str {
+        "codex"
+    }
+
     async fn health_check(&self) -> ProviderHealth {
         let shell = self.app_handle.shell();
         match shell.command("codex").args(["--version"]).output().await {
@@ -94,7 +58,7 @@ impl ReviewProvider for CodexProvider {
 
     async fn run_review(
         &self,
-        diff: &str,
+        input: &ReviewInput,
         cwd: &Path,
         cancel: CancellationToken,
     ) -> Result<CodexReviewOutput, ProviderError> {
@@ -103,12 +67,17 @@ impl ReviewProvider for CodexProvider {
         }
         let tmp_dir = tempfile::tempdir()?;
 
-        // Write output schema to temp file
+        // Write output schema to temp file (use input schema or fall back to default)
         let schema_path = tmp_dir.path().join("output-schema.json");
-        std::fs::write(&schema_path, REVIEW_OUTPUT_SCHEMA)?;
+        let schema = if input.output_schema.is_empty() {
+            OUTPUT_SCHEMA
+        } else {
+            &input.output_schema
+        };
+        std::fs::write(&schema_path, schema)?;
 
-        // Build prompt
-        let prompt = build_prompt(diff);
+        // Build full prompt from input
+        let prompt = format!("{}\n\nPR Diff:\n{}", input.system_prompt, input.diff);
 
         // Execute codex exec (prompt via stdin to avoid argv size limits)
         let mut cmd = tokio::process::Command::new("codex");
@@ -188,10 +157,6 @@ impl ReviewProvider for CodexProvider {
     }
 }
 
-fn build_prompt(diff: &str) -> String {
-    format!("{}{}", REVIEW_PROMPT_TEMPLATE, diff)
-}
-
 /// Mock provider that reads findings from a fixture JSON file.
 /// Used for development and testing when Codex CLI is not available.
 pub struct MockProvider {
@@ -213,6 +178,10 @@ impl MockProvider {
 
 #[async_trait]
 impl ReviewProvider for MockProvider {
+    fn provider_name(&self) -> &str {
+        "mock"
+    }
+
     async fn health_check(&self) -> ProviderHealth {
         ProviderHealth {
             available: true,
@@ -223,7 +192,7 @@ impl ReviewProvider for MockProvider {
 
     async fn run_review(
         &self,
-        _diff: &str,
+        _input: &ReviewInput,
         _cwd: &Path,
         _cancel: CancellationToken,
     ) -> Result<CodexReviewOutput, ProviderError> {
@@ -246,6 +215,8 @@ impl ReviewProvider for MockProvider {
                     confidence: 0.92,
                     evidence: Some(vec!["Handler registered without middleware wrapper".into()]),
                     agent_type: "security".into(),
+                    lane_id: None,
+                    provider_name: None,
                 },
                 RawFinding {
                     title: "N+1 query in user list endpoint".into(),
@@ -257,6 +228,8 @@ impl ReviewProvider for MockProvider {
                     confidence: 0.85,
                     evidence: Some(vec!["db.query called inside for loop at line 48".into()]),
                     agent_type: "performance".into(),
+                    lane_id: None,
+                    provider_name: None,
                 },
                 RawFinding {
                     title: "Direct dependency on internal module".into(),
@@ -268,6 +241,8 @@ impl ReviewProvider for MockProvider {
                     confidence: 0.7,
                     evidence: None,
                     agent_type: "architecture".into(),
+                    lane_id: None,
+                    provider_name: None,
                 },
             ],
             overall_assessment: Some("The PR introduces a security risk that should be addressed before merging. Performance and architecture findings are lower priority.".into()),
@@ -279,13 +254,14 @@ impl ReviewProvider for MockProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::prompts;
 
     #[test]
-    fn test_build_prompt_large_diff() {
-        let diff = "x".repeat(600_000);
-        let prompt = build_prompt(&diff);
+    fn test_prompt_concatenation() {
+        let input = prompts::build_review_input(prompts::AgentFocus::General, &"x".repeat(600_000));
+        let prompt = format!("{}\n\nPR Diff:\n{}", input.system_prompt, input.diff);
         assert!(prompt.len() > 600_000);
-        assert!(prompt.starts_with("You are a code reviewer"));
+        assert!(prompt.contains("code reviewer"));
     }
 
     #[tokio::test]
@@ -293,9 +269,11 @@ mod tests {
         let provider = MockProvider::with_default_fixture();
         let health = provider.health_check().await;
         assert!(health.available);
+        assert_eq!(provider.provider_name(), "mock");
 
+        let input = prompts::build_review_input(prompts::AgentFocus::General, "some diff");
         let result = provider
-            .run_review("some diff", Path::new("/tmp"), CancellationToken::new())
+            .run_review(&input, Path::new("/tmp"), CancellationToken::new())
             .await
             .unwrap();
         assert_eq!(result.findings.len(), 3);
@@ -314,8 +292,9 @@ mod tests {
         .unwrap();
 
         let provider = MockProvider::new(fixture);
+        let input = prompts::build_review_input(prompts::AgentFocus::Security, "diff");
         let result = provider
-            .run_review("diff", Path::new("/tmp"), CancellationToken::new())
+            .run_review(&input, Path::new("/tmp"), CancellationToken::new())
             .await
             .unwrap();
         assert_eq!(result.findings.len(), 1);
