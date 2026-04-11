@@ -134,6 +134,7 @@ export function GeneralPanel() {
           <option value="auto">Auto</option>
           <option value="codex">Codex</option>
           <option value="claude">Claude</option>
+          <option value="copilot">Copilot</option>
         </select>
         <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
       </div>

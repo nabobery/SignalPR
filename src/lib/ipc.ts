@@ -177,3 +177,11 @@ export async function stopChannelListeners(): Promise<void> {
 export async function resolveCodexApproval(requestId: unknown, decision: string): Promise<void> {
   return invoke("resolve_codex_approval", { requestId, decision });
 }
+
+export async function resolveCopilotPermission(
+  sessionId: string,
+  eventId: string,
+  decision: string,
+): Promise<void> {
+  return invoke("resolve_copilot_permission", { sessionId, eventId, decision });
+}

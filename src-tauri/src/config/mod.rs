@@ -16,6 +16,8 @@ use crate::providers::claude::ClaudeProvider;
 use crate::providers::codex::{CodexProvider, MockProvider};
 use crate::providers::codex_app_server::manager::CodexAppServerManager;
 use crate::providers::codex_app_server::provider::CodexAppServerProvider;
+use crate::providers::copilot::manager::CopilotManager;
+use crate::providers::copilot::provider::CopilotProvider;
 use crate::providers::traits::ReviewProvider;
 use crate::storage::queries;
 
@@ -239,6 +241,15 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
             }
             tracing::warn!("Claude preferred but unavailable, trying Codex");
         }
+        "copilot" | "copilot_sdk" => {
+            let manager = app.state::<Arc<CopilotManager>>().inner().clone();
+            let provider = CopilotProvider::new(manager, None);
+            if provider.health_check().await.available {
+                tracing::info!("Using Copilot provider");
+                return Arc::new(provider);
+            }
+            tracing::warn!("Copilot preferred but unavailable, trying fallback");
+        }
         _ => {} // "auto" — try all in order
     }
 
@@ -260,6 +271,13 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
     if claude.health_check().await.available {
         tracing::info!("Codex not available, using Claude provider");
         return Arc::new(claude);
+    }
+
+    let copilot_mgr = app.state::<Arc<CopilotManager>>().inner().clone();
+    let copilot = CopilotProvider::new(copilot_mgr, None);
+    if copilot.health_check().await.available {
+        tracing::info!("Using Copilot provider (auto-detected)");
+        return Arc::new(copilot);
     }
 
     tracing::info!("No providers available, using mock provider");

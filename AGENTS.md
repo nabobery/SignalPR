@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built with Tauri 2 (Rust backend + React/TypeScript frontend). Fetches GitHub PR diffs, runs AI review via Codex/Claude providers, presents findings in a structured workspace with multi-lane parallel analysis. Supports WebSocket-based real-time streaming and interactive approval flows.
+SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built with Tauri 2 (Rust backend + React/TypeScript frontend). Fetches GitHub PR diffs, runs AI review via Codex/Claude/Copilot providers, presents findings in a structured workspace with multi-lane parallel analysis. Supports real-time streaming and interactive approval flows.
 
 ## STACK
 
@@ -47,9 +47,12 @@ signalpr/
 ├── src-tauri/              # Rust backend
 │   ├── src/main.rs         # Windows subsystem entry
 │   ├── src/lib.rs          # Tauri builder + command registration
-│   ├── src/commands/       # IPC handlers (14 files)
+│   ├── src/commands/       # IPC handlers (15 files, incl. copilot.rs)
 │   ├── src/config/         # Configuration resolution (438 lines, preset inheritance)
-│   ├── src/providers/      # AI providers (Codex, Claude, Mock)
+│   ├── src/providers/      # AI providers (Codex, Claude, Copilot, Mock)
+│   │   ├── jsonrpc/        # Shared JSON-RPC transport (dual framing)
+│   │   ├── copilot/        # Copilot v3 provider (manager + provider)
+│   │   └── codex_app_server/ # Codex App Server provider
 │   ├── src/orchestration/  # Multi-lane review pipeline
 │   ├── src/storage/        # SQLite layer
 │   ├── src/cleaner/        # Finding dedup/rank/normalize/verify/synthesis
@@ -69,6 +72,7 @@ signalpr/
 | Modify review UI         | `src/features/review/`                | ReviewWorkspace is main orchestrator      |
 | Add AI provider          | `src-tauri/src/providers/`            | Implement `ReviewProvider` trait          |
 | Claude provider          | `src-tauri/src/providers/claude.rs`   | Direct HTTP to Anthropic API              |
+| Copilot provider         | `src-tauri/src/providers/copilot/`    | JSON-RPC to Copilot CLI server            |
 | Change IPC contract      | `src/lib/ipc.ts` + matching command   | Types in `src/lib/types.ts`               |
 | Modify data pipeline     | `src-tauri/src/cleaner/`              | dedup → normalize → rank → verify → remap |
 | Multi-lane system        | `src-tauri/src/orchestration/lane.rs` | Security/arch/performance lanes           |
@@ -114,8 +118,9 @@ signalpr/
 | `has_channel_token`        | channels.rs    | Check if channel has stored token   |
 | `start_channel_listeners`  | channels.rs    | Start background channel polling    |
 | `stop_channel_listeners`   | channels.rs    | Stop background channel polling     |
-| `resolve_codex_approval`   | codex.rs       | Approve/decline codex tool request  |
-| `get_preferences`          | preferences.rs | Get reviewer preference summaries   |
+| `resolve_codex_approval`      | codex.rs       | Approve/decline codex tool request    |
+| `resolve_copilot_permission`  | copilot.rs     | Approve/deny copilot permission (v3)  |
+| `get_preferences`             | preferences.rs | Get reviewer preference summaries     |
 
 ## CONFIGURATION
 
@@ -137,7 +142,7 @@ defaults → user settings (DB) → repo config (.signalpr.yml)
 | `lane_timeout_secs`    | u64    | 120             | Per-lane timeout            |
 | `preferred_provider`   | string | "auto"          | Provider preference         |
 
-**Provider selection fallback**: preferred → codex → claude → mock
+**Provider selection fallback**: preferred → codex → claude → copilot → mock
 
 ### Repo Config File
 
@@ -167,13 +172,14 @@ similarity_threshold: 0.80
 
 ### Providers
 
-| Provider | File              | Auth Method         | Notes                         |
-| -------- | ----------------- | ------------------- | ----------------------------- |
-| Codex    | codex.rs          | CLI subprocess      | One-shot `codex exec`         |
-| CodexApp | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming |
-| Claude   | claude.rs         | `ANTHROPIC_API_KEY` | Direct HTTP, tool_use         |
-| GitHub   | github.rs         | `gh` CLI            | PR fetching only              |
-| Mock     | codex.rs          | Built-in fixture    | Fallback for testing          |
+| Provider | File              | Auth Method         | Notes                                             |
+| -------- | ----------------- | ------------------- | ------------------------------------------------- |
+| Codex    | codex.rs          | CLI subprocess      | One-shot `codex exec`                             |
+| CodexApp | codex_app_server/ | JSON-RPC stdio      | Persistent process, newline-delimited, streaming  |
+| Claude   | claude.rs         | `ANTHROPIC_API_KEY` | Direct HTTP, tool_use                             |
+| Copilot  | copilot/          | GitHub Copilot CLI  | JSON-RPC v3, Content-Length framed, streaming      |
+| GitHub   | github.rs         | `gh` CLI            | PR fetching only                                  |
+| Mock     | codex.rs          | Built-in fixture    | Fallback for testing                              |
 
 ### TypeScript
 
@@ -198,10 +204,12 @@ similarity_threshold: 0.80
 
 ## STREAMING EVENTS (Frontend)
 
-| Event                      | Payload                | Purpose                    |
-| -------------------------- | ---------------------- | -------------------------- |
-| `codex_approval_requested` | `CodexApprovalRequest` | Interactive tool approval  |
-| `codex_lane_delta`         | `CodexLaneDelta`       | Real-time streaming output |
+| Event                          | Payload                    | Purpose                         |
+| ------------------------------ | -------------------------- | ------------------------------- |
+| `codex_approval_requested`     | `CodexApprovalRequest`     | Interactive Codex tool approval |
+| `codex_lane_delta`             | `CodexLaneDelta`           | Real-time Codex streaming       |
+| `copilot_permission_requested` | `CopilotPermissionRequest` | Copilot v3 permission approval  |
+| `copilot_lane_delta`           | `CopilotLaneDelta`         | Real-time Copilot streaming     |
 
 ## NEW MODULES
 
@@ -239,6 +247,32 @@ Long-running Codex provider via JSON-RPC over stdio:
 - `provider.rs` — `ReviewProvider` impl with streaming buffer, multi-turn support
 - `transport.rs` — JSON-RPC wire protocol (requests, responses, notifications, server requests)
 - Enables interactive approval flows (`codex_approval_requested` event)
+
+### `src-tauri/src/providers/copilot/`
+
+GitHub Copilot provider via v3 JSON-RPC over stdio with Content-Length framing:
+
+- `manager.rs` — Process lifecycle (`copilot --server`), protocol version detection via `ping`, session→lane mapping
+  - Unwraps `session.event` notifications by `event.type` into `CopilotSessionEvent`
+  - Routes `permission.requested` events to permission broadcast
+  - Responds to permissions via `session.permissions.handlePendingPermissionRequest` RPC
+  - Responds to tool calls via `session.tools.handlePendingToolCall` RPC
+  - Child-scoped `CancellationToken` allows manager restart after shutdown
+  - Session lifecycle: `create_session` / `send_message` / `abort_session` / `destroy_session`
+- `provider.rs` — `ReviewProvider` impl with v3 event loop
+  - Uses `submit_review` custom tool for structured output
+  - Handles `external_tool.requested`, `session.idle`, `session.error` events
+  - 300s review timeout, session cleanup on all exit paths
+
+### `src-tauri/src/providers/jsonrpc/`
+
+Shared JSON-RPC 2.0 transport used by both Codex App Server and Copilot:
+
+- `types.rs` — Wire types (`OutboundMessage`, `InboundMessage`), `FramingMode` enum, `inject_jsonrpc()` helper, `parse_inbound()` discriminator
+- `transport.rs` — Bidirectional transport with two framing modes:
+  - `NewlineDelimited` — `{json}\n` (Codex)
+  - `ContentLength` — `Content-Length: N\r\n\r\n{json}` (Copilot, LSP-style)
+  - All outbound messages include `"jsonrpc":"2.0"` via `inject_jsonrpc()`
 
 ### `src-tauri/src/autofix/`
 

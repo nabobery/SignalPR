@@ -105,6 +105,7 @@ export function AgentForm({ initial, onSave, onCancel }: AgentFormProps) {
           <option value="">Auto (use default)</option>
           <option value="codex">Codex</option>
           <option value="claude">Claude</option>
+          <option value="copilot">Copilot</option>
         </select>
       </div>
 

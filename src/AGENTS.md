@@ -17,23 +17,26 @@
 
 ### Key Types (`types.ts`)
 
-| Type                   | Purpose                                          |
-| ---------------------- | ------------------------------------------------ |
-| `CodexApprovalRequest` | Approval queue item (request_id, method, params) |
-| `CodexLaneDelta`       | Streaming delta (lane_id, delta, buffer)         |
-| `Finding`              | Review finding with severity, location, fix      |
-| `LaneSnapshot`         | Per-lane status (security/arch/perf)             |
-| `ReviewSnapshot`       | Full review state with findings + clusters       |
-| `ChannelStatus`        | Discord/Slack connection status                  |
+| Type                       | Purpose                                                  |
+| -------------------------- | -------------------------------------------------------- |
+| `CodexApprovalRequest`     | Codex approval queue item (request_id, method, params)   |
+| `CodexLaneDelta`           | Codex streaming delta (lane_id, delta, buffer)           |
+| `CopilotPermissionRequest` | Copilot v3 permission (session_id, event_id, kind, event)|
+| `CopilotLaneDelta`         | Copilot streaming delta (lane_id, delta, buffer)         |
+| `Finding`                  | Review finding with severity, location, fix              |
+| `LaneSnapshot`             | Per-lane status (security/arch/perf)                     |
+| `ReviewSnapshot`           | Full review state with findings + clusters               |
+| `ChannelStatus`            | Discord/Slack connection status                          |
 
 ### Key IPC Functions (`ipc.ts`)
 
-| Function                  | Purpose                             |
-| ------------------------- | ----------------------------------- |
-| `resolveCodexApproval()`  | Approve/decline Codex tool request  |
-| `startChannelListeners()` | Start background channel polling    |
-| `stopChannelListeners()`  | Stop background channel polling     |
-| `getChannelStatus()`      | Get Discord/Slack connection status |
+| Function                      | Purpose                                        |
+| ----------------------------- | ---------------------------------------------- |
+| `resolveCodexApproval()`      | Approve/decline Codex tool request             |
+| `resolveCopilotPermission()`  | Approve/deny Copilot v3 permission request     |
+| `startChannelListeners()`     | Start background channel polling               |
+| `stopChannelListeners()`      | Stop background channel polling                |
+| `getChannelStatus()`          | Get Discord/Slack connection status            |
 
 ## FEATURES
 
@@ -49,11 +52,13 @@
 
 Frontend listens to Tauri events:
 
-| Event                      | Payload                | Consumer                     |
-| -------------------------- | ---------------------- | ---------------------------- |
-| `review_progress`          | Pipeline status        | ReviewWorkspace              |
-| `codex_lane_delta`         | `CodexLaneDelta`       | StreamingActivity (per lane) |
-| `codex_approval_requested` | `CodexApprovalRequest` | ApprovalModal                |
+| Event                          | Payload                     | Consumer                     |
+| ------------------------------ | --------------------------- | ---------------------------- |
+| `review_progress`              | Pipeline status             | ReviewWorkspace              |
+| `codex_lane_delta`             | `CodexLaneDelta`            | StreamingActivity (per lane) |
+| `codex_approval_requested`     | `CodexApprovalRequest`      | ApprovalModal                |
+| `copilot_lane_delta`           | `CopilotLaneDelta`          | StreamingActivity (per lane) |
+| `copilot_permission_requested` | `CopilotPermissionRequest`  | ApprovalModal                |
 
 ## CONVENTIONS
 

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use channels::manager::ChannelManager;
 use providers::codex_app_server::manager::CodexAppServerManager;
+use providers::copilot::manager::CopilotManager;
 use serde::Serialize;
 
 use commands::channels::ChannelListenerTokens;
@@ -28,6 +29,13 @@ use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize)]
 struct CodexLaneDelta {
+    lane_id: String,
+    delta: String,
+    buffer: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CopilotLaneDelta {
     lane_id: String,
     delta: String,
     buffer: String,
@@ -78,6 +86,10 @@ pub fn run() {
             // Shared Codex App Server manager (lazy-started on first use)
             let codex_manager = Arc::new(CodexAppServerManager::new());
             app.manage(codex_manager);
+
+            // Shared Copilot manager (lazy-started on first use)
+            let copilot_manager = Arc::new(CopilotManager::new());
+            app.manage(copilot_manager);
 
             // Channel listener lifecycle tokens
             app.manage(ChannelListenerTokens(tokio::sync::Mutex::new(
@@ -215,6 +227,76 @@ pub fn run() {
                 });
             }
 
+            // Forward Copilot permission requests to the frontend.
+            {
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<CopilotManager>>().inner().clone();
+                let mut rx = manager.subscribe_permissions();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(req) => {
+                                let _ = app_handle.emit("copilot_permission_requested", req);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
+                    }
+                });
+            }
+
+            // Forward Copilot streaming deltas to the frontend (lane-scoped).
+            {
+                const MAX_LANE_BUFFER: usize = 16 * 1024;
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<CopilotManager>>().inner().clone();
+                let mut rx = manager.subscribe_events();
+                tauri::async_runtime::spawn(async move {
+                    let mut buffers: HashMap<String, String> = HashMap::new();
+                    loop {
+                        let event = match rx.recv().await {
+                            Ok(e) => e,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        };
+
+                        match event.event_type.as_str() {
+                            "assistant.message_delta" => {
+                                let delta = event
+                                    .event
+                                    .get("deltaContent")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default();
+
+                                if delta.is_empty() {
+                                    continue;
+                                }
+
+                                let buf = buffers.entry(event.session_id.clone()).or_default();
+                                push_capped(buf, delta, MAX_LANE_BUFFER);
+
+                                let lane_id = manager
+                                    .lane_for_session(&event.session_id)
+                                    .await
+                                    .unwrap_or_else(|| event.session_id.clone());
+                                let _ = app_handle.emit(
+                                    "copilot_lane_delta",
+                                    CopilotLaneDelta {
+                                        lane_id,
+                                        delta: delta.to_string(),
+                                        buffer: buf.clone(),
+                                    },
+                                );
+                            }
+                            "session.idle" | "session.error" => {
+                                buffers.remove(&event.session_id);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+
             // Set up system tray
             tray::setup_tray(app.handle())?;
 
@@ -298,6 +380,7 @@ pub fn run() {
             commands::autofix::accept_fix,
             commands::autofix::reject_fix,
             commands::codex::resolve_codex_approval,
+            commands::copilot::resolve_copilot_permission,
             commands::agents::get_agent_definitions,
             commands::agents::save_agent_definition,
             commands::agents::delete_agent_definition,

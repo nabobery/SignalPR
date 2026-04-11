@@ -84,6 +84,9 @@ pub enum ProviderError {
     #[error("Claude API failed: {0}")]
     ClaudeFailed(String),
 
+    #[error("Copilot SDK failed: {0}")]
+    CopilotFailed(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 
@@ -119,6 +122,14 @@ impl ProviderError {
             ProviderError::ClaudeFailed(msg) => {
                 let msg = msg.to_lowercase();
                 msg.contains("rate") || msg.contains("529") || msg.contains("500")
+            }
+            ProviderError::CopilotFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate")
+                    || msg.contains("429")
+                    || msg.contains("overloaded")
+                    || msg.contains("retry")
+                    || msg.contains("timeout")
             }
             ProviderError::GhFailed(msg) => {
                 let msg = msg.to_lowercase();
@@ -191,5 +202,14 @@ mod tests {
         assert!(ProviderError::CodexFailed("rate limit exceeded".into()).is_transient());
         assert!(!ProviderError::CodexFailed("invalid model".into()).is_transient());
         assert!(ProviderError::ClaudeFailed("529 overloaded".into()).is_transient());
+
+        // Copilot transient checks
+        assert!(ProviderError::CopilotFailed("rate limit exceeded".into()).is_transient());
+        assert!(ProviderError::CopilotFailed("429 too many requests".into()).is_transient());
+        assert!(ProviderError::CopilotFailed("server overloaded".into()).is_transient());
+        assert!(ProviderError::CopilotFailed("please retry".into()).is_transient());
+        assert!(ProviderError::CopilotFailed("request timeout".into()).is_transient());
+        assert!(!ProviderError::CopilotFailed("invalid model".into()).is_transient());
+        assert!(!ProviderError::CopilotFailed("auth failed".into()).is_transient());
     }
 }

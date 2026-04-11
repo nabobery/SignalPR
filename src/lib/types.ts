@@ -175,3 +175,20 @@ export interface CodexLaneDelta {
   delta: string;
   buffer: string;
 }
+
+// Copilot SDK v3 permission request
+export interface CopilotPermissionRequest {
+  session_id: string;
+  event_id: string;
+  kind: string;
+  command: string | null;
+  file_name: string | null;
+  event: Record<string, unknown>;
+}
+
+// Copilot SDK streaming delta event
+export interface CopilotLaneDelta {
+  lane_id: string;
+  delta: string;
+  buffer: string;
+}
