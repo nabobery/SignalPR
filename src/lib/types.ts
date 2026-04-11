@@ -192,3 +192,20 @@ export interface CopilotLaneDelta {
   delta: string;
   buffer: string;
 }
+
+// OpenCode permission request
+export interface OpenCodePermissionRequest {
+  session_id: string;
+  request_id: string;
+  permission: string;
+  patterns: string[];
+  metadata: Record<string, unknown>;
+  tool: string | null;
+}
+
+// OpenCode streaming delta event
+export interface OpenCodeLaneDelta {
+  lane_id: string;
+  delta: string;
+  buffer: string;
+}

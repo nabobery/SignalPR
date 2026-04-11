@@ -35,8 +35,12 @@ ReviewContext.Provider (ReviewWorkspace)
 ## EVENTS
 
 - `review_progress` — Backend pipeline progress
-- `codex_lane_delta` — Real-time streaming output per lane (filtered by `laneId`)
-- `codex_approval_requested` — Interactive tool approval queue (Ack/Decline/Cancel)
+- `codex_lane_delta` — Real-time Codex streaming per lane (filtered by `laneId`)
+- `codex_approval_requested` — Interactive Codex tool approval queue
+- `copilot_lane_delta` — Real-time Copilot streaming per lane
+- `copilot_permission_requested` — Copilot v3 permission approval queue
+- `opencode_lane_delta` — Real-time OpenCode streaming per lane
+- `opencode_permission_requested` — OpenCode permission approval queue
 
 ## STREAMING (`StreamingActivity.tsx`)
 
@@ -49,12 +53,12 @@ Shows last meaningful line from Codex streaming buffer:
 
 ## APPROVAL (`ApprovalModal.tsx`)
 
-Modal queue for Codex interactive approval requests:
+Modal queue for interactive approval/permission requests (multi-provider):
 
 - Queue-based: multiple approvals stack
-- Shows method, command, cwd, thread/turn IDs
-- Actions: Accept, Decline, Cancel turn
-- Calls `resolveCodexApproval(requestId, decision)` IPC
+- Codex: shows method, command, cwd, thread/turn IDs → `resolveCodexApproval(requestId, decision)`
+- Copilot: shows permission kind, event details → `resolveCopilotPermission(sessionId, eventId, allow)`
+- OpenCode: shows permission message → `resolveOpenCodePermission(requestId, reply)`
 
 ## CONVENTIONS
 

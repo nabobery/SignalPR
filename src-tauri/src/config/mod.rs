@@ -18,6 +18,8 @@ use crate::providers::codex_app_server::manager::CodexAppServerManager;
 use crate::providers::codex_app_server::provider::CodexAppServerProvider;
 use crate::providers::copilot::manager::CopilotManager;
 use crate::providers::copilot::provider::CopilotProvider;
+use crate::providers::opencode::manager::OpenCodeManager;
+use crate::providers::opencode::provider::OpenCodeProvider;
 use crate::providers::traits::ReviewProvider;
 use crate::storage::queries;
 
@@ -250,6 +252,15 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
             }
             tracing::warn!("Copilot preferred but unavailable, trying fallback");
         }
+        "opencode" | "opencode_sdk" => {
+            let manager = app.state::<Arc<OpenCodeManager>>().inner().clone();
+            let provider = OpenCodeProvider::new(manager, None);
+            if provider.health_check().await.available {
+                tracing::info!("Using OpenCode provider");
+                return Arc::new(provider);
+            }
+            tracing::warn!("OpenCode preferred but unavailable, trying fallback");
+        }
         _ => {} // "auto" — try all in order
     }
 
@@ -278,6 +289,13 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
     if copilot.health_check().await.available {
         tracing::info!("Using Copilot provider (auto-detected)");
         return Arc::new(copilot);
+    }
+
+    let opencode_mgr = app.state::<Arc<OpenCodeManager>>().inner().clone();
+    let opencode = OpenCodeProvider::new(opencode_mgr, None);
+    if opencode.health_check().await.available {
+        tracing::info!("Using OpenCode provider (auto-detected)");
+        return Arc::new(opencode);
     }
 
     tracing::info!("No providers available, using mock provider");

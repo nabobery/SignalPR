@@ -9,12 +9,12 @@ providers/
 ├── traits.rs          # ReviewProvider trait + data types
 ├── codex.rs           # Codex CLI implementation (one-shot)
 ├── codex_app_server/  # Long-running Codex via JSON-RPC
-│   ├── manager.rs     # Process lifecycle, broadcast channels
-│   ├── provider.rs    # ReviewProvider implementation
-│   ├── transport.rs   # JSON-RPC wire protocol
-│   └── mod.rs         # Barrel exports
+├── copilot/           # GitHub Copilot v3 via JSON-RPC + Content-Length framing
+├── opencode/          # OpenCode via HTTP REST + SSE
+├── jsonrpc/           # Shared JSON-RPC 2.0 transport (Codex + Copilot)
 ├── claude.rs          # Direct HTTP to Anthropic API
-├── github.rs          # GitHub integration
+├── github.rs          # GitHub integration (PR fetching only)
+├── mock.rs            # Mock provider (#[cfg(test)] only)
 ├── prompts.rs         # Agent focus configs (security/arch/performance)
 └── mod.rs             # Barrel exports
 ```
@@ -37,29 +37,27 @@ pub trait ReviewProvider: Send + Sync {
 
 ## PROVIDERS
 
-| Provider   | File              | Auth                | Method                        |
-| ---------- | ----------------- | ------------------- | ----------------------------- |
-| `Codex`    | codex.rs          | CLI subprocess      | One-shot `codex exec`         |
-| `CodexApp` | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming |
-| `Claude`   | claude.rs         | `ANTHROPIC_API_KEY` | HTTP + `tool_use`             |
-| `GitHub`   | github.rs         | `gh` CLI            | PR fetching only              |
-| `Mock`     | codex.rs          | Built-in fixture    | Fallback for testing          |
+| Provider   | File              | Auth                | Method                           |
+| ---------- | ----------------- | ------------------- | -------------------------------- |
+| `Codex`    | codex.rs          | CLI subprocess      | One-shot `codex exec`            |
+| `CodexApp` | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming    |
+| `Claude`   | claude.rs         | `ANTHROPIC_API_KEY` | HTTP + `tool_use`                |
+| `Copilot`  | copilot/          | GitHub Copilot CLI  | JSON-RPC v3, Content-Length      |
+| `OpenCode` | opencode/         | `opencode` CLI      | HTTP REST + SSE                  |
+| `GitHub`   | github.rs         | `gh` CLI            | PR fetching only                 |
+| `Mock`     | mock.rs           | Built-in fixture    | `#[cfg(test)]` only              |
 
-### CodexAppServer Provider Details
+### CodexAppServer Details
 
-Long-running provider with interactive capabilities:
+See `codex_app_server/AGENTS.md` for full architecture.
 
-- **Transport**: JSON-RPC over child process stdio
-- **Streaming**: Real-time text deltas via `CodexLaneDelta` events
-- **Approvals**: Server-initiated approval requests (`codex_approval_requested` event)
-- **Multi-turn**: Thread/turn tracking via `lane_by_thread` mapping
-- **Default model**: `gpt-5.2-codex`
+### Copilot Details
 
-**Key types:**
+See `copilot/AGENTS.md` for v3 JSON-RPC protocol, session lifecycle, and permission flow.
 
-- `CodexAppServerManager` — Process lifecycle + broadcast channels
-- `JsonRpcTransport` — Wire protocol (request/response/notification/server-request)
-- `ApprovalRequest` — Forwarded approval with thread/turn/item IDs
+### OpenCode Details
+
+See `opencode/AGENTS.md` for HTTP REST + SSE protocol, session management, and permission flow.
 
 ### Claude Provider Details
 
@@ -67,6 +65,16 @@ Long-running provider with interactive capabilities:
 - Uses Anthropic Messages API with forced `tool_use` for structured output
 - Retry on 429 with exponential backoff (2 attempts max)
 - Cancellation via `CancellationToken` in request loop
+
+### JSON-RPC Shared Transport (`jsonrpc/`)
+
+Shared JSON-RPC 2.0 wire protocol used by both Codex App Server and Copilot:
+
+- `types.rs` — `OutboundMessage`, `InboundMessage`, `FramingMode` enum
+- `transport.rs` — Bidirectional transport with two framing modes:
+  - `NewlineDelimited` — `{json}\n` (Codex)
+  - `ContentLength` — `Content-Length: N\r\n\r\n{json}` (Copilot, LSP-style)
+- All outbound messages include `"jsonrpc":"2.0"` via `inject_jsonrpc()`
 
 ## DATA TYPES
 

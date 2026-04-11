@@ -87,6 +87,9 @@ pub enum ProviderError {
     #[error("Copilot SDK failed: {0}")]
     CopilotFailed(String),
 
+    #[error("OpenCode failed: {0}")]
+    OpenCodeFailed(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 
@@ -130,6 +133,16 @@ impl ProviderError {
                     || msg.contains("overloaded")
                     || msg.contains("retry")
                     || msg.contains("timeout")
+            }
+            ProviderError::OpenCodeFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate")
+                    || msg.contains("429")
+                    || msg.contains("overloaded")
+                    || msg.contains("retry")
+                    || msg.contains("timeout")
+                    || msg.contains("503")
+                    || msg.contains("connection refused")
             }
             ProviderError::GhFailed(msg) => {
                 let msg = msg.to_lowercase();
@@ -211,5 +224,19 @@ mod tests {
         assert!(ProviderError::CopilotFailed("request timeout".into()).is_transient());
         assert!(!ProviderError::CopilotFailed("invalid model".into()).is_transient());
         assert!(!ProviderError::CopilotFailed("auth failed".into()).is_transient());
+    }
+
+    #[test]
+    fn test_opencode_failed_transient_classification() {
+        assert!(ProviderError::OpenCodeFailed("rate limit exceeded".into()).is_transient());
+        assert!(ProviderError::OpenCodeFailed("429 too many requests".into()).is_transient());
+        assert!(ProviderError::OpenCodeFailed("server overloaded".into()).is_transient());
+        assert!(ProviderError::OpenCodeFailed("please retry".into()).is_transient());
+        assert!(ProviderError::OpenCodeFailed("request timeout".into()).is_transient());
+        assert!(ProviderError::OpenCodeFailed("503 service unavailable".into()).is_transient());
+        assert!(ProviderError::OpenCodeFailed("connection refused".into()).is_transient());
+        assert!(!ProviderError::OpenCodeFailed("invalid model".into()).is_transient());
+        assert!(!ProviderError::OpenCodeFailed("auth failed".into()).is_transient());
+        assert!(!ProviderError::OpenCodeFailed("session not found".into()).is_transient());
     }
 }

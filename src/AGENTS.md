@@ -17,26 +17,29 @@
 
 ### Key Types (`types.ts`)
 
-| Type                       | Purpose                                                  |
-| -------------------------- | -------------------------------------------------------- |
-| `CodexApprovalRequest`     | Codex approval queue item (request_id, method, params)   |
-| `CodexLaneDelta`           | Codex streaming delta (lane_id, delta, buffer)           |
-| `CopilotPermissionRequest` | Copilot v3 permission (session_id, event_id, kind, event)|
-| `CopilotLaneDelta`         | Copilot streaming delta (lane_id, delta, buffer)         |
-| `Finding`                  | Review finding with severity, location, fix              |
-| `LaneSnapshot`             | Per-lane status (security/arch/perf)                     |
-| `ReviewSnapshot`           | Full review state with findings + clusters               |
-| `ChannelStatus`            | Discord/Slack connection status                          |
+| Type                          | Purpose                                                  |
+| ----------------------------- | -------------------------------------------------------- |
+| `CodexApprovalRequest`        | Codex approval queue item (request_id, method, params)   |
+| `CodexLaneDelta`              | Codex streaming delta (lane_id, delta, buffer)           |
+| `CopilotPermissionRequest`    | Copilot v3 permission (session_id, event_id, kind, event)|
+| `CopilotLaneDelta`            | Copilot streaming delta (lane_id, delta, buffer)         |
+| `OpenCodePermissionRequest`   | OpenCode permission (request_id, message)                |
+| `OpenCodeLaneDelta`           | OpenCode streaming delta (lane_id, delta, buffer)        |
+| `Finding`                     | Review finding with severity, location, fix              |
+| `LaneSnapshot`                | Per-lane status (security/arch/perf)                     |
+| `ReviewSnapshot`              | Full review state with findings + clusters               |
+| `ChannelStatus`               | Discord/Slack connection status                          |
 
 ### Key IPC Functions (`ipc.ts`)
 
-| Function                      | Purpose                                        |
-| ----------------------------- | ---------------------------------------------- |
-| `resolveCodexApproval()`      | Approve/decline Codex tool request             |
-| `resolveCopilotPermission()`  | Approve/deny Copilot v3 permission request     |
-| `startChannelListeners()`     | Start background channel polling               |
-| `stopChannelListeners()`      | Stop background channel polling                |
-| `getChannelStatus()`          | Get Discord/Slack connection status            |
+| Function                         | Purpose                                        |
+| -------------------------------- | ---------------------------------------------- |
+| `resolveCodexApproval()`         | Approve/decline Codex tool request             |
+| `resolveCopilotPermission()`     | Approve/deny Copilot v3 permission request     |
+| `resolveOpenCodePermission()`    | Reply to OpenCode permission (once/always/reject) |
+| `startChannelListeners()`        | Start background channel polling               |
+| `stopChannelListeners()`         | Stop background channel polling                |
+| `getChannelStatus()`             | Get Discord/Slack connection status            |
 
 ## FEATURES
 
@@ -59,6 +62,8 @@ Frontend listens to Tauri events:
 | `codex_approval_requested`     | `CodexApprovalRequest`      | ApprovalModal                |
 | `copilot_lane_delta`           | `CopilotLaneDelta`          | StreamingActivity (per lane) |
 | `copilot_permission_requested` | `CopilotPermissionRequest`  | ApprovalModal                |
+| `opencode_lane_delta`          | `OpenCodeLaneDelta`         | StreamingActivity (per lane) |
+| `opencode_permission_requested`| `OpenCodePermissionRequest` | ApprovalModal                |
 
 ## CONVENTIONS
 

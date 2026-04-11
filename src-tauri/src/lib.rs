@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use channels::manager::ChannelManager;
 use providers::codex_app_server::manager::CodexAppServerManager;
 use providers::copilot::manager::CopilotManager;
+use providers::opencode::manager::OpenCodeManager;
 use serde::Serialize;
 
 use commands::channels::ChannelListenerTokens;
@@ -36,6 +37,13 @@ struct CodexLaneDelta {
 
 #[derive(Debug, Clone, Serialize)]
 struct CopilotLaneDelta {
+    lane_id: String,
+    delta: String,
+    buffer: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OpenCodeLaneDelta {
     lane_id: String,
     delta: String,
     buffer: String,
@@ -90,6 +98,10 @@ pub fn run() {
             // Shared Copilot manager (lazy-started on first use)
             let copilot_manager = Arc::new(CopilotManager::new());
             app.manage(copilot_manager);
+
+            // Shared OpenCode manager (lazy-started on first use)
+            let opencode_manager = Arc::new(OpenCodeManager::new());
+            app.manage(opencode_manager);
 
             // Channel listener lifecycle tokens
             app.manage(ChannelListenerTokens(tokio::sync::Mutex::new(
@@ -297,6 +309,83 @@ pub fn run() {
                 });
             }
 
+            // Forward OpenCode permission requests to the frontend.
+            {
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<OpenCodeManager>>().inner().clone();
+                let mut rx = manager.subscribe_permissions();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(req) => {
+                                let _ = app_handle.emit("opencode_permission_requested", req);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
+                    }
+                });
+            }
+
+            // Forward OpenCode streaming deltas to the frontend (lane-scoped).
+            {
+                const MAX_LANE_BUFFER: usize = 16 * 1024;
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<OpenCodeManager>>().inner().clone();
+                let mut rx = manager.subscribe_events();
+                tauri::async_runtime::spawn(async move {
+                    let mut buffers: HashMap<String, String> = HashMap::new();
+                    loop {
+                        let event = match rx.recv().await {
+                            Ok(e) => e,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        };
+
+                        match event.event_type.as_str() {
+                            "message.part.updated" => {
+                                let delta = event
+                                    .data
+                                    .get("delta")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default();
+
+                                if delta.is_empty() {
+                                    continue;
+                                }
+
+                                let buf = buffers.entry(event.session_id.clone()).or_default();
+                                push_capped(buf, delta, MAX_LANE_BUFFER);
+
+                                let lane_id = manager
+                                    .lane_for_session(&event.session_id)
+                                    .await
+                                    .unwrap_or_else(|| event.session_id.clone());
+                                let _ = app_handle.emit(
+                                    "opencode_lane_delta",
+                                    OpenCodeLaneDelta {
+                                        lane_id,
+                                        delta: delta.to_string(),
+                                        buffer: buf.clone(),
+                                    },
+                                );
+                            }
+                            "session.status" => {
+                                let status = event
+                                    .data
+                                    .get("status")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default();
+                                if status == "idle" || status == "error" || status == "completed" {
+                                    buffers.remove(&event.session_id);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+
             // Set up system tray
             tray::setup_tray(app.handle())?;
 
@@ -381,6 +470,7 @@ pub fn run() {
             commands::autofix::reject_fix,
             commands::codex::resolve_codex_approval,
             commands::copilot::resolve_copilot_permission,
+            commands::opencode::resolve_opencode_permission,
             commands::agents::get_agent_definitions,
             commands::agents::save_agent_definition,
             commands::agents::delete_agent_definition,

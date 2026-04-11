@@ -185,3 +185,7 @@ export async function resolveCopilotPermission(
 ): Promise<void> {
   return invoke("resolve_copilot_permission", { sessionId, eventId, decision });
 }
+
+export async function resolveOpenCodePermission(requestId: string, reply: string): Promise<void> {
+  return invoke("resolve_opencode_permission", { requestId, reply });
+}

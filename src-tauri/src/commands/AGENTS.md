@@ -6,17 +6,20 @@
 
 | File             | Commands                                               | Purpose                           |
 | ---------------- | ------------------------------------------------------ | --------------------------------- |
-| `environment.rs` | `inspect_environment`                                  | Check gh/codex CLI availability   |
+| `environment.rs` | `inspect_environment`, `get_environment_summary`       | Check gh/codex CLI availability   |
 | `intake.rs`      | `open_from_url`, `confirm_workspace`                   | PR URL parsing, workspace binding |
 | `review.rs`      | `start_review`, `cancel_review`, `get_review_snapshot` | Async review lifecycle            |
 | `review.rs`      | `get_incomplete_reviews`, `resume_review`              | Incomplete review recovery        |
 | `findings.rs`    | `update_finding`                                       | Edit/suppress findings            |
-| `submission.rs`  | `submit_review`                                        | Submit to GitHub                  |
+| `submission.rs`  | `submit_review`, `get_submission_history`              | Submit to GitHub + history        |
 | `settings.rs`    | `get_settings`, `update_setting`                       | User settings CRUD                |
 | `diagnostics.rs` | `export_diagnostic_bundle`, `get_event_log`            | Debug/export pipeline events      |
-| `agents.rs`      | `get_agents`, `save_agent`, `delete_agent`             | Custom agent management           |
-| `autofix.rs`     | `apply_fix`                                            | Apply auto-fix patch              |
-| `channels.rs`    | `get_channel_statuses`                                 | Discord/Slack connection status   |
+| `agents.rs`      | `get_agent_definitions`, `save_agent_definition`, `delete_agent_definition` | Custom agent management |
+| `autofix.rs`     | `preview_fix`, `apply_fix`, `accept_fix`, `reject_fix` | Auto-fix workflow                |
+| `codex.rs`       | `resolve_codex_approval`                               | Codex interactive approval        |
+| `copilot.rs`     | `resolve_copilot_permission`                           | Copilot v3 permission approval    |
+| `opencode.rs`    | `resolve_opencode_permission`                          | OpenCode permission reply         |
+| `channels.rs`    | `configure_channel`, `remove_channel`, `get_channel_status`, etc. | Channel management |
 | `preferences.rs` | `get_preferences`                                      | Reviewer preference summaries     |
 
 ## PATTERNS

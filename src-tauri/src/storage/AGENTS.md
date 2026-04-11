@@ -6,10 +6,12 @@
 
 ```
 storage/
-├── models.rs    # Struct definitions (Workspace, PullRequest, ReviewRun, Finding)
-├── queries.rs   # SQL query functions
-├── db.rs        # Connection management + init
-└── mod.rs       # Barrel exports
+├── models.rs      # Struct definitions (Workspace, PullRequest, ReviewRun, Finding)
+├── queries.rs     # SQL query functions (1291 lines)
+├── db.rs          # Connection management + init
+├── event_log.rs   # Pipeline event logging for diagnostics
+├── hashing.rs     # Content hashing (sha2) for dedup/fingerprinting
+└── mod.rs         # Barrel exports
 ```
 
 ## MODELS

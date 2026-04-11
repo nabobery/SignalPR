@@ -23,6 +23,7 @@ pub async fn inspect_environment(
     results.push(check_gh(&app, &now).await);
     results.push(check_codex(&app, &now).await);
     results.push(check_copilot(&app, &now).await);
+    results.push(check_opencode(&app, &now).await);
 
     Ok(results)
 }
@@ -38,6 +39,7 @@ pub async fn get_environment_summary(
     tools.push(check_codex(&app, &now).await);
     tools.push(check_claude(&now));
     tools.push(check_copilot(&app, &now).await);
+    tools.push(check_opencode(&app, &now).await);
 
     let can_submit = tools
         .iter()
@@ -45,7 +47,10 @@ pub async fn get_environment_summary(
     let available_providers: Vec<String> = tools
         .iter()
         .filter(|t| {
-            (t.tool_name == "codex" || t.tool_name == "claude" || t.tool_name == "copilot")
+            (t.tool_name == "codex"
+                || t.tool_name == "claude"
+                || t.tool_name == "copilot"
+                || t.tool_name == "opencode")
                 && t.status == "ready"
         })
         .map(|t| t.tool_name.clone())
@@ -188,6 +193,31 @@ async fn check_codex(app: &AppHandle, now: &str) -> ToolStatus {
     }
 }
 
+async fn check_opencode(app: &AppHandle, now: &str) -> ToolStatus {
+    let shell = app.shell();
+    let cli = std::env::var("OPENCODE_CLI_PATH").unwrap_or_else(|_| "opencode".to_string());
+
+    match shell.command(&cli).args(["--version"]).output().await {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            ToolStatus {
+                tool_name: "opencode".into(),
+                status: "ready".into(),
+                version: Some(version),
+                message: None,
+                checked_at: now.into(),
+            }
+        }
+        _ => ToolStatus {
+            tool_name: "opencode".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some("Optional: Install OpenCode CLI (https://opencode.ai)".into()),
+            checked_at: now.into(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,7 +239,10 @@ mod tests {
         let available_providers: Vec<String> = tools
             .iter()
             .filter(|t| {
-                (t.tool_name == "codex" || t.tool_name == "claude" || t.tool_name == "copilot")
+                (t.tool_name == "codex"
+                    || t.tool_name == "claude"
+                    || t.tool_name == "copilot"
+                    || t.tool_name == "opencode")
                     && t.status == "ready"
             })
             .map(|t| t.tool_name.clone())
