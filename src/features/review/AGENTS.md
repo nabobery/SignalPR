@@ -41,12 +41,14 @@ ReviewContext.Provider (ReviewWorkspace)
 - `copilot_permission_requested` — Copilot v3 permission approval queue
 - `opencode_lane_delta` — Real-time OpenCode streaming per lane
 - `opencode_permission_requested` — OpenCode permission approval queue
+- `gemini_lane_delta` — Real-time Gemini streaming per lane
+- `gemini_permission_requested` — Gemini tool request (observational; backend already denied)
 
 ## STREAMING (`StreamingActivity.tsx`)
 
-Shows last meaningful line from Codex streaming buffer:
+Shows last meaningful line from streaming buffer per lane:
 
-- Listens to `codex_lane_delta` event, filtered by `laneId`
+- Listens to `codex_lane_delta`, `copilot_lane_delta`, `opencode_lane_delta`, `gemini_lane_delta` — all filtered by `laneId`
 - Debounces 100ms to avoid flicker
 - Truncates at 120 chars with ellipsis
 - Icon: `Activity` from lucide-react
@@ -59,6 +61,7 @@ Modal queue for interactive approval/permission requests (multi-provider):
 - Codex: shows method, command, cwd, thread/turn IDs → `resolveCodexApproval(requestId, decision)`
 - Copilot: shows permission kind, event details → `resolveCopilotPermission(sessionId, eventId, allow)`
 - OpenCode: shows permission message → `resolveOpenCodePermission(requestId, reply)`
+- Gemini: **observational only** — shows "Tool request denied" + Acknowledge button; no IPC call (backend auto-denied before event fires)
 
 ## CONVENTIONS
 

@@ -33,12 +33,13 @@ signalpr/
 ├── src-tauri/              # Rust backend
 │   ├── src/main.rs         # Windows subsystem entry
 │   ├── src/lib.rs          # Tauri builder + command registration
-│   ├── src/commands/       # IPC handlers (14 modules + opencode.rs, copilot.rs)
+│   ├── src/commands/       # IPC handlers (15 modules + opencode.rs, copilot.rs, gemini.rs)
 │   ├── src/config/         # Configuration resolution (438 lines, preset inheritance)
 │   ├── src/providers/      # AI providers (Codex, Claude, Copilot, OpenCode, Mock)
 │   │   ├── jsonrpc/        # Shared JSON-RPC transport (dual framing)
 │   │   ├── copilot/        # Copilot v3 provider (manager + provider)
 │   │   ├── opencode/       # OpenCode provider (HTTP REST + SSE)
+│   │   ├── gemini/         # Gemini CLI via ACP (JSON-RPC + NDJSON framing)
 │   │   ├── codex_app_server/ # Codex App Server provider
 │   │   └── mock.rs          # Mock provider (test-only, #[cfg(test)])
 │   ├── src/orchestration/  # Multi-lane review pipeline
@@ -123,6 +124,7 @@ See `src/AGENTS.md` for full event table. Per-provider events:
 - Codex: `codex_lane_delta`, `codex_approval_requested`
 - Copilot: `copilot_lane_delta`, `copilot_permission_requested`
 - OpenCode: `opencode_lane_delta`, `opencode_permission_requested`
+- Gemini: `gemini_lane_delta`, `gemini_permission_requested` (observational — backend auto-denies)
 
 ## MODULE DETAILS
 

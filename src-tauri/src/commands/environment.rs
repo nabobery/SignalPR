@@ -24,6 +24,7 @@ pub async fn inspect_environment(
     results.push(check_codex(&app, &now).await);
     results.push(check_copilot(&app, &now).await);
     results.push(check_opencode(&app, &now).await);
+    results.push(check_gemini(&app, &now).await);
 
     Ok(results)
 }
@@ -40,6 +41,7 @@ pub async fn get_environment_summary(
     tools.push(check_claude(&now));
     tools.push(check_copilot(&app, &now).await);
     tools.push(check_opencode(&app, &now).await);
+    tools.push(check_gemini(&app, &now).await);
 
     let can_submit = tools
         .iter()
@@ -50,7 +52,8 @@ pub async fn get_environment_summary(
             (t.tool_name == "codex"
                 || t.tool_name == "claude"
                 || t.tool_name == "copilot"
-                || t.tool_name == "opencode")
+                || t.tool_name == "opencode"
+                || t.tool_name == "gemini")
                 && t.status == "ready"
         })
         .map(|t| t.tool_name.clone())
@@ -218,6 +221,60 @@ async fn check_opencode(app: &AppHandle, now: &str) -> ToolStatus {
     }
 }
 
+/// Check whether the Gemini CLI is installed and authenticated via an
+/// API-key env var. OAuth is not supported for SignalPR — see the Gemini
+/// CLI ToS notice at
+/// https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md
+async fn check_gemini(app: &AppHandle, now: &str) -> ToolStatus {
+    let shell = app.shell();
+    let cli = std::env::var("GEMINI_CLI_PATH").unwrap_or_else(|_| "gemini".to_string());
+
+    let version = match shell.command(&cli).args(["--version"]).output().await {
+        Ok(output) if output.status.success() => {
+            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        }
+        _ => None,
+    };
+
+    if version.is_none() {
+        return ToolStatus {
+            tool_name: "gemini".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some("Optional: Install Gemini CLI (`npm i -g @google/gemini-cli`)".into()),
+            checked_at: now.into(),
+        };
+    }
+
+    // Binary is present; verify an API-key auth env var is set so health
+    // checks fail fast rather than blocking on a first-run interactive prompt.
+    let has_auth = std::env::var("GEMINI_API_KEY").is_ok()
+        || std::env::var("GOOGLE_API_KEY").is_ok()
+        || std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok();
+
+    if !has_auth {
+        return ToolStatus {
+            tool_name: "gemini".into(),
+            status: "unauthenticated".into(),
+            version,
+            message: Some(
+                "Set GEMINI_API_KEY in your shell before launching SignalPR. \
+                 OAuth is not supported for third-party harnesses."
+                    .into(),
+            ),
+            checked_at: now.into(),
+        };
+    }
+
+    ToolStatus {
+        tool_name: "gemini".into(),
+        status: "ready".into(),
+        version,
+        message: None,
+        checked_at: now.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +299,8 @@ mod tests {
                 (t.tool_name == "codex"
                     || t.tool_name == "claude"
                     || t.tool_name == "copilot"
-                    || t.tool_name == "opencode")
+                    || t.tool_name == "opencode"
+                    || t.tool_name == "gemini")
                     && t.status == "ready"
             })
             .map(|t| t.tool_name.clone())
@@ -291,5 +349,30 @@ mod tests {
         ]);
         assert!(summary.can_review);
         assert_eq!(summary.available_providers.len(), 2);
+    }
+
+    #[test]
+    fn test_gemini_ready_included_in_available_providers() {
+        let summary = build_summary(&[tool("gh", "ready"), tool("gemini", "ready")]);
+        assert!(summary.can_review);
+        assert_eq!(summary.available_providers, vec!["gemini"]);
+    }
+
+    #[test]
+    fn test_gemini_unauthenticated_not_in_available_providers() {
+        let summary = build_summary(&[
+            tool("gh", "ready"),
+            tool("gemini", "unauthenticated"),
+            tool("claude", "ready"),
+        ]);
+        // Unauthenticated gemini must not count as an available provider
+        // (we'd fail on session/new otherwise).
+        assert_eq!(summary.available_providers, vec!["claude"]);
+    }
+
+    #[test]
+    fn test_gemini_missing_not_in_available_providers() {
+        let summary = build_summary(&[tool("gh", "ready"), tool("gemini", "missing")]);
+        assert!(!summary.can_review);
     }
 }

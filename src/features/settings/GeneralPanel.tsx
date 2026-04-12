@@ -136,8 +136,39 @@ export function GeneralPanel() {
           <option value="claude">Claude</option>
           <option value="copilot">Copilot</option>
           <option value="opencode">OpenCode</option>
+          <option value="gemini">Gemini</option>
         </select>
         <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
+        {form.preferred_provider === "gemini" && (
+          <div className="text-amber-400 text-xs mt-2 space-y-1">
+            <p>
+              Gemini authenticates via API key only. Set{" "}
+              <code className="text-amber-300">GEMINI_API_KEY</code> (AI Studio) or a Vertex{" "}
+              <code className="text-amber-300">GOOGLE_*</code> env var before launching SignalPR.
+            </p>
+            <p>
+              Google account OAuth is disabled to avoid third-party access risks described in{" "}
+              <a
+                href="https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-amber-300"
+              >
+                Gemini CLI's ToS notice
+              </a>
+              . See the{" "}
+              <a
+                href="https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/authentication.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-amber-300"
+              >
+                authentication guide
+              </a>{" "}
+              for setup. Review lanes run in plan mode with deny-by-default tool permissions.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-3">

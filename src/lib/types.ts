@@ -209,3 +209,21 @@ export interface OpenCodeLaneDelta {
   delta: string;
   buffer: string;
 }
+
+// Gemini (ACP) permission request — currently observational only:
+// the backend auto-approves the first option so the agent can proceed.
+// A future PR will gate the approval on a user decision via
+// `resolve_gemini_permission`.
+export interface GeminiPermissionRequest {
+  session_id: string;
+  request_id: string;
+  tool_call: Record<string, unknown>;
+  options: unknown;
+}
+
+// Gemini ACP streaming delta event
+export interface GeminiLaneDelta {
+  lane_id: string;
+  delta: string;
+  buffer: string;
+}

@@ -90,6 +90,9 @@ pub enum ProviderError {
     #[error("OpenCode failed: {0}")]
     OpenCodeFailed(String),
 
+    #[error("Gemini failed: {0}")]
+    GeminiFailed(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 
@@ -143,6 +146,16 @@ impl ProviderError {
                     || msg.contains("timeout")
                     || msg.contains("503")
                     || msg.contains("connection refused")
+            }
+            ProviderError::GeminiFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate")
+                    || msg.contains("429")
+                    || msg.contains("resource_exhausted")
+                    || msg.contains("overloaded")
+                    || msg.contains("retry")
+                    || msg.contains("timeout")
+                    || msg.contains("unavailable")
             }
             ProviderError::GhFailed(msg) => {
                 let msg = msg.to_lowercase();
@@ -224,6 +237,19 @@ mod tests {
         assert!(ProviderError::CopilotFailed("request timeout".into()).is_transient());
         assert!(!ProviderError::CopilotFailed("invalid model".into()).is_transient());
         assert!(!ProviderError::CopilotFailed("auth failed".into()).is_transient());
+    }
+
+    #[test]
+    fn test_gemini_failed_transient_classification() {
+        assert!(ProviderError::GeminiFailed("rate limit exceeded".into()).is_transient());
+        assert!(ProviderError::GeminiFailed("429 too many requests".into()).is_transient());
+        assert!(ProviderError::GeminiFailed("RESOURCE_EXHAUSTED".into()).is_transient());
+        assert!(ProviderError::GeminiFailed("server overloaded".into()).is_transient());
+        assert!(ProviderError::GeminiFailed("request timeout".into()).is_transient());
+        assert!(ProviderError::GeminiFailed("service unavailable".into()).is_transient());
+        assert!(!ProviderError::GeminiFailed("invalid api key".into()).is_transient());
+        assert!(!ProviderError::GeminiFailed("auth failed".into()).is_transient());
+        assert!(!ProviderError::GeminiFailed("permission denied".into()).is_transient());
     }
 
     #[test]

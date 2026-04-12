@@ -25,6 +25,8 @@
 | `CopilotLaneDelta`            | Copilot streaming delta (lane_id, delta, buffer)         |
 | `OpenCodePermissionRequest`   | OpenCode permission (request_id, message)                |
 | `OpenCodeLaneDelta`           | OpenCode streaming delta (lane_id, delta, buffer)        |
+| `GeminiPermissionRequest`     | Gemini ACP permission (session_id, request_id, tool_call, options) — observational |
+| `GeminiLaneDelta`             | Gemini streaming delta (lane_id, delta, buffer)          |
 | `Finding`                     | Review finding with severity, location, fix              |
 | `LaneSnapshot`                | Per-lane status (security/arch/perf)                     |
 | `ReviewSnapshot`              | Full review state with findings + clusters               |
@@ -64,6 +66,8 @@ Frontend listens to Tauri events:
 | `copilot_permission_requested` | `CopilotPermissionRequest`  | ApprovalModal                |
 | `opencode_lane_delta`          | `OpenCodeLaneDelta`         | StreamingActivity (per lane) |
 | `opencode_permission_requested`| `OpenCodePermissionRequest` | ApprovalModal                |
+| `gemini_lane_delta`            | `GeminiLaneDelta`           | StreamingActivity (per lane) |
+| `gemini_permission_requested`  | `GeminiPermissionRequest`   | ApprovalModal (dismiss-only; backend auto-denied) |
 
 ## CONVENTIONS
 

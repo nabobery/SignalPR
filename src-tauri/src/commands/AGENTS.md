@@ -6,7 +6,7 @@
 
 | File             | Commands                                               | Purpose                           |
 | ---------------- | ------------------------------------------------------ | --------------------------------- |
-| `environment.rs` | `inspect_environment`, `get_environment_summary`       | Check gh/codex CLI availability   |
+| `environment.rs` | `inspect_environment`, `get_environment_summary`       | Check gh/codex/copilot/opencode/gemini CLI + env-var auth |
 | `intake.rs`      | `open_from_url`, `confirm_workspace`                   | PR URL parsing, workspace binding |
 | `review.rs`      | `start_review`, `cancel_review`, `get_review_snapshot` | Async review lifecycle            |
 | `review.rs`      | `get_incomplete_reviews`, `resume_review`              | Incomplete review recovery        |
@@ -19,6 +19,7 @@
 | `codex.rs`       | `resolve_codex_approval`                               | Codex interactive approval        |
 | `copilot.rs`     | `resolve_copilot_permission`                           | Copilot v3 permission approval    |
 | `opencode.rs`    | `resolve_opencode_permission`                          | OpenCode permission reply         |
+| `gemini.rs`      | `resolve_gemini_permission`                            | Gemini permission stub (no-op; future: interactive approval gate) |
 | `channels.rs`    | `configure_channel`, `remove_channel`, `get_channel_status`, etc. | Channel management |
 | `preferences.rs` | `get_preferences`                                      | Reviewer preference summaries     |
 

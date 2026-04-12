@@ -9,13 +9,15 @@ import {
 import type {
   CodexApprovalRequest,
   CopilotPermissionRequest,
+  GeminiPermissionRequest,
   OpenCodePermissionRequest,
 } from "../../lib/types";
 
 type QueueItem =
   | { source: "codex"; request: CodexApprovalRequest }
   | { source: "copilot"; request: CopilotPermissionRequest }
-  | { source: "opencode"; request: OpenCodePermissionRequest };
+  | { source: "opencode"; request: OpenCodePermissionRequest }
+  | { source: "gemini"; request: GeminiPermissionRequest };
 
 export function ApprovalModal() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -36,10 +38,17 @@ export function ApprovalModal() {
         setQueue((prev) => [...prev, { source: "opencode", request: event.payload }]);
       },
     );
+    const unlistenGemini = listen<GeminiPermissionRequest>(
+      "gemini_permission_requested",
+      (event) => {
+        setQueue((prev) => [...prev, { source: "gemini", request: event.payload }]);
+      },
+    );
     return () => {
       unlistenCodex.then((fn) => fn());
       unlistenCopilot.then((fn) => fn());
       unlistenOpenCode.then((fn) => fn());
+      unlistenGemini.then((fn) => fn());
     };
   }, []);
 
@@ -47,29 +56,57 @@ export function ApprovalModal() {
 
   const current = queue[0];
 
-  const command =
-    current.source === "codex"
-      ? (current.request.params?.command as string | undefined)
-      : current.source === "copilot"
-        ? (current.request.command ?? undefined)
-        : (current.request.metadata?.command as string | undefined);
+  const getCommand = (item: QueueItem): string | undefined => {
+    switch (item.source) {
+      case "codex":
+        return item.request.params?.command as string | undefined;
+      case "copilot":
+        return item.request.command ?? undefined;
+      case "opencode":
+        return item.request.metadata?.command as string | undefined;
+      case "gemini": {
+        // Extract a human-readable command/tool hint from the ACP tool_call
+        // payload if available — otherwise leave blank.
+        const tool = item.request.tool_call as Record<string, unknown> | undefined;
+        const name = typeof tool?.name === "string" ? (tool.name as string) : undefined;
+        return name;
+      }
+    }
+  };
 
-  const cwd =
-    current.source === "codex" ? (current.request.params?.cwd as string | undefined) : undefined;
+  const getCwd = (item: QueueItem): string | undefined =>
+    item.source === "codex" ? (item.request.params?.cwd as string | undefined) : undefined;
 
-  const identifier =
-    current.source === "codex"
-      ? `Lane: ${current.request.thread_id.slice(0, 8)}... / Turn: ${current.request.turn_id.slice(0, 8)}...`
-      : current.source === "copilot"
-        ? `Session: ${current.request.session_id.slice(0, 8)}... / ${current.request.kind}`
-        : `Session: ${current.request.session_id.slice(0, 8)}...${current.request.tool ? ` / ${current.request.tool}` : ""}`;
+  const getIdentifier = (item: QueueItem): string => {
+    switch (item.source) {
+      case "codex":
+        return `Lane: ${item.request.thread_id.slice(0, 8)}... / Turn: ${item.request.turn_id.slice(0, 8)}...`;
+      case "copilot":
+        return `Session: ${item.request.session_id.slice(0, 8)}... / ${item.request.kind}`;
+      case "opencode":
+        return `Session: ${item.request.session_id.slice(0, 8)}...${item.request.tool ? ` / ${item.request.tool}` : ""}`;
+      case "gemini":
+        return `Session: ${item.request.session_id.slice(0, 8)}...`;
+    }
+  };
 
-  const description =
-    current.source === "codex"
-      ? current.request.method.replace("item/", "").replace("/requestApproval", "")
-      : current.source === "copilot"
-        ? `Permission: ${current.request.kind}${current.request.file_name ? ` (${current.request.file_name})` : ""}`
-        : `Permission: ${current.request.permission}${current.request.patterns.length > 0 ? ` (${current.request.patterns.join(", ")})` : ""}`;
+  const getDescription = (item: QueueItem): string => {
+    switch (item.source) {
+      case "codex":
+        return item.request.method.replace("item/", "").replace("/requestApproval", "");
+      case "copilot":
+        return `Permission: ${item.request.kind}${item.request.file_name ? ` (${item.request.file_name})` : ""}`;
+      case "opencode":
+        return `Permission: ${item.request.permission}${item.request.patterns.length > 0 ? ` (${item.request.patterns.join(", ")})` : ""}`;
+      case "gemini":
+        return "Tool request denied (SignalPR is review-only; Gemini runs in plan mode)";
+    }
+  };
+
+  const command = getCommand(current);
+  const cwd = getCwd(current);
+  const identifier = getIdentifier(current);
+  const description = getDescription(current);
 
   const handleDecision = async (decision: string) => {
     if (current.source === "codex") {
@@ -81,24 +118,34 @@ export function ApprovalModal() {
         current.request.event_id,
         v3Decision,
       );
-    } else {
+    } else if (current.source === "opencode") {
       // OpenCode uses once/always/reject
       await resolveOpenCodePermission(current.request.request_id, decision);
     }
+    // Gemini items are observational (backend already denied); no IPC call.
     setQueue((prev) => prev.slice(1));
   };
 
-  const providerLabel =
-    current.source === "codex" ? "Codex" : current.source === "copilot" ? "Copilot" : "OpenCode";
+  const providerLabel: Record<QueueItem["source"], string> = {
+    codex: "Codex",
+    copilot: "Copilot",
+    opencode: "OpenCode",
+    gemini: "Gemini",
+  };
+  const title =
+    current.source === "gemini"
+      ? `${providerLabel[current.source]} Tool Request (Denied)`
+      : `${providerLabel[current.source]} Approval Required`;
 
   const isOpenCode = current.source === "opencode";
+  const isGemini = current.source === "gemini";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
-          <ShieldAlert className="w-4 h-4 text-yellow-400" />
-          <h3 className="text-sm font-semibold text-zinc-100">{providerLabel} Approval Required</h3>
+          <ShieldAlert className={`w-4 h-4 ${isGemini ? "text-zinc-500" : "text-yellow-400"}`} />
+          <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
           {queue.length > 1 && (
             <span className="ml-auto text-xs text-zinc-500">{queue.length} pending</span>
           )}
@@ -118,8 +165,25 @@ export function ApprovalModal() {
           <p className="text-xs text-zinc-500">{identifier}</p>
         </div>
 
+        {isGemini && (
+          <div className="px-4 pb-3">
+            <p className="text-xs text-zinc-500">
+              A future release will let you review and allow individual requests. For now, Gemini
+              review lanes run under plan mode with deny-by-default tool permissions.
+            </p>
+          </div>
+        )}
+
         <div className="flex gap-2 px-4 py-3 border-t border-zinc-800">
-          {isOpenCode ? (
+          {isGemini ? (
+            <button
+              onClick={() => setQueue((prev) => prev.slice(1))}
+              className="flex items-center gap-1 bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-zinc-600 flex-1 justify-center"
+            >
+              <Check className="w-3 h-3" />
+              Acknowledge
+            </button>
+          ) : isOpenCode ? (
             <>
               <button
                 onClick={() => handleDecision("once")}

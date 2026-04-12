@@ -18,6 +18,8 @@ use crate::providers::codex_app_server::manager::CodexAppServerManager;
 use crate::providers::codex_app_server::provider::CodexAppServerProvider;
 use crate::providers::copilot::manager::CopilotManager;
 use crate::providers::copilot::provider::CopilotProvider;
+use crate::providers::gemini::manager::GeminiManager;
+use crate::providers::gemini::provider::GeminiProvider;
 use crate::providers::opencode::manager::OpenCodeManager;
 use crate::providers::opencode::provider::OpenCodeProvider;
 use crate::providers::traits::ReviewProvider;
@@ -260,6 +262,18 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
                 return Arc::new(provider);
             }
             tracing::warn!("OpenCode preferred but unavailable, trying fallback");
+        }
+        "gemini" | "gemini_cli" => {
+            // Gemini is opt-in only. It requires a paid API key (no auto-detect),
+            // and is deliberately excluded from the "auto" fallback chain to avoid
+            // silently picking a provider that incurs user billing.
+            let manager = app.state::<Arc<GeminiManager>>().inner().clone();
+            let provider = GeminiProvider::new(manager, None);
+            if provider.health_check().await.available {
+                tracing::info!("Using Gemini provider");
+                return Arc::new(provider);
+            }
+            tracing::warn!("Gemini preferred but unavailable, trying fallback");
         }
         _ => {} // "auto" — try all in order
     }

@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Activity } from "lucide-react";
-import type { CodexLaneDelta, CopilotLaneDelta, OpenCodeLaneDelta } from "../../lib/types";
+import type {
+  CodexLaneDelta,
+  CopilotLaneDelta,
+  GeminiLaneDelta,
+  OpenCodeLaneDelta,
+} from "../../lib/types";
 
 interface Props {
   laneId: string;
@@ -35,11 +40,16 @@ export function StreamingActivity({ laneId }: Props) {
       handleDelta(event.payload);
     });
 
+    const unlistenGemini = listen<GeminiLaneDelta>("gemini_lane_delta", (event) => {
+      handleDelta(event.payload);
+    });
+
     return () => {
       if (debounce) clearTimeout(debounce);
       unlistenCodex.then((fn) => fn());
       unlistenCopilot.then((fn) => fn());
       unlistenOpenCode.then((fn) => fn());
+      unlistenGemini.then((fn) => fn());
     };
   }, [laneId]);
 
