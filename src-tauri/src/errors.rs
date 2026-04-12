@@ -93,6 +93,9 @@ pub enum ProviderError {
     #[error("Gemini failed: {0}")]
     GeminiFailed(String),
 
+    #[error("Cursor failed: {0}")]
+    CursorFailed(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 
@@ -156,6 +159,17 @@ impl ProviderError {
                     || msg.contains("retry")
                     || msg.contains("timeout")
                     || msg.contains("unavailable")
+            }
+            ProviderError::CursorFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate")
+                    || msg.contains("429")
+                    || msg.contains("overloaded")
+                    || msg.contains("retry")
+                    || msg.contains("timeout")
+                    || msg.contains("503")
+                    || msg.contains("unavailable")
+                    || msg.contains("connection reset")
             }
             ProviderError::GhFailed(msg) => {
                 let msg = msg.to_lowercase();

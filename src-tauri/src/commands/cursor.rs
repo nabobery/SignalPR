@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
 use crate::errors::AppError;
-use crate::providers::gemini::manager::GeminiManager;
+use crate::providers::cursor::manager::CursorManager;
 
-/// Resolve a pending Gemini permission request from the frontend.
+/// Resolve a pending Cursor permission request from the frontend.
 ///
-/// Note: in the current MVP the Gemini manager denies every tool request
+/// Note: in the current MVP the Cursor manager denies every tool request
 /// by default (selecting the agent's `reject_once` option before
 /// broadcasting the attempt) and uses this IPC only for observability —
-/// the frontend listens to `gemini_permission_requested` events and can
+/// the frontend listens to `cursor_permission_requested` events and can
 /// acknowledge them. A future PR will gate the ACP response on the user's
 /// decision before the manager replies to the agent.
 #[tauri::command]
-pub async fn resolve_gemini_permission(
+pub async fn resolve_cursor_permission(
     _request_id: String,
     _approved: bool,
-    _manager: tauri::State<'_, Arc<GeminiManager>>,
+    _manager: tauri::State<'_, Arc<CursorManager>>,
 ) -> Result<(), AppError> {
     // TODO(phase-2): route the decision back through the manager to gate
     // the ACP `session/request_permission` response on user input. For

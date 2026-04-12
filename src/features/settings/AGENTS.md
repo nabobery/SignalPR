@@ -26,8 +26,9 @@ settings/
 
 ## GENERAL PANEL NOTES
 
-- `preferred_provider` options: `auto | codex | claude | copilot | opencode | gemini`
+- `preferred_provider` options: `auto | codex | claude | copilot | opencode | gemini | cursor`
 - Selecting `gemini` renders an inline amber warning about API-key-only auth (`GEMINI_API_KEY` or Vertex `GOOGLE_*`); links to Gemini CLI ToS and auth guide
+- Selecting `cursor` renders inline instructions for obtaining `CURSOR_API_KEY` (Cloud Agents → User API Keys at cursor.com/dashboard)
 
 ## CONVENTIONS
 

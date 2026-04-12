@@ -9,6 +9,7 @@ import {
 import type {
   CodexApprovalRequest,
   CopilotPermissionRequest,
+  CursorPermissionRequest,
   GeminiPermissionRequest,
   OpenCodePermissionRequest,
 } from "../../lib/types";
@@ -17,7 +18,8 @@ type QueueItem =
   | { source: "codex"; request: CodexApprovalRequest }
   | { source: "copilot"; request: CopilotPermissionRequest }
   | { source: "opencode"; request: OpenCodePermissionRequest }
-  | { source: "gemini"; request: GeminiPermissionRequest };
+  | { source: "gemini"; request: GeminiPermissionRequest }
+  | { source: "cursor"; request: CursorPermissionRequest };
 
 export function ApprovalModal() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -44,11 +46,18 @@ export function ApprovalModal() {
         setQueue((prev) => [...prev, { source: "gemini", request: event.payload }]);
       },
     );
+    const unlistenCursor = listen<CursorPermissionRequest>(
+      "cursor_permission_requested",
+      (event) => {
+        setQueue((prev) => [...prev, { source: "cursor", request: event.payload }]);
+      },
+    );
     return () => {
       unlistenCodex.then((fn) => fn());
       unlistenCopilot.then((fn) => fn());
       unlistenOpenCode.then((fn) => fn());
       unlistenGemini.then((fn) => fn());
+      unlistenCursor.then((fn) => fn());
     };
   }, []);
 
@@ -64,12 +73,18 @@ export function ApprovalModal() {
         return item.request.command ?? undefined;
       case "opencode":
         return item.request.metadata?.command as string | undefined;
-      case "gemini": {
-        // Extract a human-readable command/tool hint from the ACP tool_call
-        // payload if available — otherwise leave blank.
+      case "gemini":
+      case "cursor": {
+        // ACP tool-call shape:
+        //   https://agentclientprotocol.com/protocol/tool-calls
+        // `title` is the preferred UI hint; fall back to `kind` and
+        // then `name` so we never show an empty card on an unexpected
+        // shape.
         const tool = item.request.tool_call as Record<string, unknown> | undefined;
+        const title = typeof tool?.title === "string" ? (tool.title as string) : undefined;
+        const kind = typeof tool?.kind === "string" ? (tool.kind as string) : undefined;
         const name = typeof tool?.name === "string" ? (tool.name as string) : undefined;
-        return name;
+        return title ?? kind ?? name;
       }
     }
   };
@@ -87,6 +102,8 @@ export function ApprovalModal() {
         return `Session: ${item.request.session_id.slice(0, 8)}...${item.request.tool ? ` / ${item.request.tool}` : ""}`;
       case "gemini":
         return `Session: ${item.request.session_id.slice(0, 8)}...`;
+      case "cursor":
+        return `Session: ${item.request.session_id.slice(0, 8)}...`;
     }
   };
 
@@ -99,7 +116,13 @@ export function ApprovalModal() {
       case "opencode":
         return `Permission: ${item.request.permission}${item.request.patterns.length > 0 ? ` (${item.request.patterns.join(", ")})` : ""}`;
       case "gemini":
-        return "Tool request denied (SignalPR is review-only; Gemini runs in plan mode)";
+      case "cursor": {
+        const tool = item.request.tool_call as Record<string, unknown> | undefined;
+        const kind = typeof tool?.kind === "string" ? (tool.kind as string) : undefined;
+        const mode = item.source === "cursor" ? "ask" : "plan";
+        const label = kind ? `Tool request (${kind})` : "Tool request";
+        return `${label} denied — SignalPR runs in ${mode} mode (review-only)`;
+      }
     }
   };
 
@@ -122,7 +145,7 @@ export function ApprovalModal() {
       // OpenCode uses once/always/reject
       await resolveOpenCodePermission(current.request.request_id, decision);
     }
-    // Gemini items are observational (backend already denied); no IPC call.
+    // Gemini/Cursor items are observational (backend already denied); no IPC call.
     setQueue((prev) => prev.slice(1));
   };
 
@@ -131,20 +154,24 @@ export function ApprovalModal() {
     copilot: "Copilot",
     opencode: "OpenCode",
     gemini: "Gemini",
+    cursor: "Cursor",
   };
-  const title =
-    current.source === "gemini"
-      ? `${providerLabel[current.source]} Tool Request (Denied)`
-      : `${providerLabel[current.source]} Approval Required`;
+  const isObservational = current.source === "gemini" || current.source === "cursor";
+  const title = isObservational
+    ? `${providerLabel[current.source]} Tool Request (Denied)`
+    : `${providerLabel[current.source]} Approval Required`;
 
   const isOpenCode = current.source === "opencode";
-  const isGemini = current.source === "gemini";
+  const observationalModeLabel = current.source === "cursor" ? "ask" : "plan";
+  const observationalProvider = providerLabel[current.source];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
-          <ShieldAlert className={`w-4 h-4 ${isGemini ? "text-zinc-500" : "text-yellow-400"}`} />
+          <ShieldAlert
+            className={`w-4 h-4 ${isObservational ? "text-zinc-500" : "text-yellow-400"}`}
+          />
           <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
           {queue.length > 1 && (
             <span className="ml-auto text-xs text-zinc-500">{queue.length} pending</span>
@@ -165,17 +192,18 @@ export function ApprovalModal() {
           <p className="text-xs text-zinc-500">{identifier}</p>
         </div>
 
-        {isGemini && (
+        {isObservational && (
           <div className="px-4 pb-3">
             <p className="text-xs text-zinc-500">
-              A future release will let you review and allow individual requests. For now, Gemini
-              review lanes run under plan mode with deny-by-default tool permissions.
+              A future release will let you review and allow individual requests. For now,{" "}
+              {observationalProvider} review lanes run under {observationalModeLabel} mode with
+              deny-by-default tool permissions.
             </p>
           </div>
         )}
 
         <div className="flex gap-2 px-4 py-3 border-t border-zinc-800">
-          {isGemini ? (
+          {isObservational ? (
             <button
               onClick={() => setQueue((prev) => prev.slice(1))}
               className="flex items-center gap-1 bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-zinc-600 flex-1 justify-center"

@@ -2,7 +2,7 @@
 
 **Generated:** 2026-04-12
 **Branch:** main
-**Commit:** 5d5d42c
+**Commit:** 1684fc3
 
 ## OVERVIEW
 
@@ -33,13 +33,14 @@ signalpr/
 ├── src-tauri/              # Rust backend
 │   ├── src/main.rs         # Windows subsystem entry
 │   ├── src/lib.rs          # Tauri builder + command registration
-│   ├── src/commands/       # IPC handlers (15 modules + opencode.rs, copilot.rs, gemini.rs)
+│   ├── src/commands/       # IPC handlers (16 modules + opencode.rs, copilot.rs, gemini.rs, cursor.rs)
 │   ├── src/config/         # Configuration resolution (438 lines, preset inheritance)
 │   ├── src/providers/      # AI providers (Codex, Claude, Copilot, OpenCode, Mock)
 │   │   ├── jsonrpc/        # Shared JSON-RPC transport (dual framing)
 │   │   ├── copilot/        # Copilot v3 provider (manager + provider)
 │   │   ├── opencode/       # OpenCode provider (HTTP REST + SSE)
 │   │   ├── gemini/         # Gemini CLI via ACP (JSON-RPC + NDJSON framing)
+│   │   ├── cursor/         # Cursor CLI via ACP (JSON-RPC + NDJSON framing)
 │   │   ├── codex_app_server/ # Codex App Server provider
 │   │   └── mock.rs          # Mock provider (test-only, #[cfg(test)])
 │   ├── src/orchestration/  # Multi-lane review pipeline
@@ -69,7 +70,7 @@ signalpr/
 
 ## IPC COMMANDS (Frontend → Backend)
 
-33 commands across 14 handler files. See `src-tauri/src/commands/AGENTS.md` for full list.
+34 commands across 15 handler files. See `src-tauri/src/commands/AGENTS.md` for full list.
 
 Key command groups: environment, intake, review lifecycle, findings, submission, settings, diagnostics, agents, autofix, channels, codex/copilot/opencode permissions, preferences.
 
@@ -82,6 +83,8 @@ Three-layer resolution: `defaults → user settings (DB) → .signalpr.yml`
 See `src-tauri/src/config/AGENTS.md` for details.
 
 **Provider selection fallback**: preferred → codex → claude → copilot → opencode → mock
+
+Gemini and Cursor are **opt-in only** — excluded from the `"auto"` chain (paid API keys should not be silently consumed).
 
 ## CONVENTIONS
 
@@ -125,6 +128,7 @@ See `src/AGENTS.md` for full event table. Per-provider events:
 - Copilot: `copilot_lane_delta`, `copilot_permission_requested`
 - OpenCode: `opencode_lane_delta`, `opencode_permission_requested`
 - Gemini: `gemini_lane_delta`, `gemini_permission_requested` (observational — backend auto-denies)
+- Cursor: `cursor_lane_delta`, `cursor_permission_requested` (observational — backend auto-denies)
 
 ## MODULE DETAILS
 
@@ -133,6 +137,7 @@ Each Rust module has its own `AGENTS.md` — see subdirectories for specifics.
 Key complexity hotspots (>500 lines):
 - `storage/queries.rs` (1291 lines) — all SQL operations
 - `orchestration/engine.rs` (1226 lines) — pipeline orchestration
+- `providers/cursor/manager.rs` (1574 lines) — Cursor ACP process lifecycle
 - `providers/opencode/manager.rs` (666 lines) — OpenCode process lifecycle
 - `providers/copilot/manager.rs` (654 lines) — Copilot process lifecycle
 - `commands/submission.rs` (650 lines) — GitHub submission logic

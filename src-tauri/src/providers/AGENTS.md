@@ -12,7 +12,8 @@ providers/
 ├── copilot/           # GitHub Copilot v3 via JSON-RPC + Content-Length framing
 ├── opencode/          # OpenCode via HTTP REST + SSE
 ├── gemini/            # Gemini CLI via ACP (JSON-RPC + NDJSON framing)
-├── jsonrpc/           # Shared JSON-RPC 2.0 transport (Codex + Copilot + Gemini)
+├── cursor/            # Cursor CLI via ACP (JSON-RPC + NDJSON framing)
+├── jsonrpc/           # Shared JSON-RPC 2.0 transport (Codex + Copilot + Gemini + Cursor)
 ├── claude.rs          # Direct HTTP to Anthropic API
 ├── github.rs          # GitHub integration (PR fetching only)
 ├── mock.rs            # Mock provider (#[cfg(test)] only)
@@ -46,6 +47,7 @@ pub trait ReviewProvider: Send + Sync {
 | `Copilot`  | copilot/          | GitHub Copilot CLI  | JSON-RPC v3, Content-Length      |
 | `OpenCode` | opencode/         | `opencode` CLI      | HTTP REST + SSE                  |
 | `Gemini`   | gemini/           | `GEMINI_API_KEY`    | ACP JSON-RPC over stdio (ndjson) |
+| `Cursor`   | cursor/           | `CURSOR_API_KEY`    | ACP JSON-RPC over stdio (ndjson) |
 | `GitHub`   | github.rs         | `gh` CLI            | PR fetching only                 |
 | `Mock`     | mock.rs           | Built-in fixture    | `#[cfg(test)]` only              |
 
@@ -61,18 +63,13 @@ See `copilot/AGENTS.md` for v3 JSON-RPC protocol, session lifecycle, and permiss
 
 See `opencode/AGENTS.md` for HTTP REST + SSE protocol, session management, and permission flow.
 
+### Cursor Details
+
+See `cursor/AGENTS.md` for ACP protocol, session lifecycle, `fs/` sandboxing, and security posture.
+
 ### Gemini Details
 
-- Default model: `gemini-2.5-pro` (stable tier). Selectable in settings; valid IDs include `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3-pro-preview`, `gemini-3-flash-preview`, plus aliases `auto`, `pro`, `flash`, `flash-lite` (source: upstream `VALID_GEMINI_MODELS` in `packages/core/src/config/models.ts`, verified 2026-04-12).
-- Spawns `gemini --acp` as a managed child process. Override the flag via `GEMINI_ACP_FLAG=--experimental-acp` for users pinned to pre-PR-#21171 builds (merged 2026-03-05); the old flag is still accepted upstream as a deprecated alias.
-- Speaks Agent Client Protocol (ACP) — JSON-RPC 2.0 over stdio with newline-delimited framing. Wire method names are `initialize`, `authenticate`, `session/new`, `session/set_mode`, `session/set_model` (unstable), `session/prompt`, `session/cancel` (notification), `session/update` (inbound), `session/request_permission` (inbound), `fs/read_text_file` / `fs/write_text_file` (inbound).
-- **Startup handshake** is bounded by a 15-second timeout and wraps `initialize` + `authenticate`. Child stderr is drained into `tracing::debug` so the pipe never backs up even under the known stdout-pollution issue (google-gemini/gemini-cli#22647).
-- **Explicit `authenticate` call** after `initialize` using whichever `authMethods[].id` mentions "api-key" or "gemini" (maps to `AuthType.USE_GEMINI` upstream). The API key itself is inherited via the child's env; we never pass it as a JSON arg.
-- Auth: `GEMINI_API_KEY` (AI Studio) or Vertex `GOOGLE_*` env vars. **OAuth / Code-Assist is intentionally not supported** — Gemini CLI's ToS notice reserves those paths for first-party clients, so third-party harnesses must use API keys.
-- **Security posture**: after `session/new`, the provider inspects `modes` from the response and — if upstream has plan mode enabled — calls `session/set_mode` with `modeId: "plan"` (read-only). Permission requests (`session/request_permission`) are **denied by default** with a spec-compliant `{outcome: "cancelled"}` response and broadcast to the UI on `gemini_permission_requested` as observational cards. `fs/read_text_file` is proxied to the real disk; `fs/write_text_file` is refused. A follow-up PR will gate permission responses on an interactive user decision via a pending-permission oneshot and the scaffolded `resolve_gemini_permission` IPC command.
-- **Session buffers** are capped at 1 MiB per session (drops oldest bytes with UTF-8 boundary safety). After each `session/prompt` call the manager emits a synthetic `session.prompt_complete` event so `lib.rs` can clear per-lane delta buffers without having to track ACP lifecycle variants.
-- Structured output: system prompt instructs the agent to emit a single JSON object matching the output schema; provider parses the accumulated `agent_message_chunk` text with markdown-fence and leading-prose tolerance.
-- **Opt-in only**: Gemini is reachable only when the user explicitly selects it as their preferred provider — it does not participate in the `"auto"` fallback chain, since a paid API key should not be silently selected.
+See `gemini/AGENTS.md` for ACP protocol, session lifecycle, `authenticate` handshake, and security posture.
 
 ### Claude Provider Details
 
@@ -83,7 +80,7 @@ See `opencode/AGENTS.md` for HTTP REST + SSE protocol, session management, and p
 
 ### JSON-RPC Shared Transport (`jsonrpc/`)
 
-Shared JSON-RPC 2.0 wire protocol used by Codex App Server, Copilot, and Gemini:
+Shared JSON-RPC 2.0 wire protocol used by Codex App Server, Copilot, Gemini, and Cursor:
 
 - `types.rs` — `OutboundMessage`, `InboundMessage`, `FramingMode` enum
 - `transport.rs` — Bidirectional transport with two framing modes:
@@ -106,5 +103,6 @@ Shared JSON-RPC 2.0 wire protocol used by Codex App Server, Copilot, and Gemini:
 - Use `CancellationToken` for cancellable operations
 - Return `ProviderError` (not `AppError`) from providers
 - Health checks must not fail — return degraded status
-- Streaming providers emit `codex_lane_delta` events
-- Approval flows use `codex_approval_requested` event
+- Streaming providers emit `{provider}_lane_delta` events (e.g. `cursor_lane_delta`)
+- Permission/approval flows emit `{provider}_permission_requested` events
+- Gemini and Cursor are **observational only** — backend auto-denies; UI shows dismiss-only cards

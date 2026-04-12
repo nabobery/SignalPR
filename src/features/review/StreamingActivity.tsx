@@ -4,6 +4,7 @@ import { Activity } from "lucide-react";
 import type {
   CodexLaneDelta,
   CopilotLaneDelta,
+  CursorLaneDelta,
   GeminiLaneDelta,
   OpenCodeLaneDelta,
 } from "../../lib/types";
@@ -44,12 +45,17 @@ export function StreamingActivity({ laneId }: Props) {
       handleDelta(event.payload);
     });
 
+    const unlistenCursor = listen<CursorLaneDelta>("cursor_lane_delta", (event) => {
+      handleDelta(event.payload);
+    });
+
     return () => {
       if (debounce) clearTimeout(debounce);
       unlistenCodex.then((fn) => fn());
       unlistenCopilot.then((fn) => fn());
       unlistenOpenCode.then((fn) => fn());
       unlistenGemini.then((fn) => fn());
+      unlistenCursor.then((fn) => fn());
     };
   }, [laneId]);
 

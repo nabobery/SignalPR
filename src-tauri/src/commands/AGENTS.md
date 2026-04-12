@@ -20,6 +20,7 @@
 | `copilot.rs`     | `resolve_copilot_permission`                           | Copilot v3 permission approval    |
 | `opencode.rs`    | `resolve_opencode_permission`                          | OpenCode permission reply         |
 | `gemini.rs`      | `resolve_gemini_permission`                            | Gemini permission stub (no-op; future: interactive approval gate) |
+| `cursor.rs`      | `resolve_cursor_permission`                            | Cursor permission stub (no-op; future: interactive approval gate) |
 | `channels.rs`    | `configure_channel`, `remove_channel`, `get_channel_status`, etc. | Channel management |
 | `preferences.rs` | `get_preferences`                                      | Reviewer preference summaries     |
 

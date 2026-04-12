@@ -51,4 +51,5 @@ pub struct ResolvedConfig {
 - Unknown config fields ignored (forward compatibility)
 - Invalid values fall back to defaults silently
 - Custom agents loaded from `custom_agent_*` settings prefix
-- Provider selection: preferred → codex → claude → mock
+- Provider selection: preferred → codex → claude → copilot → opencode → mock
+- Gemini and Cursor are excluded from `"auto"` fallback — only selected when `preferred_provider` is explicitly set to them

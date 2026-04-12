@@ -137,6 +137,7 @@ export function GeneralPanel() {
           <option value="copilot">Copilot</option>
           <option value="opencode">OpenCode</option>
           <option value="gemini">Gemini</option>
+          <option value="cursor">Cursor</option>
         </select>
         <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
         {form.preferred_provider === "gemini" && (
@@ -166,6 +167,43 @@ export function GeneralPanel() {
                 authentication guide
               </a>{" "}
               for setup. Review lanes run in plan mode with deny-by-default tool permissions.
+            </p>
+          </div>
+        )}
+        {form.preferred_provider === "cursor" && (
+          <div className="text-amber-400 text-xs mt-2 space-y-1">
+            <p>
+              Cursor authenticates via API key. Generate one from the Cursor Dashboard (Cloud Agents
+              → User API Keys) and export <code className="text-amber-300">CURSOR_API_KEY</code>{" "}
+              before launching SignalPR.
+            </p>
+            <p>
+              Install the Cursor CLI with{" "}
+              <code className="text-amber-300">curl https://cursor.com/install -fsS | bash</code>.
+              SignalPR embeds Cursor via <code className="text-amber-300">agent acp</code> (an
+              advanced, hidden subcommand) and speaks the Agent Client Protocol over stdio. Review
+              lanes run in ask mode with deny-by-default tool permissions and filesystem reads
+              sandboxed to the PR worktree.
+            </p>
+            <p>
+              Docs:{" "}
+              <a
+                href="https://cursor.com/docs/cli/acp"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-amber-300"
+              >
+                Cursor ACP
+              </a>
+              {" · "}
+              <a
+                href="https://cursor.com/docs/cli/reference/authentication"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-amber-300"
+              >
+                Authentication
+              </a>
             </p>
           </div>
         )}

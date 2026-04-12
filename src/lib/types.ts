@@ -211,9 +211,11 @@ export interface OpenCodeLaneDelta {
 }
 
 // Gemini (ACP) permission request — currently observational only:
-// the backend auto-approves the first option so the agent can proceed.
-// A future PR will gate the approval on a user decision via
-// `resolve_gemini_permission`.
+// the backend denies every tool request by selecting the agent's
+// `reject_once` option before broadcasting the attempt to the UI, so
+// the card is a "what did the agent just try to do" log, not an
+// actionable prompt. A future PR will gate the ACP response on a user
+// decision via `resolve_gemini_permission`.
 export interface GeminiPermissionRequest {
   session_id: string;
   request_id: string;
@@ -223,6 +225,25 @@ export interface GeminiPermissionRequest {
 
 // Gemini ACP streaming delta event
 export interface GeminiLaneDelta {
+  lane_id: string;
+  delta: string;
+  buffer: string;
+}
+
+// Cursor (ACP) permission request — currently observational only:
+// the backend denies every tool request by selecting the agent's
+// `reject_once` option and broadcasts the attempt so the UI can
+// surface what the agent tried to do. A future PR will gate the ACP
+// response on a user decision via `resolve_cursor_permission`.
+export interface CursorPermissionRequest {
+  session_id: string;
+  request_id: string;
+  tool_call: Record<string, unknown>;
+  options: unknown;
+}
+
+// Cursor ACP streaming delta event
+export interface CursorLaneDelta {
   lane_id: string;
   delta: string;
   buffer: string;

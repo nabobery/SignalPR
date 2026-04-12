@@ -18,6 +18,8 @@ use crate::providers::codex_app_server::manager::CodexAppServerManager;
 use crate::providers::codex_app_server::provider::CodexAppServerProvider;
 use crate::providers::copilot::manager::CopilotManager;
 use crate::providers::copilot::provider::CopilotProvider;
+use crate::providers::cursor::manager::CursorManager;
+use crate::providers::cursor::provider::CursorProvider;
 use crate::providers::gemini::manager::GeminiManager;
 use crate::providers::gemini::provider::GeminiProvider;
 use crate::providers::opencode::manager::OpenCodeManager;
@@ -274,6 +276,19 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
                 return Arc::new(provider);
             }
             tracing::warn!("Gemini preferred but unavailable, trying fallback");
+        }
+        "cursor" | "cursor_cli" => {
+            // Cursor is opt-in only. It requires a paid Cursor subscription
+            // and a CURSOR_API_KEY; deliberately excluded from the "auto"
+            // fallback chain to avoid silently picking a provider that
+            // incurs user billing.
+            let manager = app.state::<Arc<CursorManager>>().inner().clone();
+            let provider = CursorProvider::new(manager, None);
+            if provider.health_check().await.available {
+                tracing::info!("Using Cursor provider");
+                return Arc::new(provider);
+            }
+            tracing::warn!("Cursor preferred but unavailable, trying fallback");
         }
         _ => {} // "auto" — try all in order
     }

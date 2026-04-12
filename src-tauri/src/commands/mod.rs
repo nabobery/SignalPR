@@ -3,6 +3,7 @@ pub mod autofix;
 pub mod channels;
 pub mod codex;
 pub mod copilot;
+pub mod cursor;
 pub mod diagnostics;
 pub mod environment;
 pub mod findings;

@@ -43,12 +43,14 @@ ReviewContext.Provider (ReviewWorkspace)
 - `opencode_permission_requested` — OpenCode permission approval queue
 - `gemini_lane_delta` — Real-time Gemini streaming per lane
 - `gemini_permission_requested` — Gemini tool request (observational; backend already denied)
+- `cursor_lane_delta` — Real-time Cursor streaming per lane
+- `cursor_permission_requested` — Cursor tool request (observational; backend already denied)
 
 ## STREAMING (`StreamingActivity.tsx`)
 
 Shows last meaningful line from streaming buffer per lane:
 
-- Listens to `codex_lane_delta`, `copilot_lane_delta`, `opencode_lane_delta`, `gemini_lane_delta` — all filtered by `laneId`
+- Listens to `codex_lane_delta`, `copilot_lane_delta`, `opencode_lane_delta`, `gemini_lane_delta`, `cursor_lane_delta` — all filtered by `laneId`
 - Debounces 100ms to avoid flicker
 - Truncates at 120 chars with ellipsis
 - Icon: `Activity` from lucide-react
@@ -62,6 +64,7 @@ Modal queue for interactive approval/permission requests (multi-provider):
 - Copilot: shows permission kind, event details → `resolveCopilotPermission(sessionId, eventId, allow)`
 - OpenCode: shows permission message → `resolveOpenCodePermission(requestId, reply)`
 - Gemini: **observational only** — shows "Tool request denied" + Acknowledge button; no IPC call (backend auto-denied before event fires)
+- Cursor: **observational only** — same dismiss-only card pattern as Gemini; `resolve_cursor_permission` IPC is a no-op stub
 
 ## CONVENTIONS
 

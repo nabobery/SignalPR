@@ -443,13 +443,18 @@ impl GeminiManager {
         match req.method.as_str() {
             "session/request_permission" => {
                 // Deny-by-default: SignalPR is a review tool, not an editor.
-                // Every tool request is denied with spec-compliant
-                // `{outcome: "cancelled"}`. The request is still broadcast to
-                // the UI so users can see what the agent tried to do.
+                // Per ACP (https://agentclientprotocol.com/protocol/tool-calls),
+                // user-driven denial must be represented as
+                // `{outcome: {outcome: "selected", optionId: "<reject_once id>"}}`;
+                // `cancelled` is reserved for prompt-turn cancellation. We
+                // therefore pick the first `reject_once`/`reject_always`
+                // option advertised by the agent and fall back to
+                // `cancelled` only when no rejection option exists.
                 //
                 // A follow-up PR will add a pending-permission oneshot map +
                 // `resolve_gemini_permission` IPC to allow interactive
                 // approvals; this is scaffolded via `permission_tx` already.
+                let mut rejection_result = json!({ "outcome": { "outcome": "cancelled" } });
                 if let Some(params) = req.params.as_ref() {
                     let session_id = params
                         .get("sessionId")
@@ -463,9 +468,29 @@ impl GeminiManager {
                         .cloned()
                         .unwrap_or(Value::Array(vec![]));
 
+                    if let Some(option_id) = pick_rejection_option_id(&options) {
+                        rejection_result = json!({
+                            "outcome": {
+                                "outcome": "selected",
+                                "optionId": option_id
+                            }
+                        });
+                    } else {
+                        warn!(
+                            "session/request_permission had no rejection option; \
+                             responding cancelled (session={})",
+                            session_id
+                        );
+                    }
+
                     warn!(
-                        "Gemini permission denied by default (session={}, tool_call={})",
-                        session_id, tool_call
+                        "Gemini permission denied by default (session={}, \
+                         tool_kind={})",
+                        session_id,
+                        tool_call
+                            .get("kind")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("<unknown>")
                     );
 
                     let _ = permission_tx.send(GeminiPermissionRequest {
@@ -476,9 +501,7 @@ impl GeminiManager {
                     });
                 }
 
-                let _ = transport
-                    .send_response(req.id, json!({ "outcome": { "outcome": "cancelled" } }))
-                    .await;
+                let _ = transport.send_response(req.id, rejection_result).await;
             }
             "fs/read_text_file" => {
                 let result = Self::handle_read_text_file(req.params.as_ref()).await;
@@ -771,6 +794,32 @@ impl GeminiManager {
         self.session_by_lane.lock().await.clear();
         self.session_buffers.lock().await.clear();
     }
+}
+
+/// Pick a spec-compliant `optionId` to use in a `reject_once`-shaped
+/// permission denial. Prefers `kind == "reject_once"`, then
+/// `"reject_always"`, then any option whose id contains "reject". Returns
+/// `None` when no rejection option is advertised — caller falls back to
+/// `{outcome: "cancelled"}` as a last resort.
+fn pick_rejection_option_id(options: &Value) -> Option<String> {
+    let arr = options.as_array()?;
+    for preferred in ["reject_once", "reject_always"] {
+        for opt in arr {
+            if opt.get("kind").and_then(|v| v.as_str()) == Some(preferred) {
+                if let Some(id) = opt.get("optionId").and_then(|v| v.as_str()) {
+                    return Some(id.to_string());
+                }
+            }
+        }
+    }
+    for opt in arr {
+        if let Some(id) = opt.get("optionId").and_then(|v| v.as_str()) {
+            if id.to_lowercase().contains("reject") {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Normalize a JSON-RPC request id to a plain string. For `Value::String`,

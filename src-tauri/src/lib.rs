@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use channels::manager::ChannelManager;
 use providers::codex_app_server::manager::CodexAppServerManager;
 use providers::copilot::manager::CopilotManager;
+use providers::cursor::manager::CursorManager;
 use providers::gemini::manager::GeminiManager;
 use providers::opencode::manager::OpenCodeManager;
 use serde::Serialize;
@@ -57,14 +58,28 @@ struct GeminiLaneDelta {
     buffer: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct CursorLaneDelta {
+    lane_id: String,
+    delta: String,
+    buffer: String,
+}
+
 fn push_capped(buf: &mut String, delta: &str, max_len: usize) {
     if delta.is_empty() {
         return;
     }
     buf.push_str(delta);
     if buf.len() > max_len {
+        // Walk forward from the overflow byte to the next codepoint
+        // boundary so we never split a multi-byte sequence (CJK, emoji).
+        // `String::drain(..n)` panics when `n` is mid-codepoint.
         let overflow = buf.len() - max_len;
-        buf.drain(..overflow);
+        let mut drop = overflow;
+        while drop < buf.len() && !buf.is_char_boundary(drop) {
+            drop += 1;
+        }
+        buf.drain(..drop);
     }
 }
 
@@ -115,6 +130,11 @@ pub fn run() {
             // API-key auth only — OAuth is not supported (Google ToS restriction).
             let gemini_manager = Arc::new(GeminiManager::new());
             app.manage(gemini_manager);
+
+            // Shared Cursor manager (lazy-started on first use).
+            // API-key auth only — CURSOR_API_KEY must be set.
+            let cursor_manager = Arc::new(CursorManager::new());
+            app.manage(cursor_manager);
 
             // Channel listener lifecycle tokens
             app.manage(ChannelListenerTokens(tokio::sync::Mutex::new(
@@ -462,6 +482,66 @@ pub fn run() {
                 });
             }
 
+            // Forward Cursor permission requests to the frontend.
+            {
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<CursorManager>>().inner().clone();
+                let mut rx = manager.subscribe_permissions();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(req) => {
+                                let _ = app_handle.emit("cursor_permission_requested", req);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
+                    }
+                });
+            }
+
+            // Forward Cursor streaming deltas to the frontend (lane-scoped).
+            {
+                const MAX_LANE_BUFFER: usize = 16 * 1024;
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<CursorManager>>().inner().clone();
+                let mut rx = manager.subscribe_events();
+                tauri::async_runtime::spawn(async move {
+                    let mut buffers: HashMap<String, String> = HashMap::new();
+                    loop {
+                        let event = match rx.recv().await {
+                            Ok(e) => e,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        };
+
+                        match event.event_type.as_str() {
+                            "agent_message_chunk" if !event.delta.is_empty() => {
+                                let buf = buffers.entry(event.session_id.clone()).or_default();
+                                push_capped(buf, &event.delta, MAX_LANE_BUFFER);
+
+                                let lane_id = manager
+                                    .lane_for_session(&event.session_id)
+                                    .await
+                                    .unwrap_or_else(|| event.session_id.clone());
+                                let _ = app_handle.emit(
+                                    "cursor_lane_delta",
+                                    CursorLaneDelta {
+                                        lane_id,
+                                        delta: event.delta.clone(),
+                                        buffer: buf.clone(),
+                                    },
+                                );
+                            }
+                            "session.prompt_complete" => {
+                                buffers.remove(&event.session_id);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+
             // Set up system tray
             tray::setup_tray(app.handle())?;
 
@@ -548,6 +628,7 @@ pub fn run() {
             commands::copilot::resolve_copilot_permission,
             commands::opencode::resolve_opencode_permission,
             commands::gemini::resolve_gemini_permission,
+            commands::cursor::resolve_cursor_permission,
             commands::agents::get_agent_definitions,
             commands::agents::save_agent_definition,
             commands::agents::delete_agent_definition,
@@ -560,4 +641,65 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_push_capped_ascii_truncation_unchanged() {
+        let mut buf = String::from("abcdef");
+        push_capped(&mut buf, "ghij", 5);
+        // Total would be 10 bytes, cap is 5 — oldest 5 bytes drop.
+        assert_eq!(buf.len(), 5);
+        assert_eq!(buf, "fghij");
+    }
+
+    #[test]
+    fn test_push_capped_empty_noop() {
+        let mut buf = String::from("hello");
+        push_capped(&mut buf, "", 2);
+        assert_eq!(buf, "hello");
+    }
+
+    #[test]
+    fn test_push_capped_under_cap_no_truncation() {
+        let mut buf = String::from("hi");
+        push_capped(&mut buf, " there", 100);
+        assert_eq!(buf, "hi there");
+    }
+
+    #[test]
+    fn test_push_capped_cjk_no_panic() {
+        // 10_000 three-byte codepoints; cap at 1024 bytes. Byte boundary
+        // would land mid-codepoint if we used a naive drain.
+        let mut buf = String::new();
+        let delta = "日".repeat(10_000);
+        push_capped(&mut buf, &delta, 1024);
+        assert!(buf.len() <= 1024 + 3, "buf len {}", buf.len());
+        // The trailing content must be valid UTF-8 and end on a `日`.
+        assert!(buf.chars().all(|c| c == '日'));
+    }
+
+    #[test]
+    fn test_push_capped_emoji_no_panic() {
+        // 4-byte emoji codepoints — same boundary hazard.
+        let mut buf = String::new();
+        let delta = "😀".repeat(10_000);
+        push_capped(&mut buf, &delta, 1024);
+        assert!(buf.len() <= 1024 + 4, "buf len {}", buf.len());
+        assert!(buf.chars().all(|c| c == '😀'));
+    }
+
+    #[test]
+    fn test_push_capped_repeated_appends_stay_bounded() {
+        let mut buf = String::new();
+        for _ in 0..100 {
+            push_capped(&mut buf, "日本語", 16);
+        }
+        // Must never exceed cap by more than one codepoint width.
+        assert!(buf.len() <= 16 + 3);
+        assert!(!buf.is_empty());
+    }
 }
