@@ -32,7 +32,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking", "stream"] }
 tauri-plugin-notification = "2"
 serde_yml = "0.0.12"
-tokio-retry2 = { version = "0.5", features = ["jitter"] }
+tokio-retry2 = { version = "0.9", features = ["jitter"] }
 sha2 = "0.10"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
