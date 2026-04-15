@@ -205,7 +205,7 @@ mod tests {
         let json = serde_json::to_string(&err).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["code"], "database_error");
-        assert!(parsed["message"].as_str().unwrap().len() > 0);
+        assert!(!parsed["message"].as_str().unwrap().is_empty());
     }
 
     #[test]

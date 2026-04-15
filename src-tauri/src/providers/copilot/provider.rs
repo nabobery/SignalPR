@@ -263,6 +263,6 @@ mod tests {
         let provider = CopilotProvider::new(manager, None);
         let health = provider.health_check().await;
         // Just verify it doesn't panic
-        assert!(health.available || !health.available);
+        let _ = health.available;
     }
 }

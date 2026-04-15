@@ -81,6 +81,7 @@ diff --git a/src/db.rs b/src/db.rs
      }
 "#;
 
+    #[allow(clippy::too_many_arguments)]
     fn raw(
         title: &str,
         body: &str,

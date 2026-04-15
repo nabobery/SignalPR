@@ -214,6 +214,6 @@ mod tests {
         let manager = Arc::new(OpenCodeManager::new());
         let provider = OpenCodeProvider::new(manager, None);
         let health = provider.health_check().await;
-        assert!(health.available || !health.available);
+        let _ = health.available;
     }
 }

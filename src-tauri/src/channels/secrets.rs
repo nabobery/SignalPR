@@ -59,7 +59,7 @@ pub fn store_token(source: &str, token: &str) -> Result<(), AppError> {
     {
         let account = account_for_source(source)?;
         test_store::set(account, token);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(test))]
@@ -77,7 +77,7 @@ pub fn get_token(source: &str) -> Result<Option<String>, AppError> {
     #[cfg(test)]
     {
         let account = account_for_source(source)?;
-        return Ok(test_store::get(account));
+        Ok(test_store::get(account))
     }
 
     #[cfg(not(test))]
@@ -97,7 +97,7 @@ pub fn delete_token(source: &str) -> Result<(), AppError> {
     {
         let account = account_for_source(source)?;
         test_store::delete(account);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(test))]

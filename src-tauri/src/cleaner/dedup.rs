@@ -103,6 +103,7 @@ fn jaccard_similarity(a: &str, b: &str) -> f64 {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
     fn make_finding(
         id: &str,
         file: Option<&str>,
