@@ -18,10 +18,6 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  NODE_VERSION: '22'
-  PNPM_VERSION: '9'
-
 jobs:
   create-release:
     name: Create draft release
@@ -30,7 +26,7 @@ jobs:
       release_id: ${{ steps.create.outputs.release_id }}
       tag_name: ${{ steps.resolve.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Resolve tag name
         id: resolve
@@ -78,7 +74,7 @@ jobs:
             rust-target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Linux system dependencies
         if: startsWith(matrix.platform, 'ubuntu-')
@@ -90,13 +86,11 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable

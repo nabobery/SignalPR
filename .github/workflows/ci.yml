@@ -3,22 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
   workflow_dispatch:
 
 permissions:
@@ -28,24 +14,48 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  NODE_VERSION: '22'
-  PNPM_VERSION: '9'
-
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-22.04
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'src/**'
+              - 'public/**'
+              - 'index.html'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'tsconfig*.json'
+              - 'vite.config.*'
+              - 'eslint.config.*'
+              - '.prettierrc*'
+              - '.github/workflows/ci.yml'
+            rust:
+              - 'src-tauri/**'
+              - '.github/workflows/ci.yml'
+
   frontend:
     name: Frontend (lint, typecheck, test, build)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: .node-version
           cache: pnpm
 
       - name: Install dependencies
@@ -68,9 +78,11 @@ jobs:
 
   rust:
     name: Rust (fmt, clippy, test)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Linux system dependencies
         run: |
@@ -97,3 +109,24 @@ jobs:
 
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  ci-ok:
+    name: CI OK
+    needs: [changes, frontend, rust]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Verify all required jobs passed
+        run: |
+          frontend="${{ needs.frontend.result }}"
+          rust="${{ needs.rust.result }}"
+          echo "frontend=$frontend rust=$rust"
+          if [[ "$frontend" == "failure" || "$frontend" == "cancelled" ]]; then
+            echo "Frontend job failed"
+            exit 1
+          fi
+          if [[ "$rust" == "failure" || "$rust" == "cancelled" ]]; then
+            echo "Rust job failed"
+            exit 1
+          fi
+          echo "All required checks passed (skipped jobs count as success)."
