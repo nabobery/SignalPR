@@ -21,6 +21,7 @@ use providers::copilot::manager::CopilotManager;
 use providers::cursor::manager::CursorManager;
 use providers::gemini::manager::GeminiManager;
 use providers::opencode::manager::OpenCodeManager;
+use providers::pi::manager::PiManager;
 use serde::Serialize;
 
 use commands::channels::ChannelListenerTokens;
@@ -60,6 +61,13 @@ struct GeminiLaneDelta {
 
 #[derive(Debug, Clone, Serialize)]
 struct CursorLaneDelta {
+    lane_id: String,
+    delta: String,
+    buffer: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PiLaneDelta {
     lane_id: String,
     delta: String,
     buffer: String,
@@ -135,6 +143,11 @@ pub fn run() {
             // API-key auth only — CURSOR_API_KEY must be set.
             let cursor_manager = Arc::new(CursorManager::new());
             app.manage(cursor_manager);
+
+            // Shared PI manager (lazy-started on first use).
+            // Requires `pi` CLI installed and API keys configured in PI's config.
+            let pi_manager = Arc::new(PiManager::new());
+            app.manage(pi_manager);
 
             // Channel listener lifecycle tokens
             app.manage(ChannelListenerTokens(tokio::sync::Mutex::new(
@@ -535,6 +548,47 @@ pub fn run() {
                             }
                             "session.prompt_complete" => {
                                 buffers.remove(&event.session_id);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+
+            // Forward PI streaming deltas to the frontend (lane-scoped).
+            // PI has no permission model, so no permission forwarding block.
+            {
+                const MAX_LANE_BUFFER: usize = 16 * 1024;
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<PiManager>>().inner().clone();
+                let mut rx = manager.subscribe_events();
+                tauri::async_runtime::spawn(async move {
+                    let mut buffers: HashMap<String, String> = HashMap::new();
+                    loop {
+                        let event = match rx.recv().await {
+                            Ok(e) => e,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        };
+
+                        match event.event_type.as_str() {
+                            "message_update" if !event.delta.is_empty() => {
+                                let buf = buffers.entry(event.lane_id.clone()).or_default();
+                                push_capped(buf, &event.delta, MAX_LANE_BUFFER);
+                                let _ = app_handle.emit(
+                                    "pi_lane_delta",
+                                    PiLaneDelta {
+                                        lane_id: event.lane_id.clone(),
+                                        delta: event.delta.clone(),
+                                        buffer: buf.clone(),
+                                    },
+                                );
+                            }
+                            "agent_end" => {
+                                // Clear per-lane buffers when the full agent
+                                // run finishes (not on turn_end, since PI may
+                                // do multi-turn tool loops).
+                                buffers.remove(&event.lane_id);
                             }
                             _ => {}
                         }

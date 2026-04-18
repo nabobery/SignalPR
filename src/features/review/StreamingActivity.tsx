@@ -7,6 +7,7 @@ import type {
   CursorLaneDelta,
   GeminiLaneDelta,
   OpenCodeLaneDelta,
+  PiLaneDelta,
 } from "../../lib/types";
 
 interface Props {
@@ -49,6 +50,10 @@ export function StreamingActivity({ laneId }: Props) {
       handleDelta(event.payload);
     });
 
+    const unlistenPi = listen<PiLaneDelta>("pi_lane_delta", (event) => {
+      handleDelta(event.payload);
+    });
+
     return () => {
       if (debounce) clearTimeout(debounce);
       unlistenCodex.then((fn) => fn());
@@ -56,6 +61,7 @@ export function StreamingActivity({ laneId }: Props) {
       unlistenOpenCode.then((fn) => fn());
       unlistenGemini.then((fn) => fn());
       unlistenCursor.then((fn) => fn());
+      unlistenPi.then((fn) => fn());
     };
   }, [laneId]);
 

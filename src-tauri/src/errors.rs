@@ -96,6 +96,9 @@ pub enum ProviderError {
     #[error("Cursor failed: {0}")]
     CursorFailed(String),
 
+    #[error("PI agent failed: {0}")]
+    PiFailed(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 
@@ -170,6 +173,16 @@ impl ProviderError {
                     || msg.contains("503")
                     || msg.contains("unavailable")
                     || msg.contains("connection reset")
+            }
+            ProviderError::PiFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate")
+                    || msg.contains("429")
+                    || msg.contains("overloaded")
+                    || msg.contains("retry")
+                    || msg.contains("timeout")
+                    || msg.contains("503")
+                    || msg.contains("connection refused")
             }
             ProviderError::GhFailed(msg) => {
                 let msg = msg.to_lowercase();
@@ -264,6 +277,20 @@ mod tests {
         assert!(!ProviderError::GeminiFailed("invalid api key".into()).is_transient());
         assert!(!ProviderError::GeminiFailed("auth failed".into()).is_transient());
         assert!(!ProviderError::GeminiFailed("permission denied".into()).is_transient());
+    }
+
+    #[test]
+    fn test_pi_failed_transient_classification() {
+        assert!(ProviderError::PiFailed("rate limit exceeded".into()).is_transient());
+        assert!(ProviderError::PiFailed("429 too many requests".into()).is_transient());
+        assert!(ProviderError::PiFailed("server overloaded".into()).is_transient());
+        assert!(ProviderError::PiFailed("please retry".into()).is_transient());
+        assert!(ProviderError::PiFailed("request timeout".into()).is_transient());
+        assert!(ProviderError::PiFailed("503 service unavailable".into()).is_transient());
+        assert!(ProviderError::PiFailed("connection refused".into()).is_transient());
+        assert!(!ProviderError::PiFailed("invalid model".into()).is_transient());
+        assert!(!ProviderError::PiFailed("auth failed".into()).is_transient());
+        assert!(!ProviderError::PiFailed("session not found".into()).is_transient());
     }
 
     #[test]

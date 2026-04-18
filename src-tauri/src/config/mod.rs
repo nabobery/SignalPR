@@ -24,6 +24,8 @@ use crate::providers::gemini::manager::GeminiManager;
 use crate::providers::gemini::provider::GeminiProvider;
 use crate::providers::opencode::manager::OpenCodeManager;
 use crate::providers::opencode::provider::OpenCodeProvider;
+use crate::providers::pi::manager::PiManager;
+use crate::providers::pi::provider::PiProvider;
 use crate::providers::traits::ReviewProvider;
 use crate::storage::queries;
 
@@ -289,6 +291,19 @@ pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn Revie
                 return Arc::new(provider);
             }
             tracing::warn!("Cursor preferred but unavailable, trying fallback");
+        }
+        "pi" | "pi_cli" => {
+            // PI is opt-in only. It requires the `pi` CLI to be installed
+            // (`npm i -g @mariozechner/pi-coding-agent`) and API keys
+            // configured in PI's own config; deliberately excluded from
+            // the "auto" fallback chain.
+            let manager = app.state::<Arc<PiManager>>().inner().clone();
+            let provider = PiProvider::new(manager, None);
+            if provider.health_check().await.available {
+                tracing::info!("Using PI provider");
+                return Arc::new(provider);
+            }
+            tracing::warn!("PI preferred but unavailable, trying fallback");
         }
         _ => {} // "auto" — try all in order
     }

@@ -45,12 +45,13 @@ ReviewContext.Provider (ReviewWorkspace)
 - `gemini_permission_requested` — Gemini tool request (observational; backend already denied)
 - `cursor_lane_delta` — Real-time Cursor streaming per lane
 - `cursor_permission_requested` — Cursor tool request (observational; backend already denied)
+- `pi_lane_delta` — Real-time PI streaming per lane
 
 ## STREAMING (`StreamingActivity.tsx`)
 
 Shows last meaningful line from streaming buffer per lane:
 
-- Listens to `codex_lane_delta`, `copilot_lane_delta`, `opencode_lane_delta`, `gemini_lane_delta`, `cursor_lane_delta` — all filtered by `laneId`
+- Listens to `codex_lane_delta`, `copilot_lane_delta`, `opencode_lane_delta`, `gemini_lane_delta`, `cursor_lane_delta`, `pi_lane_delta` — all filtered by `laneId`
 - Debounces 100ms to avoid flicker
 - Truncates at 120 chars with ellipsis
 - Icon: `Activity` from lucide-react

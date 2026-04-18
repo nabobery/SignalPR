@@ -9,5 +9,6 @@ pub mod jsonrpc;
 #[cfg(test)]
 pub mod mock;
 pub mod opencode;
+pub mod pi;
 pub mod prompts;
 pub mod traits;

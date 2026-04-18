@@ -42,6 +42,7 @@ signalpr/
 │   │   ├── gemini/         # Gemini CLI via ACP (JSON-RPC + NDJSON framing)
 │   │   ├── cursor/         # Cursor CLI via ACP (JSON-RPC + NDJSON framing)
 │   │   ├── codex_app_server/ # Codex App Server provider
+│   │   ├── pi/             # PI Agent SDK (pi --mode rpc, LF-JSONL, single-session)
 │   │   └── mock.rs          # Mock provider (test-only, #[cfg(test)])
 │   ├── src/orchestration/  # Multi-lane review pipeline
 │   ├── src/storage/        # SQLite layer
@@ -129,6 +130,7 @@ See `src/AGENTS.md` for full event table. Per-provider events:
 - OpenCode: `opencode_lane_delta`, `opencode_permission_requested`
 - Gemini: `gemini_lane_delta`, `gemini_permission_requested` (observational — backend auto-denies)
 - Cursor: `cursor_lane_delta`, `cursor_permission_requested` (observational — backend auto-denies)
+- PI: `pi_lane_delta` (streaming text deltas; no permission requests — PI doesn't expose tool approval)
 
 ## MODULE DETAILS
 
@@ -136,8 +138,9 @@ Each Rust module has its own `AGENTS.md` — see subdirectories for specifics.
 
 Key complexity hotspots (>500 lines):
 - `storage/queries.rs` (1291 lines) — all SQL operations
-- `orchestration/engine.rs` (1226 lines) — pipeline orchestration
+- `orchestration/engine.rs` (1234 lines) — pipeline orchestration
 - `providers/cursor/manager.rs` (1574 lines) — Cursor ACP process lifecycle
+- `providers/pi/manager.rs` (906 lines) — PI RPC process lifecycle (single-session serialization)
 - `providers/opencode/manager.rs` (666 lines) — OpenCode process lifecycle
 - `providers/copilot/manager.rs` (654 lines) — Copilot process lifecycle
 - `commands/submission.rs` (650 lines) — GitHub submission logic

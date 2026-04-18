@@ -68,7 +68,7 @@ Single batched review posted to GitHub
 
 **Human-in-the-loop workspace** — A full review workspace with a file tree, diff view, and Signal Board. Edit finding text, change severity, suppress noise, or rewrite comments before anything reaches GitHub.
 
-**Multi-provider support** — Works with Codex (CLI and App Server), GitHub Copilot, OpenCode, Claude, Gemini, and Cursor. Providers stream findings to the UI in real time.
+**Multi-provider support** — Works with Codex (CLI and App Server), GitHub Copilot, OpenCode, Claude, Gemini, Cursor, and PI. Providers stream findings to the UI in real time.
 
 **Local-first and private** — No SignalPR cloud backend. State is stored in local SQLite. Credentials stay in your OS keychain. The app only routes code to the providers you explicitly choose.
 
@@ -88,7 +88,7 @@ Single batched review posted to GitHub
 | IPC | Tauri commands + events |
 | Persistence | SQLite (rusqlite) |
 | Credentials | OS keychain (keyring) |
-| AI providers | Codex, GitHub Copilot, OpenCode, Claude, Gemini, Cursor |
+| AI providers | Codex, GitHub Copilot, OpenCode, Claude, Gemini, Cursor, PI |
 | PR fetching | GitHub CLI (`gh`) |
 | Streaming | WebSocket (tokio-tungstenite) + SSE |
 | HTTP client | reqwest |
@@ -137,6 +137,7 @@ signalpr/
         │   ├── opencode/         # OpenCode HTTP + SSE
         │   ├── gemini/           # Gemini CLI via ACP (JSON-RPC over stdio)
         │   ├── cursor/           # Cursor CLI via ACP (JSON-RPC over stdio)
+        │   ├── pi/               # PI Agent SDK via pi --mode rpc (LF-JSONL)
         │   └── github.rs         # PR metadata fetching
         ├── storage/              # SQLite data layer
         ├── config/               # Configuration loading (.signalpr.yml)
@@ -159,6 +160,7 @@ signalpr/
   - GitHub Copilot subscription (for Copilot provider)
   - [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`npm i -g @google/gemini-cli`) with `GEMINI_API_KEY` set (for Gemini; API key required — OAuth is not supported)
   - [Cursor CLI](https://cursor.com/docs/cli) (`curl https://cursor.com/install -fsS | bash`) with `CURSOR_API_KEY` set (for Cursor; generate a key at Cloud Agents → User API Keys in the Cursor Dashboard)
+  - [PI Agent SDK](https://github.com/mariozechner/pi) (`npm i -g @mariozechner/pi-coding-agent`) for the PI provider
 
 ---
 

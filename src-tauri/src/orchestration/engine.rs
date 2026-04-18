@@ -56,13 +56,21 @@ pub type ProviderSemaphores = HashMap<String, Arc<Semaphore>>;
 
 const DEFAULT_PERMITS_PER_PROVIDER: usize = 3;
 
-/// Build a semaphore map with one entry per unique provider, each with DEFAULT_PERMITS_PER_PROVIDER permits.
+/// Build a semaphore map with one entry per unique provider.
+/// Most providers get DEFAULT_PERMITS_PER_PROVIDER permits; PI is limited
+/// to 1 because it runs a single-session RPC process.
 pub fn build_provider_semaphores(lanes: &[AgentLaneConfig]) -> ProviderSemaphores {
     let mut map = HashMap::new();
     for lane in lanes {
         let name = lane.provider.provider_name().to_string();
+        let permits = if name == "pi" {
+            // PI is single-session per process; only one lane at a time.
+            1
+        } else {
+            DEFAULT_PERMITS_PER_PROVIDER
+        };
         map.entry(name)
-            .or_insert_with(|| Arc::new(Semaphore::new(DEFAULT_PERMITS_PER_PROVIDER)));
+            .or_insert_with(|| Arc::new(Semaphore::new(permits)));
     }
     map
 }

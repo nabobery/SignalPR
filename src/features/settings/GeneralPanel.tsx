@@ -138,6 +138,7 @@ export function GeneralPanel() {
           <option value="opencode">OpenCode</option>
           <option value="gemini">Gemini</option>
           <option value="cursor">Cursor</option>
+          <option value="pi">PI</option>
         </select>
         <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
         {form.preferred_provider === "gemini" && (
@@ -204,6 +205,20 @@ export function GeneralPanel() {
               >
                 Authentication
               </a>
+            </p>
+          </div>
+        )}
+        {form.preferred_provider === "pi" && (
+          <div className="text-amber-400 text-xs mt-2 space-y-1">
+            <p>
+              PI authenticates through its own configuration. Install the CLI with{" "}
+              <code className="text-amber-300">npm i -g @mariozechner/pi-coding-agent</code> and
+              configure your API keys in PI's settings before launching SignalPR.
+            </p>
+            <p>
+              SignalPR embeds PI via <code className="text-amber-300">pi --mode rpc</code> with all
+              tools disabled (<code className="text-amber-300">--no-tools --no-session</code>). The
+              agent runs in read-only mode with no filesystem access.
             </p>
           </div>
         )}

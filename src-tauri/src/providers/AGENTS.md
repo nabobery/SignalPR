@@ -13,6 +13,7 @@ providers/
 ├── opencode/          # OpenCode via HTTP REST + SSE
 ├── gemini/            # Gemini CLI via ACP (JSON-RPC + NDJSON framing)
 ├── cursor/            # Cursor CLI via ACP (JSON-RPC + NDJSON framing)
+├── pi/                # PI Agent SDK via pi --mode rpc (LF-delimited JSONL, single-session)
 ├── jsonrpc/           # Shared JSON-RPC 2.0 transport (Codex + Copilot + Gemini + Cursor)
 ├── claude.rs          # Direct HTTP to Anthropic API
 ├── github.rs          # GitHub integration (PR fetching only)
@@ -39,17 +40,18 @@ pub trait ReviewProvider: Send + Sync {
 
 ## PROVIDERS
 
-| Provider   | File              | Auth                | Method                           |
-| ---------- | ----------------- | ------------------- | -------------------------------- |
-| `Codex`    | codex.rs          | CLI subprocess      | One-shot `codex exec`            |
-| `CodexApp` | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming    |
-| `Claude`   | claude.rs         | `ANTHROPIC_API_KEY` | HTTP + `tool_use`                |
-| `Copilot`  | copilot/          | GitHub Copilot CLI  | JSON-RPC v3, Content-Length      |
-| `OpenCode` | opencode/         | `opencode` CLI      | HTTP REST + SSE                  |
-| `Gemini`   | gemini/           | `GEMINI_API_KEY`    | ACP JSON-RPC over stdio (ndjson) |
-| `Cursor`   | cursor/           | `CURSOR_API_KEY`    | ACP JSON-RPC over stdio (ndjson) |
-| `GitHub`   | github.rs         | `gh` CLI            | PR fetching only                 |
-| `Mock`     | mock.rs           | Built-in fixture    | `#[cfg(test)]` only              |
+| Provider   | File              | Auth                | Method                                          |
+| ---------- | ----------------- | ------------------- | ----------------------------------------------- |
+| `Codex`    | codex.rs          | CLI subprocess      | One-shot `codex exec`                           |
+| `CodexApp` | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming                   |
+| `Claude`   | claude.rs         | `ANTHROPIC_API_KEY` | HTTP + `tool_use`                               |
+| `Copilot`  | copilot/          | GitHub Copilot CLI  | JSON-RPC v3, Content-Length                     |
+| `OpenCode` | opencode/         | `opencode` CLI      | HTTP REST + SSE                                 |
+| `Gemini`   | gemini/           | `GEMINI_API_KEY`    | ACP JSON-RPC over stdio (ndjson)                |
+| `Cursor`   | cursor/           | `CURSOR_API_KEY`    | ACP JSON-RPC over stdio (ndjson)                |
+| `PI`       | pi/               | `pi` CLI            | pi --mode rpc, LF-JSONL, single-session         |
+| `GitHub`   | github.rs         | `gh` CLI            | PR fetching only                                |
+| `Mock`     | mock.rs           | Built-in fixture    | `#[cfg(test)]` only                             |
 
 ### CodexAppServer Details
 
@@ -66,6 +68,10 @@ See `opencode/AGENTS.md` for HTTP REST + SSE protocol, session management, and p
 ### Cursor Details
 
 See `cursor/AGENTS.md` for ACP protocol, session lifecycle, `fs/` sandboxing, and security posture.
+
+### PI Details
+
+See `pi/AGENTS.md` for RPC protocol, single-session lifecycle, JSON extraction strategy, and buffer limits.
 
 ### Gemini Details
 

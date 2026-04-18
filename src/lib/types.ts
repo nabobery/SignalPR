@@ -248,3 +248,10 @@ export interface CursorLaneDelta {
   delta: string;
   buffer: string;
 }
+
+// PI Agent SDK streaming delta event
+export interface PiLaneDelta {
+  lane_id: string;
+  delta: string;
+  buffer: string;
+}
