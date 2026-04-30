@@ -34,6 +34,10 @@ impl ReviewProvider for MockReviewProvider {
             findings: vec![],
             overall_assessment: None,
             overall_confidence: None,
+            provider_session_id: None,
+            resume_cursor: None,
+            checkpoint_metadata_json: None,
+            cost_usd: None,
         })
     }
 }

@@ -135,19 +135,26 @@ async fn check_gh(app: &AppHandle, now: &str) -> ToolStatus {
 }
 
 fn check_claude(now: &str) -> ToolStatus {
-    match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(val) if !val.is_empty() => ToolStatus {
+    use crate::secrets::credentials::{self, CredentialSource, ProviderCredentialField};
+
+    let (_, source) = credentials::resolve_credential(ProviderCredentialField::AnthropicApiKey)
+        .unwrap_or((None, CredentialSource::None));
+
+    match source {
+        CredentialSource::Environment | CredentialSource::Keychain => ToolStatus {
             tool_name: "claude".into(),
             status: "ready".into(),
             version: None,
-            message: None,
+            message: Some(format!("auth_source={source:?}")),
             checked_at: now.into(),
         },
-        _ => ToolStatus {
+        CredentialSource::None => ToolStatus {
             tool_name: "claude".into(),
             status: "missing".into(),
             version: None,
-            message: Some("Set ANTHROPIC_API_KEY environment variable".into()),
+            message: Some(
+                "Set ANTHROPIC_API_KEY or configure via Settings > Provider Credentials".into(),
+            ),
             checked_at: now.into(),
         },
     }
@@ -232,6 +239,8 @@ async fn check_opencode(app: &AppHandle, now: &str) -> ToolStatus {
 /// CLI ToS notice at
 /// https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md
 async fn check_gemini(app: &AppHandle, now: &str) -> ToolStatus {
+    use crate::secrets::credentials::{self, ProviderCredentialField};
+
     let shell = app.shell();
     let cli = std::env::var("GEMINI_CLI_PATH").unwrap_or_else(|_| "gemini".to_string());
 
@@ -254,8 +263,14 @@ async fn check_gemini(app: &AppHandle, now: &str) -> ToolStatus {
 
     // Binary is present; verify an API-key auth env var is set so health
     // checks fail fast rather than blocking on a first-run interactive prompt.
-    let has_auth = std::env::var("GEMINI_API_KEY").is_ok()
-        || std::env::var("GOOGLE_API_KEY").is_ok()
+    let (gemini_key, gemini_source) =
+        credentials::resolve_credential(ProviderCredentialField::GeminiApiKey)
+            .unwrap_or((None, credentials::CredentialSource::None));
+    let (google_key, google_source) =
+        credentials::resolve_credential(ProviderCredentialField::GoogleApiKey)
+            .unwrap_or((None, credentials::CredentialSource::None));
+    let has_auth = gemini_key.is_some()
+        || google_key.is_some()
         || std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok();
 
     if !has_auth {
@@ -264,7 +279,7 @@ async fn check_gemini(app: &AppHandle, now: &str) -> ToolStatus {
             status: "unauthenticated".into(),
             version,
             message: Some(
-                "Set GEMINI_API_KEY in your shell before launching SignalPR. \
+                "Set GEMINI_API_KEY / GOOGLE_API_KEY or configure Gemini credentials in Settings > Provider Credentials. \
                  OAuth is not supported for third-party harnesses."
                     .into(),
             ),
@@ -272,16 +287,26 @@ async fn check_gemini(app: &AppHandle, now: &str) -> ToolStatus {
         };
     }
 
+    let auth_source = match (gemini_source, google_source) {
+        (credentials::CredentialSource::Environment, _)
+        | (_, credentials::CredentialSource::Environment) => "environment",
+        (credentials::CredentialSource::Keychain, _)
+        | (_, credentials::CredentialSource::Keychain) => "keychain",
+        _ => "environment",
+    };
+
     ToolStatus {
         tool_name: "gemini".into(),
         status: "ready".into(),
         version,
-        message: None,
+        message: Some(format!("auth_source={auth_source}")),
         checked_at: now.into(),
     }
 }
 
 fn check_claude_code(app: &AppHandle, now: &str) -> ToolStatus {
+    use crate::secrets::credentials::{self, CredentialSource, ProviderCredentialField};
+
     let app_data_dir = app.path().app_data_dir().unwrap_or_default();
     let sidecar_path = crate::config::resolve_sidecar_path_pub("claude-code-bridge");
 
@@ -297,7 +322,10 @@ fn check_claude_code(app: &AppHandle, now: &str) -> ToolStatus {
         };
     }
 
-    let has_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
+    let (_, source) = credentials::resolve_credential(ProviderCredentialField::AnthropicApiKey)
+        .unwrap_or((None, CredentialSource::None));
+    let has_key = source != CredentialSource::None;
+
     match ClaudeCodeManager::check_health(&sidecar_path, &app_data_dir, !has_key) {
         Ok(info) => {
             if !has_key {
@@ -305,7 +333,10 @@ fn check_claude_code(app: &AppHandle, now: &str) -> ToolStatus {
                     tool_name: "claude_code".into(),
                     status: "unauthenticated".into(),
                     version: Some(format!("bridge={}", info.bridge_version)),
-                    message: Some("Set ANTHROPIC_API_KEY to use Claude Code provider.".into()),
+                    message: Some(
+                        "Set ANTHROPIC_API_KEY or configure via Settings > Provider Credentials"
+                            .into(),
+                    ),
                     checked_at: now.into(),
                 };
             }
@@ -316,7 +347,7 @@ fn check_claude_code(app: &AppHandle, now: &str) -> ToolStatus {
                     "bridge={} sdk={}",
                     info.bridge_version, info.sdk_version
                 )),
-                message: None,
+                message: Some(format!("auth_source={source:?}")),
                 checked_at: now.into(),
             }
         }
@@ -355,7 +386,8 @@ mod tests {
                     || t.tool_name == "claude"
                     || t.tool_name == "copilot"
                     || t.tool_name == "opencode"
-                    || t.tool_name == "gemini")
+                    || t.tool_name == "gemini"
+                    || t.tool_name == "claude_code")
                     && t.status == "ready"
             })
             .map(|t| t.tool_name.clone())
@@ -429,5 +461,12 @@ mod tests {
     fn test_gemini_missing_not_in_available_providers() {
         let summary = build_summary(&[tool("gh", "ready"), tool("gemini", "missing")]);
         assert!(!summary.can_review);
+    }
+
+    #[test]
+    fn test_claude_code_ready_included_in_available_providers() {
+        let summary = build_summary(&[tool("gh", "ready"), tool("claude_code", "ready")]);
+        assert!(summary.can_review);
+        assert_eq!(summary.available_providers, vec!["claude_code"]);
     }
 }

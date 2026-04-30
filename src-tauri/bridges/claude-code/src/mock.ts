@@ -38,10 +38,34 @@ const MOCK_FINDINGS = [
 ];
 
 let activeAbortController: AbortController | null = null;
+let cancelRequestedBeforeStart = false;
+
+const pendingPermissions = new Map<
+  string,
+  { resolve: (approved: boolean) => void; timer: ReturnType<typeof setTimeout> }
+>();
 
 export function cancelMockReview(): void {
-  activeAbortController?.abort();
-  activeAbortController = null;
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+  } else {
+    cancelRequestedBeforeStart = true;
+  }
+  for (const [, entry] of pendingPermissions) {
+    clearTimeout(entry.timer);
+    entry.resolve(false);
+  }
+  pendingPermissions.clear();
+}
+
+export function resolveMockPermission(requestId: string, approved: boolean): boolean {
+  const entry = pendingPermissions.get(requestId);
+  if (!entry) return false;
+  clearTimeout(entry.timer);
+  pendingPermissions.delete(requestId);
+  setTimeout(() => entry.resolve(approved), 0);
+  return true;
 }
 
 export async function runMockReview(params: ReviewParams, send: SendFn): Promise<void> {
@@ -50,49 +74,152 @@ export async function runMockReview(params: ReviewParams, send: SendFn): Promise
   activeAbortController = abortController;
 
   try {
-    send(notification("review.delta", {
-      lane_id,
-      chunk: "Analyzing code changes...\n",
-    }));
+    if (cancelRequestedBeforeStart) {
+      cancelRequestedBeforeStart = false;
+      send(
+        notification("review.error", {
+          lane_id,
+          error: "Review cancelled.",
+        }),
+      );
+      return;
+    }
+
+    send(
+      notification("review.delta", {
+        lane_id,
+        chunk: "Analyzing code changes...\n",
+      }),
+    );
 
     await sleep(50, abortController.signal);
 
-    send(notification("review.delta", {
-      lane_id,
-      chunk: "Checking for common patterns...\n",
-    }));
+    send(
+      notification("review.delta", {
+        lane_id,
+        chunk: "Checking for common patterns...\n",
+      }),
+    );
 
     await sleep(50, abortController.signal);
 
-    send(notification("review.permission_requested", {
-      lane_id,
-      tool_name: "Write",
-      tool_input: { file_path: "/tmp/test.txt", content: "malicious" },
-      reason: "Tool 'Write' is not in the allowed list. Denied by policy.",
-      action: "denied",
-    }));
+    send(
+      notification("review.permission_requested", {
+        lane_id,
+        tool_name: "Write",
+        tool_input: { file_path: "/tmp/test.txt", content: "malicious" },
+        reason: "Tool 'Write' is not in the allowed list. Denied by policy.",
+        action: "denied",
+      }),
+    );
 
     await sleep(30, abortController.signal);
 
-    send(notification("review.delta", {
-      lane_id,
-      chunk: "Review complete.\n",
-    }));
+    send(
+      notification("review.delta", {
+        lane_id,
+        chunk: "Review complete.\n",
+      }),
+    );
 
-    send(notification("review.completed", {
-      lane_id,
-      output: {
-        findings: MOCK_FINDINGS,
-        overall_assessment: "Mock review completed. Found 2 potential issues.",
-        overall_confidence: 0.78,
-      },
-    }));
+    send(
+      notification("review.completed", {
+        lane_id,
+        output: {
+          findings: MOCK_FINDINGS,
+          overall_assessment: "Mock review completed. Found 2 potential issues.",
+          overall_confidence: 0.78,
+        },
+        session_id: `mock-session-${Date.now()}`,
+        cost_usd: 0.0042,
+        checkpoint_id: `mock-checkpoint-${Date.now()}`,
+      }),
+    );
   } catch (error: unknown) {
     if (abortController.signal.aborted) {
-      send(notification("review.error", {
+      send(
+        notification("review.error", {
+          lane_id,
+          error: "Review cancelled.",
+        }),
+      );
+      return;
+    }
+    throw error;
+  } finally {
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
+  }
+}
+
+/**
+ * Interactive mock review: emits a permission_requested with action="pending"
+ * and waits for resolution before completing.
+ */
+export async function runMockReviewInteractive(params: ReviewParams, send: SendFn): Promise<void> {
+  const { lane_id } = params;
+  const abortController = new AbortController();
+  activeAbortController = abortController;
+  const requestId = `perm-${Date.now()}`;
+
+  try {
+    if (cancelRequestedBeforeStart) {
+      cancelRequestedBeforeStart = false;
+      send(notification("review.error", { lane_id, error: "Review cancelled." }));
+      return;
+    }
+
+    send(notification("review.delta", { lane_id, chunk: "Analyzing (interactive mode)...\n" }));
+    await sleep(50, abortController.signal);
+
+    const permissionPromise = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingPermissions.delete(requestId);
+        resolve(false);
+      }, 10000);
+      pendingPermissions.set(requestId, { resolve, timer });
+    });
+
+    send(
+      notification("review.permission_requested", {
         lane_id,
-        error: "Review cancelled.",
-      }));
+        request_id: requestId,
+        tool_name: "Write",
+        tool_input: { file_path: "/tmp/test.txt", content: "guarded" },
+        reason: "Tool 'Write' requires guarded-write approval.",
+        action: "pending",
+      }),
+    );
+
+    const approved = await permissionPromise;
+
+    if (!approved) {
+      send(notification("review.delta", { lane_id, chunk: "Write tool denied.\n" }));
+    } else {
+      send(
+        notification("review.delta", { lane_id, chunk: "Write tool approved. Proceeding...\n" }),
+      );
+    }
+
+    await sleep(30, abortController.signal);
+
+    send(
+      notification("review.completed", {
+        lane_id,
+        output: {
+          findings: MOCK_FINDINGS,
+          overall_assessment: "Interactive mock review completed.",
+          overall_confidence: 0.8,
+        },
+        session_id: `mock-interactive-session-${Date.now()}`,
+        cost_usd: 0.0058,
+        checkpoint_id: `mock-interactive-checkpoint-${Date.now()}`,
+      }),
+    );
+  } catch (error: unknown) {
+    if (abortController.signal.aborted) {
+      send(notification("review.error", { lane_id, error: "Review cancelled." }));
       return;
     }
     throw error;

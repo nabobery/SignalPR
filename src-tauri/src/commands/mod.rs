@@ -12,6 +12,7 @@ pub mod gemini;
 pub mod intake;
 pub mod opencode;
 pub mod preferences;
+pub mod providers;
 pub mod review;
 pub mod settings;
 pub mod submission;

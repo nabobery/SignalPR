@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::errors::ProviderError;
+use crate::secrets::credentials::{self, ProviderCredentialField};
 
 use super::sse::{self, SseEvent};
 
@@ -121,18 +122,24 @@ impl OpenCodeManager {
         }
 
         let cli = std::env::var("OPENCODE_CLI_PATH").unwrap_or_else(|_| "opencode".to_string());
-        let auth_password = std::env::var("OPENCODE_SERVER_PASSWORD").ok();
+        let auth_password =
+            credentials::resolve_credential(ProviderCredentialField::OpenCodeServerPassword)
+                .ok()
+                .and_then(|(value, _)| value);
 
-        let mut child = tokio::process::Command::new(&cli)
-            .args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
+        let mut cmd = tokio::process::Command::new(&cli);
+        cmd.args(["serve", "--port", "0", "--hostname", "127.0.0.1"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                ProviderError::OpenCodeFailed(format!("Failed to spawn opencode serve: {}", e))
-            })?;
+            .kill_on_drop(true);
+        if let Some(ref password) = auth_password {
+            cmd.env("OPENCODE_SERVER_PASSWORD", password);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            ProviderError::OpenCodeFailed(format!("Failed to spawn opencode serve: {}", e))
+        })?;
 
         // Drain stdout in background to prevent pipe backpressure
         if let Some(stdout) = child.stdout.take() {

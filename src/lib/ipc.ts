@@ -8,6 +8,9 @@ import type {
   AgentDefinitionsResponse,
   ChannelStatus,
   AppError,
+  CredentialStatus,
+  ProviderCapabilities,
+  AgentRunMetadata,
 } from "./types";
 
 export function parseError(err: unknown): AppError {
@@ -195,4 +198,34 @@ export async function resolveClaudeCodePermission(
   approved: boolean,
 ): Promise<void> {
   return invoke("resolve_claude_code_permission", { requestId, approved });
+}
+
+// --- Provider Credential Platform ---
+
+export async function getProviderCredentialStatuses(): Promise<CredentialStatus[]> {
+  return invoke("get_provider_credential_statuses");
+}
+
+export async function storeProviderSecret(
+  providerId: string,
+  field: string,
+  value: string,
+): Promise<void> {
+  return invoke("store_provider_secret", { providerId, field, value });
+}
+
+export async function deleteProviderSecret(providerId: string, field: string): Promise<void> {
+  return invoke("delete_provider_secret", { providerId, field });
+}
+
+// --- Provider Capabilities Registry ---
+
+export async function getProviderCapabilities(): Promise<ProviderCapabilities[]> {
+  return invoke("get_provider_capabilities");
+}
+
+// --- Session Metadata ---
+
+export async function getAgentRunMetadata(runId: string): Promise<AgentRunMetadata[]> {
+  return invoke("get_agent_run_metadata", { runId });
 }

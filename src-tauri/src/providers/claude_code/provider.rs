@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::errors::ProviderError;
 use crate::providers::traits::{CodexReviewOutput, ProviderHealth, ReviewInput, ReviewProvider};
+use crate::secrets::credentials::{self, ProviderCredentialField};
 
 use super::manager::ClaudeCodeManager;
 
@@ -16,6 +17,13 @@ pub struct ClaudeCodeProvider {
 }
 
 impl ClaudeCodeProvider {
+    fn has_api_key() -> bool {
+        credentials::resolve_credential(ProviderCredentialField::AnthropicApiKey)
+            .ok()
+            .and_then(|(value, _)| value)
+            .is_some()
+    }
+
     pub fn new(
         manager: Arc<ClaudeCodeManager>,
         sidecar_path: String,
@@ -56,7 +64,7 @@ impl ReviewProvider for ClaudeCodeProvider {
             };
         }
 
-        let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
+        let has_api_key = Self::has_api_key();
         match ClaudeCodeManager::check_health(&self.sidecar_path, &self.app_data_dir, !has_api_key)
         {
             Ok(info) => ProviderHealth {
@@ -115,9 +123,15 @@ impl ReviewProvider for ClaudeCodeProvider {
 
         tokio::select! {
             result = review_handle => {
-                let output = result
+                let review = result
                     .map_err(|e| ProviderError::ClaudeCodeFailed(format!("Task join error: {}", e)))??;
-                Self::parse_output(&output)
+                let mut output = Self::parse_output(&review.output)?;
+                output.provider_session_id = review.session_id;
+                output.cost_usd = review.cost_usd;
+                output.checkpoint_metadata_json = review
+                    .checkpoint_id
+                    .map(|checkpoint_id| serde_json::json!({ "checkpoint_id": checkpoint_id }).to_string());
+                Ok(output)
             }
             _ = cancel.cancelled() => {
                 cancel_manager.cancel_lane(&lane_id_for_cancel).await;

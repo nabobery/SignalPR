@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::errors::ProviderError;
+use crate::secrets::credentials::{self, ProviderCredentialField};
 
 use super::traits::{CodexReviewOutput, ProviderHealth, ReviewInput, ReviewProvider};
 
@@ -25,10 +26,16 @@ pub struct ClaudeProvider {
 }
 
 impl ClaudeProvider {
+    fn resolved_api_key() -> Option<String> {
+        credentials::resolve_credential(ProviderCredentialField::AnthropicApiKey)
+            .ok()
+            .and_then(|(value, _)| value)
+    }
+
     pub fn new() -> Self {
         Self {
             model: DEFAULT_MODEL.to_string(),
-            api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
+            api_key: Self::resolved_api_key(),
             client: reqwest::Client::new(),
         }
     }
@@ -37,7 +44,7 @@ impl ClaudeProvider {
     pub fn with_model(model: String) -> Self {
         Self {
             model,
-            api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
+            api_key: Self::resolved_api_key(),
             client: reqwest::Client::new(),
         }
     }
@@ -279,6 +286,7 @@ fn parse_response(body: &str) -> Result<CodexReviewOutput, ProviderError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secrets::credentials::{self, ProviderCredentialField};
 
     #[test]
     fn test_parse_response_with_tool_use() {
@@ -393,6 +401,23 @@ mod tests {
         };
         let health = provider.health_check().await;
         assert!(health.available);
+    }
+
+    #[test]
+    fn test_claude_provider_reads_keychain_when_env_absent() {
+        let prior = std::env::var("ANTHROPIC_API_KEY").ok();
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        credentials::delete_secret(ProviderCredentialField::AnthropicApiKey).unwrap();
+        credentials::store_secret(ProviderCredentialField::AnthropicApiKey, "keychain-key")
+            .unwrap();
+
+        let provider = ClaudeProvider::new();
+        assert_eq!(provider.api_key.as_deref(), Some("keychain-key"));
+
+        let _ = credentials::delete_secret(ProviderCredentialField::AnthropicApiKey);
+        if let Some(value) = prior {
+            std::env::set_var("ANTHROPIC_API_KEY", value);
+        }
     }
 
     #[test]

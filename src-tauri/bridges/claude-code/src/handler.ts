@@ -1,4 +1,4 @@
-import { runMockReview, cancelMockReview } from "./mock.js";
+import { runMockReview, runMockReviewInteractive, cancelMockReview, resolveMockPermission } from "./mock.js";
 import { runRealReview, cancelActiveSession } from "./real.js";
 import os from "os";
 import { createRequire } from "module";
@@ -91,6 +91,46 @@ export async function handleRequest(
         }
       }, 0);
       return { started: true };
+    }
+
+    case "review.start_interactive": {
+      const p = params as {
+        lane_id: string;
+        system_prompt: string;
+        diff: string;
+        output_schema: string;
+        cwd: string;
+      };
+      if (!p || !p.lane_id || !p.diff || !p.output_schema || !p.cwd) {
+        throw new Error("Missing required params: lane_id, diff, output_schema, cwd");
+      }
+      if (reviewInFlight) {
+        throw new Error("Bridge already has an active review.");
+      }
+      reviewInFlight = true;
+      const onSettledInteractive = () => {
+        reviewInFlight = false;
+      };
+      setTimeout(() => {
+        if (isMock) {
+          void runMockReviewInteractive(p, send).finally(onSettledInteractive);
+        } else {
+          runRealReview(p, send, onSettledInteractive);
+        }
+      }, 0);
+      return { started: true, mode: "interactive" };
+    }
+
+    case "review.resolve_permission": {
+      const rp = params as { request_id: string; approved: boolean };
+      if (!rp || !rp.request_id) {
+        throw new Error("Missing required param: request_id");
+      }
+      if (isMock) {
+        const resolved = resolveMockPermission(rp.request_id, !!rp.approved);
+        return { resolved };
+      }
+      return { resolved: false };
     }
 
     case "review.cancel":

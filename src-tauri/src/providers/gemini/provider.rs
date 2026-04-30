@@ -213,7 +213,8 @@ impl ReviewProvider for GeminiProvider {
             ));
         }
 
-        let output = Self::parse_output(&raw_text)?;
+        let mut output = Self::parse_output(&raw_text)?;
+        output.provider_session_id = Some(session_id.clone());
         debug!(
             "Gemini review for lane {} produced {} findings",
             input.lane_id,

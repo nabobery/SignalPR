@@ -15,6 +15,7 @@ use crate::providers::jsonrpc::transport::JsonRpcTransport;
 use crate::providers::jsonrpc::types::{
     FramingMode, JsonRpcTransportError, ServerNotification, ServerRequest,
 };
+use crate::secrets::credentials::{self, ProviderCredentialField};
 
 /// Cap accumulated per-session agent message buffers at 1 MiB. Review outputs
 /// should be well under 32 KiB; this is a safety net against a runaway model.
@@ -124,8 +125,14 @@ impl GeminiManager {
     /// Static check for whether any supported auth env var is set.
     /// Used by the health check to fail fast with a clear message.
     pub fn has_auth_env() -> bool {
-        std::env::var("GEMINI_API_KEY").is_ok()
-            || std::env::var("GOOGLE_API_KEY").is_ok()
+        credentials::resolve_credential(ProviderCredentialField::GeminiApiKey)
+            .ok()
+            .and_then(|(value, _)| value)
+            .is_some()
+            || credentials::resolve_credential(ProviderCredentialField::GoogleApiKey)
+                .ok()
+                .and_then(|(value, _)| value)
+                .is_some()
             || std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok()
     }
 
@@ -155,19 +162,32 @@ impl GeminiManager {
         let cli = std::env::var("GEMINI_CLI_PATH").unwrap_or_else(|_| "gemini".to_string());
         let acp_flag = std::env::var("GEMINI_ACP_FLAG").unwrap_or_else(|_| "--acp".to_string());
 
-        let mut child = tokio::process::Command::new(&cli)
-            .arg(&acp_flag)
+        let mut cmd = tokio::process::Command::new(&cli);
+        cmd.arg(&acp_flag)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                ProviderError::GeminiFailed(format!(
-                    "Failed to spawn `{} {}`: {}. Install with `npm i -g @google/gemini-cli`.",
-                    cli, acp_flag, e
-                ))
-            })?;
+            .kill_on_drop(true);
+
+        if let Some(key) = credentials::resolve_credential(ProviderCredentialField::GeminiApiKey)
+            .ok()
+            .and_then(|(value, _)| value)
+        {
+            cmd.env("GEMINI_API_KEY", key);
+        }
+        if let Some(key) = credentials::resolve_credential(ProviderCredentialField::GoogleApiKey)
+            .ok()
+            .and_then(|(value, _)| value)
+        {
+            cmd.env("GOOGLE_API_KEY", key);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            ProviderError::GeminiFailed(format!(
+                "Failed to spawn `{} {}`: {}. Install with `npm i -g @google/gemini-cli`.",
+                cli, acp_flag, e
+            ))
+        })?;
 
         let stdin = child
             .stdin

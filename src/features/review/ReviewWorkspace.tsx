@@ -9,6 +9,7 @@ import { FileTree } from "./FileTree";
 import { SignalBoard } from "./SignalBoard";
 import { DiffPanel } from "./DiffPanel";
 import LaneProgress from "./LaneProgress";
+import { SessionDrawer } from "./SessionDrawer";
 import { SubmitDialog } from "../submission/SubmitDialog";
 import { ApprovalModal } from "./ApprovalModal";
 
@@ -169,8 +170,11 @@ export function ReviewWorkspace() {
         {isRunning && state.laneStatuses.length > 0 && (
           <div className="px-4 py-2 border-b border-zinc-800 shrink-0">
             <LaneProgress lanes={state.laneStatuses} />
+            <SessionDrawer runId={state.runId} />
           </div>
         )}
+
+        {!isRunning && <SessionDrawer runId={state.runId} />}
 
         {/* Partial success banner */}
         {isReady &&

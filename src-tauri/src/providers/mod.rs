@@ -1,3 +1,4 @@
+pub mod capabilities;
 pub mod claude;
 pub mod claude_code;
 pub mod codex;
@@ -6,6 +7,7 @@ pub mod copilot;
 pub mod cursor;
 pub mod gemini;
 pub mod github;
+pub mod governance;
 pub mod jsonrpc;
 #[cfg(test)]
 pub mod mock;

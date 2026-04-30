@@ -164,7 +164,7 @@ export function runRealReview(
             type: "json_schema",
             schema: outputSchema,
           },
-          permissionMode: "default",
+          permissionMode: "bypassPermissions",
           persistSession: false,
           settingSources: [],
         },
@@ -197,6 +197,9 @@ export function runRealReview(
             notification("review.completed", {
               lane_id,
               output: message.structured_output,
+              session_id: message.session_id ?? null,
+              cost_usd: message.total_cost_usd ?? null,
+              checkpoint_id: null,
             }),
           );
           return;

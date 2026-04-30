@@ -41,6 +41,7 @@ jobs:
               - '.github/workflows/ci.yml'
             rust:
               - 'src-tauri/**'
+              - 'src-tauri/bridges/**'
               - '.github/workflows/ci.yml'
 
   frontend:
@@ -76,11 +77,16 @@ jobs:
       - name: Build frontend bundle
         run: pnpm build
 
+      - name: Validate eval fixtures (deterministic)
+        run: pnpm eval:validate
+
   rust:
     name: Rust (fmt, clippy, test)
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-22.04
+    env:
+      SIGNALPR_RUN_SIDECAR_TESTS: "1"
     steps:
       - uses: actions/checkout@v6
 
@@ -100,6 +106,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ./src-tauri -> target
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Build claude-code sidecar (for conformance tests)
+        run: pnpm sidecar:claude-code:build
 
       - name: cargo fmt
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check

@@ -185,6 +185,15 @@ ALTER TABLE findings ADD COLUMN fix_explanation TEXT;
 ALTER TABLE findings ADD COLUMN fix_status TEXT DEFAULT 'none';
 "#;
 
+const MIGRATION_V5: &str = r#"
+-- Phase 5: Provider session metadata and governance tracking
+ALTER TABLE agent_runs ADD COLUMN governance_tier_at_run TEXT;
+ALTER TABLE agent_runs ADD COLUMN provider_session_id TEXT;
+ALTER TABLE agent_runs ADD COLUMN resume_cursor TEXT;
+ALTER TABLE agent_runs ADD COLUMN checkpoint_metadata_json TEXT;
+ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -222,6 +231,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V4)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (4)",
+            [],
+        )?;
+    }
+
+    if current_version < 5 {
+        conn.execute_batch(MIGRATION_V5)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (5)",
             [],
         )?;
     }

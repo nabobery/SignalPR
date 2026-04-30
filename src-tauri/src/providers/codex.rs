@@ -250,6 +250,10 @@ impl ReviewProvider for MockProvider {
             ],
             overall_assessment: Some("The PR introduces a security risk that should be addressed before merging. Performance and architecture findings are lower priority.".into()),
             overall_confidence: Some(0.85),
+            provider_session_id: None,
+            resume_cursor: None,
+            checkpoint_metadata_json: None,
+            cost_usd: None,
         })
     }
 }

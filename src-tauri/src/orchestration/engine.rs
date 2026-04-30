@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 use crate::cleaner::{self, CleanerConfig};
 use crate::errors::{AppError, ProviderError};
 use crate::orchestration::lane::{AgentLaneConfig, AgentLaneResult, LaneSnapshot, LaneStatus};
+use crate::providers::capabilities::ToolGovernanceTier;
+use crate::providers::governance;
 use crate::providers::traits::{ReviewInput, ReviewProvider};
 use crate::storage::db::AppDb;
 use crate::storage::event_log::EventLog;
@@ -152,6 +154,14 @@ pub async fn run_review_pipeline(
                         _ => None,
                     },
                 );
+                let _ = queries::update_agent_run_metadata(
+                    &conn,
+                    &result.agent_run_id,
+                    result.provider_session_id.as_deref(),
+                    result.resume_cursor.as_deref(),
+                    result.checkpoint_metadata_json.as_deref(),
+                    result.cost_usd,
+                );
             }
 
             if matches!(result.status, LaneStatus::Completed { .. }) {
@@ -271,6 +281,16 @@ fn log_event(
     }
 }
 
+fn governance_setting_key(provider_name: &str) -> Option<&'static str> {
+    match provider_name {
+        "codex_app_server" => Some("codex_app_server_governance_tier"),
+        "copilot" => Some("copilot_governance_tier"),
+        "opencode" => Some("opencode_governance_tier"),
+        "claude_code" => Some("claude_code_governance_tier"),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_agent_lanes(
     db: &AppDb,
@@ -303,6 +323,16 @@ async fn run_agent_lanes(
         // Insert agent_run as "running" BEFORE spawn so UI can see it immediately
         let started_at = chrono::Utc::now().to_rfc3339();
         {
+            let governance_tier_at_run = if let Ok(conn) = db.0.lock() {
+                let configured_tier = governance_setting_key(&provider_name)
+                    .and_then(|key| queries::get_setting(&conn, key).ok().flatten())
+                    .and_then(|value| ToolGovernanceTier::from_str(&value));
+                governance::resolve_effective_tier(&provider_name, configured_tier)
+                    .ok()
+                    .map(|tier| tier.effective_tier.as_str().to_string())
+            } else {
+                None
+            };
             let ar = AgentRun {
                 id: agent_run_id.clone(),
                 review_run_id: run_id.to_string(),
@@ -313,6 +343,11 @@ async fn run_agent_lanes(
                 completed_at: None,
                 finding_count: 0,
                 error_message: None,
+                governance_tier_at_run,
+                provider_session_id: None,
+                resume_cursor: None,
+                checkpoint_metadata_json: None,
+                cost_usd: None,
             };
             if let Ok(conn) = db.0.lock() {
                 let _ = queries::insert_agent_run(&conn, &ar);
@@ -351,7 +386,7 @@ async fn run_agent_lanes(
 
                     let lane_id_ref = &lane_id;
                     let provider_name_ref = &provider_name;
-                    let retry_result: Result<Vec<crate::providers::traits::RawFinding>, ProviderError> =
+                    let retry_result: Result<crate::providers::traits::CodexReviewOutput, ProviderError> =
                         Retry::spawn(retry_strategy, || async {
                         if lane_cancel.is_cancelled() {
                             return Err(RetryError::permanent(ProviderError::Cancelled));
@@ -369,12 +404,13 @@ async fn run_agent_lanes(
                             })?;
 
                         match provider.run_review(&input, &cwd, lane_cancel.clone()).await {
-                            Ok(mut output) => {
+                            Ok(output) => {
+                                let mut output = output;
                                 for f in &mut output.findings {
                                     f.lane_id = Some(lane_id_ref.clone());
                                     f.provider_name = Some(provider_name_ref.clone());
                                 }
-                                Ok(output.findings)
+                                Ok(output)
                             }
                             Err(e) if e.is_transient() => {
                                 tracing::warn!("Transient provider error on lane {}, retrying: {}", lane_id_ref, e);
@@ -386,7 +422,7 @@ async fn run_agent_lanes(
                     .await;
 
                     match retry_result {
-                        Ok(findings) => Ok(findings),
+                        Ok(output) => Ok(output),
                         Err(ProviderError::Cancelled) => Err(LaneStatus::Cancelled),
                         Err(e) => Err(LaneStatus::Failed { error: e.to_string() }),
                     }
@@ -398,13 +434,17 @@ async fn run_agent_lanes(
 
             let completed_at = chrono::Utc::now().to_rfc3339();
             match result {
-                Ok(findings) => {
-                    let finding_count = findings.len();
+                Ok(output) => {
+                    let finding_count = output.findings.len();
                     AgentLaneResult {
                         agent_run_id: agent_run_id_clone,
                         lane_id,
                         provider_name,
-                        findings,
+                        findings: output.findings,
+                        provider_session_id: output.provider_session_id,
+                        resume_cursor: output.resume_cursor,
+                        checkpoint_metadata_json: output.checkpoint_metadata_json,
+                        cost_usd: output.cost_usd,
                         status: LaneStatus::Completed { finding_count },
                         started_at,
                         completed_at,
@@ -415,6 +455,10 @@ async fn run_agent_lanes(
                     lane_id,
                     provider_name,
                     findings: vec![],
+                    provider_session_id: None,
+                    resume_cursor: None,
+                    checkpoint_metadata_json: None,
+                    cost_usd: None,
                     status,
                     started_at,
                     completed_at,
@@ -523,6 +567,9 @@ mod tests {
     struct SlowProvider {
         delay: Duration,
         findings: Vec<RawFinding>,
+        provider_session_id: Option<String>,
+        checkpoint_metadata_json: Option<String>,
+        cost_usd: Option<f64>,
     }
 
     impl SlowProvider {
@@ -530,6 +577,9 @@ mod tests {
             Self {
                 delay: Duration::from_millis(delay_ms),
                 findings: vec![],
+                provider_session_id: None,
+                checkpoint_metadata_json: None,
+                cost_usd: None,
             }
         }
 
@@ -537,6 +587,24 @@ mod tests {
             Self {
                 delay: Duration::from_millis(delay_ms),
                 findings,
+                provider_session_id: None,
+                checkpoint_metadata_json: None,
+                cost_usd: None,
+            }
+        }
+
+        fn with_metadata(
+            delay_ms: u64,
+            provider_session_id: &str,
+            checkpoint_metadata_json: &str,
+            cost_usd: f64,
+        ) -> Self {
+            Self {
+                delay: Duration::from_millis(delay_ms),
+                findings: vec![],
+                provider_session_id: Some(provider_session_id.to_string()),
+                checkpoint_metadata_json: Some(checkpoint_metadata_json.to_string()),
+                cost_usd: Some(cost_usd),
             }
         }
     }
@@ -567,6 +635,10 @@ mod tests {
                     findings: self.findings.clone(),
                     overall_assessment: None,
                     overall_confidence: None,
+                    provider_session_id: self.provider_session_id.clone(),
+                    resume_cursor: None,
+                    checkpoint_metadata_json: self.checkpoint_metadata_json.clone(),
+                    cost_usd: self.cost_usd,
                 })
             }
         }
@@ -645,6 +717,10 @@ mod tests {
                     findings: vec![],
                     overall_assessment: None,
                     overall_confidence: None,
+                    provider_session_id: None,
+                    resume_cursor: None,
+                    checkpoint_metadata_json: None,
+                    cost_usd: None,
                 })
             }
         }
@@ -1189,6 +1265,58 @@ mod tests {
         let conn = db.0.lock().unwrap();
         let run = get_review_run(&conn, "run9").unwrap().unwrap();
         assert_eq!(run.status, "ready"); // succeeded after retries
+    }
+
+    #[tokio::test]
+    async fn test_completed_lane_persists_provider_metadata() {
+        let db = init_db_in_memory().unwrap();
+        seed_db(&db, "run9_meta", "pr9_meta");
+
+        let provider: Arc<dyn ReviewProvider> = Arc::new(SlowProvider::with_metadata(
+            10,
+            "session-123",
+            r#"{"checkpoint_id":"cp-1"}"#,
+            0.0123,
+        ));
+        let lanes = vec![make_lane(
+            "security",
+            prompts::AgentFocus::Security,
+            provider,
+        )];
+
+        let sems = build_provider_semaphores(&lanes);
+        let token = CancellationToken::new();
+
+        run_review_pipeline(
+            &db,
+            |_| {},
+            &sems,
+            ReviewPipelineArgs {
+                run_id: "run9_meta".into(),
+                cwd: PathBuf::from("/tmp"),
+                config: CleanerConfig::default(),
+                cancel: token,
+                lanes,
+                fallback_input: None,
+                fallback_provider: None,
+                event_log: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let conn = db.0.lock().unwrap();
+        let agent_runs = queries::get_agent_runs_for_review(&conn, "run9_meta").unwrap();
+        assert_eq!(agent_runs.len(), 1);
+        assert_eq!(
+            agent_runs[0].provider_session_id.as_deref(),
+            Some("session-123")
+        );
+        assert_eq!(
+            agent_runs[0].checkpoint_metadata_json.as_deref(),
+            Some(r#"{"checkpoint_id":"cp-1"}"#)
+        );
+        assert_eq!(agent_runs[0].cost_usd, Some(0.0123));
     }
 
     #[tokio::test]

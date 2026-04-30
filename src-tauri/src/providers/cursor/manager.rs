@@ -15,6 +15,7 @@ use crate::providers::jsonrpc::transport::JsonRpcTransport;
 use crate::providers::jsonrpc::types::{
     FramingMode, JsonRpcTransportError, ServerNotification, ServerRequest,
 };
+use crate::secrets::credentials::{self, ProviderCredentialField};
 
 /// Cap accumulated per-session agent message buffers at 1 MiB. Review outputs
 /// should be well under 32 KiB; this is a safety net against a runaway model.
@@ -138,9 +139,9 @@ impl CursorManager {
     /// Static check for whether `CURSOR_API_KEY` is set. Used by the health
     /// check to fail fast with a clear message.
     pub fn has_auth_env() -> bool {
-        std::env::var("CURSOR_API_KEY")
+        credentials::resolve_credential(ProviderCredentialField::CursorApiKey)
             .ok()
-            .filter(|v| !v.is_empty())
+            .and_then(|(value, _)| value)
             .is_some()
     }
 
@@ -188,6 +189,13 @@ impl CursorManager {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+
+        if let Some(key) = credentials::resolve_credential(ProviderCredentialField::CursorApiKey)
+            .ok()
+            .and_then(|(value, _)| value)
+        {
+            cmd.env("CURSOR_API_KEY", key);
+        }
 
         let mut child = cmd.spawn().map_err(|e| {
             ProviderError::CursorFailed(format!(

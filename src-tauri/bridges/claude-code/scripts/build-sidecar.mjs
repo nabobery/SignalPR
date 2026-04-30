@@ -3,22 +3,55 @@
  * Builds the claude-code-bridge sidecar binary using @yao-pkg/pkg.
  * Output goes to src-tauri/binaries/ with the correct target triple suffix.
  */
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { existsSync, mkdirSync, renameSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import os from "os";
+import { createRequire } from "module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const bridgeRoot = resolve(__dirname, "..");
 const binariesDir = resolve(bridgeRoot, "../../binaries");
 const distEntry = resolve(bridgeRoot, "dist/index.js");
+const require = createRequire(import.meta.url);
+
+function cleanChildEnv() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("npm_config_")),
+  );
+}
+
+function runNodeBin(packageName, args, options = {}) {
+  const packageJsonPath = require.resolve(`${packageName}/package.json`);
+  const packageJson = require(packageJsonPath);
+  const binEntry =
+    typeof packageJson.bin === "string"
+      ? packageJson.bin
+      : (packageJson.bin?.[packageJson.name.split("/").at(-1)] ??
+        Object.values(packageJson.bin ?? {})[0]);
+
+  if (!binEntry) {
+    throw new Error(`Unable to resolve executable for ${packageName}`);
+  }
+
+  const binPath = resolve(dirname(packageJsonPath), binEntry);
+  execFileSync(process.execPath, [binPath, ...args], {
+    stdio: "inherit",
+    env: cleanChildEnv(),
+    ...options,
+  });
+}
 
 function getTargetTriple() {
   const platform = os.platform();
   const arch = os.arch();
 
-  const platformMap = { darwin: "apple-darwin", linux: "unknown-linux-gnu", win32: "pc-windows-msvc" };
+  const platformMap = {
+    darwin: "apple-darwin",
+    linux: "unknown-linux-gnu",
+    win32: "pc-windows-msvc",
+  };
   const archMap = { x64: "x86_64", arm64: "aarch64" };
 
   const p = platformMap[platform];
@@ -32,7 +65,7 @@ function main() {
 
   if (!existsSync(distEntry)) {
     console.log("Compiling TypeScript...");
-    execSync("npx tsc", { cwd: bridgeRoot, stdio: "inherit" });
+    runNodeBin("typescript", [], { cwd: bridgeRoot });
   }
 
   if (!existsSync(binariesDir)) {
@@ -47,11 +80,15 @@ function main() {
   console.log(`Building sidecar for ${triple}...`);
   console.log(`Output: ${outputPath}`);
 
-  const pkgTarget = os.arch() === "arm64" ? "node20-macos-arm64" : `node20-${os.platform()}-${os.arch()}`;
+  const pkgTarget =
+    os.arch() === "arm64" ? "node20-macos-arm64" : `node20-${os.platform()}-${os.arch()}`;
 
-  execSync(
-    `npx @yao-pkg/pkg dist/index.js --target ${pkgTarget} --output pkg-output${ext}`,
-    { cwd: bridgeRoot, stdio: "inherit" },
+  runNodeBin(
+    "@yao-pkg/pkg",
+    ["dist/index.js", "--target", pkgTarget, "--output", `pkg-output${ext}`],
+    {
+      cwd: bridgeRoot,
+    },
   );
 
   const pkgOutput = join(bridgeRoot, `pkg-output${ext}`);

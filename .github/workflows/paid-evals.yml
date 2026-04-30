@@ -1,0 +1,77 @@
+name: Paid Provider Evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider to evaluate"
+        required: true
+        type: choice
+        options:
+          - claude
+      fixture:
+        description: "Specific fixture ID (leave empty for all)"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Dry run (no API calls)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paid-evals-${{ github.event.inputs.provider }}
+  cancel-in-progress: false
+
+jobs:
+  run-evals:
+    name: "Eval: ${{ github.event.inputs.provider }}"
+    runs-on: ubuntu-22.04
+    environment: provider-evals
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate fixtures (deterministic)
+        run: pnpm eval:validate
+
+      - name: Run paid evaluation
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          ARGS="--provider ${{ github.event.inputs.provider }}"
+          if [ -n "${{ github.event.inputs.fixture }}" ]; then
+            ARGS="$ARGS --fixture ${{ github.event.inputs.fixture }}"
+          else
+            ARGS="$ARGS --all"
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          pnpm eval:run $ARGS
+
+      - name: Grade outputs
+        run: pnpm eval:validate --grade
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.event.inputs.provider }}-${{ github.run_id }}
+          path: evals/runs/
+          retention-days: 90

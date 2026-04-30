@@ -303,8 +303,8 @@ pub fn get_finding_by_id(
 
 pub fn insert_agent_run(conn: &Connection, ar: &AgentRun) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO agent_runs (id, review_run_id, lane_id, provider_name, status, started_at, completed_at, finding_count, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![ar.id, ar.review_run_id, ar.lane_id, ar.provider_name, ar.status, ar.started_at, ar.completed_at, ar.finding_count, ar.error_message],
+        "INSERT INTO agent_runs (id, review_run_id, lane_id, provider_name, status, started_at, completed_at, finding_count, error_message, governance_tier_at_run, provider_session_id, resume_cursor, checkpoint_metadata_json, cost_usd) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![ar.id, ar.review_run_id, ar.lane_id, ar.provider_name, ar.status, ar.started_at, ar.completed_at, ar.finding_count, ar.error_message, ar.governance_tier_at_run, ar.provider_session_id, ar.resume_cursor, ar.checkpoint_metadata_json, ar.cost_usd],
     )?;
     Ok(())
 }
@@ -324,12 +324,28 @@ pub fn update_agent_run(
     Ok(())
 }
 
+/// Update the session metadata fields on an agent_run after the provider returns.
+pub fn update_agent_run_metadata(
+    conn: &Connection,
+    id: &str,
+    provider_session_id: Option<&str>,
+    resume_cursor: Option<&str>,
+    checkpoint_metadata_json: Option<&str>,
+    cost_usd: Option<f64>,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE agent_runs SET provider_session_id = ?1, resume_cursor = ?2, checkpoint_metadata_json = ?3, cost_usd = ?4 WHERE id = ?5",
+        params![provider_session_id, resume_cursor, checkpoint_metadata_json, cost_usd, id],
+    )?;
+    Ok(())
+}
+
 pub fn get_agent_runs_for_review(
     conn: &Connection,
     review_run_id: &str,
 ) -> Result<Vec<AgentRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, lane_id, provider_name, status, started_at, completed_at, finding_count, error_message FROM agent_runs WHERE review_run_id = ?1",
+        "SELECT id, review_run_id, lane_id, provider_name, status, started_at, completed_at, finding_count, error_message, governance_tier_at_run, provider_session_id, resume_cursor, checkpoint_metadata_json, cost_usd FROM agent_runs WHERE review_run_id = ?1 ORDER BY started_at ASC, lane_id ASC",
     )?;
     let rows = stmt.query_map(params![review_run_id], |row| {
         Ok(AgentRun {
@@ -342,6 +358,11 @@ pub fn get_agent_runs_for_review(
             completed_at: row.get(6)?,
             finding_count: row.get(7)?,
             error_message: row.get(8)?,
+            governance_tier_at_run: row.get(9)?,
+            provider_session_id: row.get(10)?,
+            resume_cursor: row.get(11)?,
+            checkpoint_metadata_json: row.get(12)?,
+            cost_usd: row.get(13)?,
         })
     })?;
     rows.collect()

@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef } from "react";
-import { Loader2 } from "lucide-react";
-import { getSettings, updateSetting, parseError } from "../../lib/ipc";
+import { Loader2, KeyRound, Trash2, CheckCircle2 } from "lucide-react";
+import {
+  getSettings,
+  updateSetting,
+  parseError,
+  getProviderCredentialStatuses,
+  storeProviderSecret,
+  deleteProviderSecret,
+} from "../../lib/ipc";
+import type { CredentialStatus } from "../../lib/types";
 
 interface SettingsForm {
   max_surface_findings: string;
@@ -139,9 +147,7 @@ export function GeneralPanel() {
           <option value="gemini">Gemini</option>
           <option value="cursor">Cursor</option>
           <option value="pi">PI</option>
-          <option value="claude_code">
-            Claude Code (opt-in, read-only, requires ANTHROPIC_API_KEY)
-          </option>
+          <option value="claude_code">Claude Code (opt-in, read-only)</option>
         </select>
         <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
         {form.preferred_provider === "gemini" && (
@@ -149,7 +155,8 @@ export function GeneralPanel() {
             <p>
               Gemini authenticates via API key only. Set{" "}
               <code className="text-amber-300">GEMINI_API_KEY</code> (AI Studio) or a Vertex{" "}
-              <code className="text-amber-300">GOOGLE_*</code> env var before launching SignalPR.
+              <code className="text-amber-300">GOOGLE_*</code> env var, or store the key in Provider
+              Credentials below.
             </p>
             <p>
               Google account OAuth is disabled to avoid third-party access risks described in{" "}
@@ -178,8 +185,8 @@ export function GeneralPanel() {
           <div className="text-amber-400 text-xs mt-2 space-y-1">
             <p>
               Cursor authenticates via API key. Generate one from the Cursor Dashboard (Cloud Agents
-              → User API Keys) and export <code className="text-amber-300">CURSOR_API_KEY</code>{" "}
-              before launching SignalPR.
+              → User API Keys) and export <code className="text-amber-300">CURSOR_API_KEY</code>, or
+              store it in Provider Credentials below.
             </p>
             <p>
               Install the Cursor CLI with{" "}
@@ -278,6 +285,165 @@ export function GeneralPanel() {
           Save Settings
         </button>
         {saved && <span className="text-emerald-400 text-sm">Saved!</span>}
+      </div>
+
+      <ProviderCredentialsSection />
+    </div>
+  );
+}
+
+const CREDENTIAL_LABELS: Record<string, { label: string; placeholder: string }> = {
+  anthropic_api_key: { label: "Anthropic API Key", placeholder: "sk-ant-..." },
+  gemini_api_key: { label: "Gemini API Key", placeholder: "AIza..." },
+  google_api_key: { label: "Google API Key", placeholder: "AIza..." },
+  cursor_api_key: { label: "Cursor API Key", placeholder: "cur_..." },
+  opencode_server_password: { label: "OpenCode Server Password", placeholder: "password" },
+};
+
+function fieldToProviderAndField(field: string): { providerId: string; field: string } {
+  switch (field) {
+    case "anthropic_api_key":
+      return { providerId: "claude", field: "api_key" };
+    case "gemini_api_key":
+      return { providerId: "gemini", field: "api_key" };
+    case "google_api_key":
+      return { providerId: "gemini", field: "google_api_key" };
+    case "cursor_api_key":
+      return { providerId: "cursor", field: "api_key" };
+    case "opencode_server_password":
+      return { providerId: "opencode", field: "server_password" };
+    default:
+      return { providerId: "unknown", field: "unknown" };
+  }
+}
+
+function ProviderCredentialsSection() {
+  const [statuses, setStatuses] = useState<CredentialStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
+  const [busyField, setBusyField] = useState<string | null>(null);
+  const [credError, setCredError] = useState<string | null>(null);
+
+  const loadStatuses = async () => {
+    try {
+      const s = await getProviderCredentialStatuses();
+      setStatuses(s);
+    } catch (err) {
+      setCredError(parseError(err).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadStatuses();
+  }, []);
+
+  const handleStore = async (field: string) => {
+    const value = secretInputs[field];
+    if (!value?.trim()) return;
+    const { providerId, field: fieldName } = fieldToProviderAndField(field);
+    setBusyField(field);
+    setCredError(null);
+    try {
+      await storeProviderSecret(providerId, fieldName, value.trim());
+      setSecretInputs((prev) => ({ ...prev, [field]: "" }));
+      await loadStatuses();
+    } catch (err) {
+      setCredError(parseError(err).message);
+    } finally {
+      setBusyField(null);
+    }
+  };
+
+  const handleDelete = async (field: string) => {
+    const { providerId, field: fieldName } = fieldToProviderAndField(field);
+    setBusyField(field);
+    setCredError(null);
+    try {
+      await deleteProviderSecret(providerId, fieldName);
+      await loadStatuses();
+    } catch (err) {
+      setCredError(parseError(err).message);
+    } finally {
+      setBusyField(null);
+    }
+  };
+
+  if (loading) return null;
+
+  return (
+    <div className="border-t border-zinc-800 pt-6 mt-6">
+      <h3 className="text-zinc-200 text-sm font-medium mb-3 flex items-center gap-2">
+        <KeyRound className="w-4 h-4" />
+        Provider Credentials
+      </h3>
+      <p className="text-zinc-500 text-xs mb-4">
+        Store API keys in your OS keychain. Environment variables take precedence over stored keys.
+      </p>
+
+      {credError && <p className="text-red-400 text-xs mb-3">{credError}</p>}
+
+      <div className="space-y-3">
+        {statuses.map((cred) => {
+          const meta = CREDENTIAL_LABELS[cred.field] ?? {
+            label: cred.field,
+            placeholder: "",
+          };
+          const isBusy = busyField === cred.field;
+
+          return (
+            <div key={cred.field} className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-zinc-300 text-xs">{meta.label}</span>
+                  {cred.source !== "none" && (
+                    <span className="inline-flex items-center gap-1 text-emerald-400 text-xs">
+                      <CheckCircle2 className="w-3 h-3" />
+                      {cred.source}
+                    </span>
+                  )}
+                </div>
+                {cred.source === "none" && (
+                  <input
+                    type="password"
+                    placeholder={meta.placeholder}
+                    value={secretInputs[cred.field] ?? ""}
+                    onChange={(e) =>
+                      setSecretInputs((prev) => ({
+                        ...prev,
+                        [cred.field]: e.target.value,
+                      }))
+                    }
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                )}
+              </div>
+              {cred.source === "none" ? (
+                <button
+                  onClick={() => handleStore(cred.field)}
+                  disabled={isBusy || !secretInputs[cred.field]?.trim()}
+                  className="px-2 py-1 text-xs bg-emerald-700 text-white rounded hover:bg-emerald-600 disabled:opacity-50"
+                >
+                  {isBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
+                </button>
+              ) : cred.source === "keychain" ? (
+                <button
+                  onClick={() => handleDelete(cred.field)}
+                  disabled={isBusy}
+                  className="px-2 py-1 text-xs text-red-400 hover:text-red-300"
+                  title="Remove from keychain"
+                >
+                  {isBusy ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3 h-3" />
+                  )}
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

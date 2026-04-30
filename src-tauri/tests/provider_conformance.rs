@@ -37,6 +37,9 @@ fn sidecar_path() -> String {
 }
 
 fn sidecar_is_usable() -> bool {
+    if std::env::var("SIGNALPR_SKIP_SIDECAR_TESTS").is_ok() {
+        return false;
+    }
     let path = sidecar_path();
     let meta = match std::fs::metadata(&path) {
         Ok(meta) => meta,
@@ -317,6 +320,160 @@ fn test_permission_requested_for_blocked_tool() {
         .as_str()
         .unwrap()
         .contains("not in the allowed list"));
+
+    // Shutdown
+    send_request(&mut stdin, 2, "bridge.shutdown", serde_json::json!({}));
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_interactive_review_permission_flow() {
+    assert!(
+        sidecar_is_usable(),
+        "claude-code sidecar must be built before conformance tests run"
+    );
+
+    let (mut child, mut stdin, mut reader) = spawn_mock();
+
+    send_request(
+        &mut stdin,
+        1,
+        "review.start_interactive",
+        serde_json::json!({
+            "lane_id": "interactive-test",
+            "system_prompt": "test",
+            "diff": "test diff",
+            "output_schema": "{}",
+            "cwd": "/tmp"
+        }),
+    );
+
+    // Read ACK
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let ack: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert!(ack.get("result").is_some());
+    assert_eq!(ack["result"]["mode"], "interactive");
+
+    // Read delta and permission_requested
+    let mut perm_request_id: Option<String> = None;
+    let start = std::time::Instant::now();
+    loop {
+        if start.elapsed() > Duration::from_secs(3) {
+            break;
+        }
+        let mut msg_line = String::new();
+        match reader.read_line(&mut msg_line) {
+            Ok(0) => break,
+            Ok(_) => {
+                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&msg_line) {
+                    if msg.get("method").and_then(|v| v.as_str())
+                        == Some("review.permission_requested")
+                    {
+                        let req_id = msg["params"]["request_id"].as_str().unwrap().to_string();
+                        assert_eq!(msg["params"]["action"], "pending");
+                        perm_request_id = Some(req_id);
+                        break;
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    assert!(
+        perm_request_id.is_some(),
+        "Should receive a pending permission_requested"
+    );
+
+    // Resolve the permission
+    send_request(
+        &mut stdin,
+        2,
+        "review.resolve_permission",
+        serde_json::json!({
+            "request_id": perm_request_id.unwrap(),
+            "approved": true
+        }),
+    );
+
+    // Read resolve response
+    let mut resolve_line = String::new();
+    reader.read_line(&mut resolve_line).unwrap();
+    let resolve_resp: serde_json::Value = serde_json::from_str(&resolve_line).unwrap();
+    assert_eq!(resolve_resp["result"]["resolved"], true);
+
+    // Read remaining messages until completion
+    let messages = read_messages(&mut reader, Duration::from_secs(5));
+    let methods: Vec<Option<&str>> = messages
+        .iter()
+        .map(|m| m.get("method").and_then(|v| v.as_str()))
+        .collect();
+
+    assert!(
+        methods.contains(&Some("review.completed")),
+        "Should complete after permission resolved"
+    );
+
+    // Verify session metadata in completion
+    let completed = messages
+        .iter()
+        .find(|m| m.get("method").and_then(|v| v.as_str()) == Some("review.completed"))
+        .unwrap();
+    assert!(
+        completed["params"]["session_id"].is_string(),
+        "Completion should include session_id"
+    );
+    assert!(
+        completed["params"]["cost_usd"].is_number(),
+        "Completion should include cost_usd"
+    );
+
+    // Shutdown
+    send_request(&mut stdin, 3, "bridge.shutdown", serde_json::json!({}));
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_session_metadata_in_standard_completion() {
+    assert!(
+        sidecar_is_usable(),
+        "claude-code sidecar must be built before conformance tests run"
+    );
+
+    let (mut child, mut stdin, mut reader) = spawn_mock();
+
+    send_request(
+        &mut stdin,
+        1,
+        "review.start",
+        serde_json::json!({
+            "lane_id": "metadata-test",
+            "system_prompt": "test",
+            "diff": "test diff",
+            "output_schema": "{}",
+            "cwd": "/tmp"
+        }),
+    );
+
+    let messages = read_messages(&mut reader, Duration::from_secs(5));
+
+    let completed = messages
+        .iter()
+        .find(|m| m.get("method").and_then(|v| v.as_str()) == Some("review.completed"))
+        .expect("Should have completion");
+
+    // Mock always emits session_id and cost_usd
+    assert!(
+        completed["params"]["session_id"].is_string(),
+        "Standard completion should include session_id"
+    );
+    assert!(
+        completed["params"]["cost_usd"].is_number(),
+        "Standard completion should include cost_usd"
+    );
 
     // Shutdown
     send_request(&mut stdin, 2, "bridge.shutdown", serde_json::json!({}));

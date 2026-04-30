@@ -30,6 +30,14 @@ pub struct CodexReviewOutput {
     pub findings: Vec<RawFinding>,
     pub overall_assessment: Option<String>,
     pub overall_confidence: Option<f64>,
+    #[serde(default)]
+    pub provider_session_id: Option<String>,
+    #[serde(default)]
+    pub resume_cursor: Option<String>,
+    #[serde(default)]
+    pub checkpoint_metadata_json: Option<String>,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

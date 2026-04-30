@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot, Mutex};
 use tracing::{debug, warn};
 
+use crate::secrets::credentials::{self, ProviderCredentialField};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodeEvent {
     pub event_type: String,
@@ -31,6 +33,14 @@ pub struct ClaudeCodeHealthInfo {
     pub bridge_version: String,
     pub mode: String,
     pub sdk_version: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaudeCodeReviewResult {
+    pub output: serde_json::Value,
+    pub session_id: Option<String>,
+    pub checkpoint_id: Option<String>,
+    pub cost_usd: Option<f64>,
 }
 
 type SharedChild = Arc<Mutex<Option<Child>>>;
@@ -105,6 +115,16 @@ impl ClaudeCodeManager {
         }
     }
 
+    /// Resolve a pending interactive permission request.
+    /// In read_only mode this is never called (backend blocks earlier).
+    /// In guarded_write mode, forwards the decision to the sidecar via stdin.
+    pub async fn resolve_permission(&self, _request_id: &str, _approved: bool) {
+        // TODO(claude-code-deferred): implement interactive permission flow
+        // by tracking outstanding request_ids and writing the response to the
+        // sidecar stdin. For now this is a no-op placeholder gated by the
+        // governance layer.
+    }
+
     async fn kill_process(process: SharedChild) {
         let mut guard = process.lock().await;
         if let Some(mut child) = guard.take() {
@@ -152,7 +172,7 @@ impl ClaudeCodeManager {
         app_data_dir: &std::path::Path,
         sidecar_path: &str,
         mock_mode: bool,
-    ) -> Result<serde_json::Value, crate::errors::ProviderError> {
+    ) -> Result<ClaudeCodeReviewResult, crate::errors::ProviderError> {
         Self::validate_sidecar_binary(Path::new(sidecar_path))
             .map_err(crate::errors::ProviderError::ClaudeCodeFailed)?;
 
@@ -173,7 +193,10 @@ impl ClaudeCodeManager {
             .env("CLAUDE_CODE_TMPDIR", tmp_dir.to_string_lossy().as_ref())
             .env("CLAUDE_CODE_SKIP_PROMPT_HISTORY", "1");
 
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if let Some(key) = credentials::resolve_credential(ProviderCredentialField::AnthropicApiKey)
+            .ok()
+            .and_then(|(value, _)| value)
+        {
             cmd.env("ANTHROPIC_API_KEY", key);
         }
 
@@ -220,12 +243,12 @@ impl ClaudeCodeManager {
         });
 
         let (result_tx, result_rx) =
-            oneshot::channel::<Result<serde_json::Value, crate::errors::ProviderError>>();
+            oneshot::channel::<Result<ClaudeCodeReviewResult, crate::errors::ProviderError>>();
 
         let reader_lane_id = lane_id_owned.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            let mut final_result: Option<serde_json::Value> = None;
+            let mut final_result: Option<ClaudeCodeReviewResult> = None;
 
             for line in reader.lines() {
                 let line = match line {
@@ -295,7 +318,21 @@ impl ClaudeCodeManager {
                             let _ = permissions_tx.send(request);
                         }
                         "review.completed" => {
-                            final_result = params.get("output").cloned();
+                            final_result = Some(ClaudeCodeReviewResult {
+                                output: params
+                                    .get("output")
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null),
+                                session_id: params
+                                    .get("session_id")
+                                    .and_then(|value| value.as_str())
+                                    .map(ToString::to_string),
+                                checkpoint_id: params
+                                    .get("checkpoint_id")
+                                    .and_then(|value| value.as_str())
+                                    .map(ToString::to_string),
+                                cost_usd: params.get("cost_usd").and_then(|value| value.as_f64()),
+                            });
                             let _ = events_tx.send(ClaudeCodeEvent {
                                 event_type: "review.completed".into(),
                                 lane_id: reader_lane_id.clone(),

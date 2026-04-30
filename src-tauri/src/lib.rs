@@ -9,6 +9,7 @@ mod notifications;
 mod orchestration;
 mod preferences;
 mod providers;
+mod secrets;
 mod storage;
 mod tray;
 
@@ -761,6 +762,11 @@ pub fn run() {
             commands::channels::has_channel_token,
             commands::channels::start_channel_listeners,
             commands::channels::stop_channel_listeners,
+            commands::providers::get_provider_credential_statuses,
+            commands::providers::store_provider_secret,
+            commands::providers::delete_provider_secret,
+            commands::providers::get_provider_capabilities,
+            commands::providers::get_agent_run_metadata,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

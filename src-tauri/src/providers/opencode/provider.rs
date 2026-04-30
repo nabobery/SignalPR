@@ -107,13 +107,16 @@ impl ReviewProvider for OpenCodeProvider {
         match structured {
             Some(data) => {
                 debug!("Parsing structured output from OpenCode response");
-                serde_json::from_value::<CodexReviewOutput>(data.clone()).map_err(|e| {
-                    warn!("Failed to parse structured output: {} — raw: {}", e, data);
-                    ProviderError::OpenCodeFailed(format!(
-                        "Failed to parse structured output: {}",
-                        e
-                    ))
-                })
+                let mut output = serde_json::from_value::<CodexReviewOutput>(data.clone())
+                    .map_err(|e| {
+                        warn!("Failed to parse structured output: {} — raw: {}", e, data);
+                        ProviderError::OpenCodeFailed(format!(
+                            "Failed to parse structured output: {}",
+                            e
+                        ))
+                    })?;
+                output.provider_session_id = Some(session_id);
+                Ok(output)
             }
             None => Err(ProviderError::OpenCodeFailed(
                 "OpenCode response missing structured output".into(),

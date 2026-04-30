@@ -78,6 +78,12 @@ pub struct AgentRun {
     pub completed_at: Option<String>,
     pub finding_count: i32,
     pub error_message: Option<String>,
+    // V5 fields: session metadata
+    pub governance_tier_at_run: Option<String>,
+    pub provider_session_id: Option<String>,
+    pub resume_cursor: Option<String>,
+    pub checkpoint_metadata_json: Option<String>,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

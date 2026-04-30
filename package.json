@@ -25,7 +25,8 @@
     "check:rust": "pnpm lint:rust && pnpm format:rust:check && pnpm test:rust",
     "check": "pnpm check:frontend && pnpm check:bridge && pnpm check:rust",
     "sidecar:claude-code:build": "(test -d src-tauri/bridges/claude-code/node_modules || (CI=true pnpm --dir src-tauri/bridges/claude-code --ignore-workspace install --offline --frozen-lockfile || CI=true pnpm --dir src-tauri/bridges/claude-code --ignore-workspace install --frozen-lockfile)) && pnpm check:bridge",
-    "eval:validate": "node evals/validate.mjs"
+    "eval:validate": "node evals/validate.mjs",
+    "eval:run": "node evals/run-paid.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

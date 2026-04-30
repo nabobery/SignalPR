@@ -270,4 +270,57 @@ export interface ClaudeCodePermissionRequest {
   tool_input: unknown;
   reason: string;
   action: string;
+  request_id?: string;
+}
+
+// --- Provider Credential Platform ---
+
+export type CredentialSource = "environment" | "keychain" | "none";
+
+export type ProviderCredentialField =
+  | "anthropic_api_key"
+  | "gemini_api_key"
+  | "google_api_key"
+  | "cursor_api_key"
+  | "opencode_server_password";
+
+export interface CredentialStatus {
+  field: ProviderCredentialField;
+  source: CredentialSource;
+  provider_ids: string[];
+}
+
+// --- Provider Capability Registry ---
+
+export type ToolGovernanceTier = "read_only" | "guarded_write" | "trusted_write";
+
+export interface ProviderCapabilities {
+  provider_id: string;
+  display_name: string;
+  opt_in_only: boolean;
+  in_auto_fallback: boolean;
+  credential_fields: { provider_id: string; field: string; env_var: string }[];
+  interactive_permissions: boolean;
+  default_governance_tier: ToolGovernanceTier;
+  supports_session_resume: boolean;
+  supports_checkpointing: boolean;
+  paid_eval_eligible: boolean;
+}
+
+// --- Session Metadata ---
+
+export interface AgentRunMetadata {
+  id: string;
+  review_run_id: string;
+  lane_id: string;
+  provider_name: string;
+  governance_tier_at_run: ToolGovernanceTier | null;
+  provider_session_id: string | null;
+  resume_cursor: string | null;
+  checkpoint_metadata_json: string | null;
+  cost_usd: number | null;
+  started_at: string;
+  completed_at: string | null;
+  status: string;
+  finding_count: number;
 }
