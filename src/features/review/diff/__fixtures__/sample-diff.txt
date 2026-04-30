@@ -1,0 +1,50 @@
+diff --git a/src/utils/math.ts b/src/utils/math.ts
+index abc1234..def5678 100644
+--- a/src/utils/math.ts
++++ b/src/utils/math.ts
+@@ -1,8 +1,10 @@
+ export function add(a: number, b: number): number {
+   return a + b;
+ }
+ 
+-export function subtract(a: number, b: number): number {
+-  return a - b;
++export function subtract(a: number, b: number): number {
++  if (b > a) {
++    throw new Error("Result would be negative");
++  }
++  return a - b;
+ }
+diff --git a/src/utils/string.ts b/src/utils/string.ts
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/src/utils/string.ts
+@@ -0,0 +1,5 @@
++export function capitalize(str: string): string {
++  if (!str) return str;
++  return str.charAt(0).toUpperCase() + str.slice(1);
++}
++
+diff --git a/src/old-config.ts b/src/config.ts
+similarity index 85%
+rename from src/old-config.ts
+rename to src/config.ts
+index aaa1111..bbb2222 100644
+--- a/src/old-config.ts
++++ b/src/config.ts
+@@ -1,4 +1,4 @@
+-export const APP_NAME = "OldApp";
++export const APP_NAME = "NewApp";
+ export const VERSION = "1.0.0";
+ export const DEBUG = false;
+ 
+diff --git a/src/deprecated.ts b/src/deprecated.ts
+deleted file mode 100644
+index ccc3333..0000000
+--- a/src/deprecated.ts
++++ /dev/null
+@@ -1,3 +0,0 @@
+-export function oldFunction(): void {
+-  console.log("deprecated");
+-}

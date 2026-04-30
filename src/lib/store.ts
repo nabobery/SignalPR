@@ -14,12 +14,14 @@ export interface ReviewState {
   laneStatuses: LaneSnapshot[];
   clusters: FindingCluster[];
   selectedFile: string | null;
+  focusedFindingId: string | null;
 }
 
 export interface ReviewContextType {
   state: ReviewState;
   setSelectedFile: (file: string | null) => void;
   refreshSnapshot: () => Promise<void>;
+  revealFinding: (findingId: string) => void;
 }
 
 export const ReviewContext = createContext<ReviewContextType | null>(null);

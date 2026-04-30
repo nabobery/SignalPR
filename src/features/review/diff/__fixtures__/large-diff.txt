@@ -1,0 +1,144 @@
+diff --git a/src/a.ts b/src/a.ts
+index aaa..bbb 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,3 +1,4 @@
+ const a = 1;
++const b = 2;
+ const c = 3;
+ export { a };
+diff --git a/src/b.ts b/src/b.ts
+index aaa..bbb 100644
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,3 +1,4 @@
+ const x = 1;
++const y = 2;
+ const z = 3;
+ export { x };
+diff --git a/src/c.ts b/src/c.ts
+index aaa..bbb 100644
+--- a/src/c.ts
++++ b/src/c.ts
+@@ -1,3 +1,4 @@
+ const p = 1;
++const q = 2;
+ const r = 3;
+ export { p };
+diff --git a/src/d.ts b/src/d.ts
+index aaa..bbb 100644
+--- a/src/d.ts
++++ b/src/d.ts
+@@ -1,3 +1,4 @@
+ const m = 1;
++const n = 2;
+ const o = 3;
+ export { m };
+diff --git a/src/e.ts b/src/e.ts
+index aaa..bbb 100644
+--- a/src/e.ts
++++ b/src/e.ts
+@@ -1,3 +1,4 @@
+ const i = 1;
++const j = 2;
+ const k = 3;
+ export { i };
+diff --git a/src/f.ts b/src/f.ts
+index aaa..bbb 100644
+--- a/src/f.ts
++++ b/src/f.ts
+@@ -1,3 +1,4 @@
+ const u = 1;
++const v = 2;
+ const w = 3;
+ export { u };
+diff --git a/src/g.ts b/src/g.ts
+index aaa..bbb 100644
+--- a/src/g.ts
++++ b/src/g.ts
+@@ -1,3 +1,4 @@
+ const aa = 1;
++const bb = 2;
+ const cc = 3;
+ export { aa };
+diff --git a/src/h.ts b/src/h.ts
+index aaa..bbb 100644
+--- a/src/h.ts
++++ b/src/h.ts
+@@ -1,3 +1,4 @@
+ const dd = 1;
++const ee = 2;
+ const ff = 3;
+ export { dd };
+diff --git a/src/i.ts b/src/i.ts
+index aaa..bbb 100644
+--- a/src/i.ts
++++ b/src/i.ts
+@@ -1,3 +1,4 @@
+ const gg = 1;
++const hh = 2;
+ const ii = 3;
+ export { gg };
+diff --git a/src/j.ts b/src/j.ts
+index aaa..bbb 100644
+--- a/src/j.ts
++++ b/src/j.ts
+@@ -1,3 +1,4 @@
+ const jj = 1;
++const kk = 2;
+ const ll = 3;
+ export { jj };
+diff --git a/src/k.ts b/src/k.ts
+index aaa..bbb 100644
+--- a/src/k.ts
++++ b/src/k.ts
+@@ -1,3 +1,4 @@
+ const mm = 1;
++const nn = 2;
+ const oo = 3;
+ export { mm };
+diff --git a/src/l.ts b/src/l.ts
+index aaa..bbb 100644
+--- a/src/l.ts
++++ b/src/l.ts
+@@ -1,3 +1,4 @@
+ const pp = 1;
++const qq = 2;
+ const rr = 3;
+ export { pp };
+diff --git a/src/m.ts b/src/m.ts
+index aaa..bbb 100644
+--- a/src/m.ts
++++ b/src/m.ts
+@@ -1,3 +1,4 @@
+ const ss = 1;
++const tt = 2;
+ const uu = 3;
+ export { ss };
+diff --git a/src/n.ts b/src/n.ts
+index aaa..bbb 100644
+--- a/src/n.ts
++++ b/src/n.ts
+@@ -1,3 +1,4 @@
+ const vv = 1;
++const ww = 2;
+ const xx = 3;
+ export { vv };
+diff --git a/src/o.ts b/src/o.ts
+index aaa..bbb 100644
+--- a/src/o.ts
++++ b/src/o.ts
+@@ -1,3 +1,4 @@
+ const yy = 1;
++const zz = 2;
+ const aaa = 3;
+ export { yy };
+diff --git a/src/p.ts b/src/p.ts
+index aaa..bbb 100644
+--- a/src/p.ts
++++ b/src/p.ts
+@@ -1,3 +1,4 @@
+ const bbb = 1;
++const ccc = 2;
+ const ddd = 3;
+ export { bbb };

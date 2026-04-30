@@ -13,8 +13,11 @@ providers/
 ├── opencode/          # OpenCode via HTTP REST + SSE
 ├── gemini/            # Gemini CLI via ACP (JSON-RPC + NDJSON framing)
 ├── cursor/            # Cursor CLI via ACP (JSON-RPC + NDJSON framing)
+├── claude_code/       # Claude Code sidecar provider (persistent process + event broadcast)
 ├── pi/                # PI Agent SDK via pi --mode rpc (LF-delimited JSONL, single-session)
 ├── jsonrpc/           # Shared JSON-RPC 2.0 transport (Codex + Copilot + Gemini + Cursor)
+├── capabilities.rs    # Provider capability registry + metadata
+├── governance.rs     # Fallback policy, auto-deny rules, provider selection guardrails
 ├── claude.rs          # Direct HTTP to Anthropic API
 ├── github.rs          # GitHub integration (PR fetching only)
 ├── mock.rs            # Mock provider (#[cfg(test)] only)
@@ -45,6 +48,7 @@ pub trait ReviewProvider: Send + Sync {
 | `Codex`    | codex.rs          | CLI subprocess      | One-shot `codex exec`                           |
 | `CodexApp` | codex_app_server/ | JSON-RPC stdio      | Persistent process, streaming                   |
 | `Claude`   | claude.rs         | `ANTHROPIC_API_KEY` | HTTP + `tool_use`                               |
+| `Claude Code` | claude_code/    | `ANTHROPIC_API_KEY` | Persistent sidecar process + lane events         |
 | `Copilot`  | copilot/          | GitHub Copilot CLI  | JSON-RPC v3, Content-Length                     |
 | `OpenCode` | opencode/         | `opencode` CLI      | HTTP REST + SSE                                 |
 | `Gemini`   | gemini/           | `GEMINI_API_KEY`    | ACP JSON-RPC over stdio (ndjson)                |

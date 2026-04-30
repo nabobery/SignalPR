@@ -1,12 +1,12 @@
 # SignalPR Knowledge Base
 
-**Generated:** 2026-04-12
+**Generated:** 2026-04-30
 **Branch:** main
-**Commit:** 1684fc3
+**Commit:** 6c5264f
 
 ## OVERVIEW
 
-SignalPR is a **reviewer-first desktop app for AI-assisted PR review**. Built with Tauri 2 (Rust backend + React/TypeScript frontend). Fetches GitHub PR diffs, runs AI review via Codex/Claude/Copilot/OpenCode providers, presents findings in a structured workspace with multi-lane parallel analysis. Supports real-time streaming and interactive approval flows.
+SignalPR is a reviewer-first desktop app for AI-assisted PR review. It combines a Tauri 2 backend with React/TypeScript frontend rendering for PR diff review. Findings flow through multi-lane providers and are surfaced in a unified workspace with streaming, approvals, and focused review actions.
 
 ## STACK
 
@@ -16,42 +16,11 @@ Tauri 2 (Rust) + React 19 + TypeScript 5.8 + Vite 7 + Tailwind CSS 4. SQLite (ru
 
 ```
 signalpr/
-├── src/                    # React frontend
-│   ├── main.tsx            # Entry point
-│   ├── App.tsx             # Router (/ and /review/:runId)
-│   ├── features/           # Feature modules
-│   │   ├── intake/         # PR URL input + workspace selection
-│   │   ├── onboarding/     # Environment checks (gh, codex CLI)
-│   │   ├── review/         # Main workspace (7 components)
-│   │   ├── settings/       # Settings UI (General/Presets/Agents/Channels)
-│   │   └── submission/     # Submit review dialog
-│   ├── lib/                # Shared utilities
-│   │   ├── ipc.ts          # Tauri invoke wrappers
-│   │   ├── store.ts        # React context for review state
-│   │   └── types.ts        # Shared TypeScript interfaces
-│   └── test/               # Test utilities
-├── src-tauri/              # Rust backend
-│   ├── src/main.rs         # Windows subsystem entry
-│   ├── src/lib.rs          # Tauri builder + command registration
-│   ├── src/commands/       # IPC handlers (16 modules + opencode.rs, copilot.rs, gemini.rs, cursor.rs)
-│   ├── src/config/         # Configuration resolution (438 lines, preset inheritance)
-│   ├── src/providers/      # AI providers (Codex, Claude, Copilot, OpenCode, Mock)
-│   │   ├── jsonrpc/        # Shared JSON-RPC transport (dual framing)
-│   │   ├── copilot/        # Copilot v3 provider (manager + provider)
-│   │   ├── opencode/       # OpenCode provider (HTTP REST + SSE)
-│   │   ├── gemini/         # Gemini CLI via ACP (JSON-RPC + NDJSON framing)
-│   │   ├── cursor/         # Cursor CLI via ACP (JSON-RPC + NDJSON framing)
-│   │   ├── codex_app_server/ # Codex App Server provider
-│   │   ├── pi/             # PI Agent SDK (pi --mode rpc, LF-JSONL, single-session)
-│   │   └── mock.rs          # Mock provider (test-only, #[cfg(test)])
-│   ├── src/orchestration/  # Multi-lane review pipeline
-│   ├── src/storage/        # SQLite layer
-│   ├── src/cleaner/        # Finding dedup/rank/normalize/verify/synthesis
-│   ├── src/notifications/  # GitHub poll notifications
-│   ├── src/channels/       # Discord/Slack notification channels
-│   ├── src/autofix/        # Auto-fix patch generation
-│   ├── src/agents/         # Custom agent definitions
-│   └── src/preferences/    # Reviewer preference scoring
+├── src/           # React frontend (`src/AGENTS.md`)
+│   ├── features/  # App features (review/onboarding/...)
+│   └── lib/       # IPC wrappers + shared types
+├── src-tauri/     # Rust backend (`src-tauri/AGENTS.md`, module AGENTS under `src-tauri/src/*`)
+└── .github/       # CI/workflow definitions
 ```
 
 ## WHERE TO LOOK
@@ -59,6 +28,8 @@ signalpr/
 | Task                   | Location                            | Notes                                |
 | ---------------------- | ----------------------------------- | ------------------------------------ |
 | Add Tauri command      | `src-tauri/src/commands/`           | Register in lib.rs `invoke_handler`  |
+| Backend entrypoints    | `src-tauri/AGENTS.md`               | Backend command/pipeline/providers map |
+| Diff rendering         | `src/features/review/diff/`         | Pierre parser, line annotations, collapse heuristics |
 | Add AI provider        | `src-tauri/src/providers/`          | Implement `ReviewProvider` trait     |
 | Change IPC contract    | `src/lib/ipc.ts` + matching command | Types in `src/lib/types.ts`          |
 | Review UI              | `src/features/review/`             | ReviewWorkspace is orchestrator      |
@@ -69,19 +40,17 @@ signalpr/
 | Channels               | `src-tauri/src/channels/`          | Discord/Slack + WebSocket transport  |
 | Settings UI            | `src/features/settings/`           | General/Presets/Agents/Channels tabs |
 
-## IPC COMMANDS (Frontend → Backend)
+## IPC COMMANDS
 
-34 commands across 15 handler files. See `src-tauri/src/commands/AGENTS.md` for full list.
-
-Key command groups: environment, intake, review lifecycle, findings, submission, settings, diagnostics, agents, autofix, channels, codex/copilot/opencode permissions, preferences.
-
-All commands registered in `lib.rs` via `generate_handler!` macro.
+34 commands across 15 handler files. Registered in `src-tauri/src/lib.rs` via `generate_handler!`.
 
 ## CONFIGURATION
 
 Three-layer resolution: `defaults → user settings (DB) → .signalpr.yml`
 
 See `src-tauri/src/config/AGENTS.md` for details.
+
+Frontend diff rendering now uses `@pierre/diffs` in `src/features/review/diff/`, with legacy fallback for robust rendering.
 
 **Provider selection fallback**: preferred → codex → claude → copilot → opencode → mock
 
@@ -116,6 +85,7 @@ See `src-tauri/src/providers/AGENTS.md` for full provider table and details.
 - Test files colocated: `*.test.tsx`/`*.test.ts` (frontend), `#[cfg(test)]` inline (Rust)
 - Mock Tauri APIs via `src/test/mocks.ts`
 - Rust tests use `init_db_in_memory()` for isolation
+- Diff subsystem tests are colocated in `src/features/review/diff/` (parser, annotation mapping, heuristics, integration fixtures)
 
 ### Naming
 
@@ -124,28 +94,7 @@ See `src-tauri/src/providers/AGENTS.md` for full provider table and details.
 
 ## STREAMING EVENTS
 
-See `src/AGENTS.md` for full event table. Per-provider events:
-- Codex: `codex_lane_delta`, `codex_approval_requested`
-- Copilot: `copilot_lane_delta`, `copilot_permission_requested`
-- OpenCode: `opencode_lane_delta`, `opencode_permission_requested`
-- Gemini: `gemini_lane_delta`, `gemini_permission_requested` (observational — backend auto-denies)
-- Cursor: `cursor_lane_delta`, `cursor_permission_requested` (observational — backend auto-denies)
-- PI: `pi_lane_delta` (streaming text deltas; no permission requests — PI doesn't expose tool approval)
-
-## MODULE DETAILS
-
-Each Rust module has its own `AGENTS.md` — see subdirectories for specifics.
-
-Key complexity hotspots (>500 lines):
-- `storage/queries.rs` (1291 lines) — all SQL operations
-- `orchestration/engine.rs` (1234 lines) — pipeline orchestration
-- `providers/cursor/manager.rs` (1574 lines) — Cursor ACP process lifecycle
-- `providers/pi/manager.rs` (906 lines) — PI RPC process lifecycle (single-session serialization)
-- `providers/opencode/manager.rs` (666 lines) — OpenCode process lifecycle
-- `providers/copilot/manager.rs` (654 lines) — Copilot process lifecycle
-- `commands/submission.rs` (650 lines) — GitHub submission logic
-- `commands/review.rs` (623 lines) — review pipeline commands
-- `providers/codex_app_server/manager.rs` (606 lines) — Codex process lifecycle
+Frontend and backend stream event updates through `review_progress` and per-lane events (`codex|copilot|opencode|gemini|cursor|pi_lane_delta`) plus permission-request events (e.g. `*_permission_requested`) into `ReviewWorkspace` and related components.
 
 ## ANTI-PATTERNS
 
@@ -155,6 +104,7 @@ Key complexity hotspots (>500 lines):
 - **Never** bypass the cleaner pipeline — raw findings must go through dedup/rank/verify/remap
 - **Never** use `as any` or `@ts-ignore` in TypeScript
 - **Never** write tests without mocking Tauri APIs
+- **Never** bypass `DiffPanel` fallback behavior when touching parser/renderer changes
 
 ## COMMANDS
 

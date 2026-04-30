@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   AlertTriangle,
   ShieldAlert,
@@ -24,10 +24,25 @@ const severityConfig: Record<string, { icon: typeof AlertTriangle; color: string
   nitpick: { icon: Sparkles, color: "text-zinc-400", bg: "bg-zinc-800/50" },
 };
 
-export function FindingCard({ finding, onUpdated }: { finding: Finding; onUpdated: () => void }) {
+export function FindingCard({
+  finding,
+  onUpdated,
+  focused = false,
+}: {
+  finding: Finding;
+  onUpdated: () => void;
+  focused?: boolean;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
   const [editBody, setEditBody] = useState(finding.user_edited_body ?? finding.body);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (focused && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [focused]);
   const [showFix, setShowFix] = useState(false);
 
   const hasPendingFix =
@@ -59,7 +74,10 @@ export function FindingCard({ finding, onUpdated }: { finding: Finding; onUpdate
   if (finding.status === "suppressed") return null;
 
   return (
-    <div className={`border border-zinc-800 rounded-lg p-3 ${config.bg}`}>
+    <div
+      ref={cardRef}
+      className={`border rounded-lg p-3 ${config.bg} ${focused ? "border-blue-500 ring-1 ring-blue-500/50" : "border-zinc-800"}`}
+    >
       <div className="flex items-start gap-2">
         <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${config.color}`} />
         <div className="flex-1 min-w-0">

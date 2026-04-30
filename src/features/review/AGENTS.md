@@ -9,7 +9,7 @@
 | `ReviewWorkspace`   | ReviewWorkspace.tsx   | Top-level orchestrator, state, event listener     |
 | `FileTree`          | FileTree.tsx          | Changed files sidebar                             |
 | `SignalBoard`       | SignalBoard.tsx       | Findings list with filtering                      |
-| `DiffPanel`         | DiffPanel.tsx         | Diff viewer with line highlighting                |
+| `DiffPanel`         | DiffPanel.tsx         | Diff viewer + ErrorBoundary wrapper for Pierre/legacy fallback |
 | `FindingCard`       | FindingCard.tsx       | Individual finding display                        |
 | `ClusterCard`       | ClusterCard.tsx       | Grouped findings with expand/collapse             |
 | `LaneProgress`      | LaneProgress.tsx      | Multi-lane status indicators (security/arch/perf) |
@@ -17,6 +17,8 @@
 | `ApprovalModal`     | ApprovalModal.tsx     | Interactive Codex tool approval queue             |
 | `FixPreview`        | FixPreview.tsx        | Auto-fix preview modal                            |
 | `FixBatchBar`       | FixBatchBar.tsx       | Batch fix actions bar                             |
+| `SessionDrawer`     | SessionDrawer.tsx     | Session progress + errors + warnings                |
+| `diff/*`            | `src/features/review/diff/*` | Diff parser, line annotations, heuristics, fixtures |
 
 ## STATE FLOW
 
@@ -25,7 +27,9 @@ ReviewContext.Provider (ReviewWorkspace)
   ├── FileTree → selectedFile
   ├── SignalBoard → findings[] → activePanel="signals"
   │     └── ClusterCard / FindingCard
+  │           └── scrollIntoView when focusedFindingId is set
   ├── DiffPanel → selectedFile → activePanel="diff"
+  │     └── PierreDiffPanel + LegacyDiffPanel fallback
   ├── LaneProgress → lanes[] (LaneSnapshot[])
   │     └── StreamingActivity (per lane)
   ├── ApprovalModal → codex_approval_requested queue
@@ -34,18 +38,7 @@ ReviewContext.Provider (ReviewWorkspace)
 
 ## EVENTS
 
-- `review_progress` — Backend pipeline progress
-- `codex_lane_delta` — Real-time Codex streaming per lane (filtered by `laneId`)
-- `codex_approval_requested` — Interactive Codex tool approval queue
-- `copilot_lane_delta` — Real-time Copilot streaming per lane
-- `copilot_permission_requested` — Copilot v3 permission approval queue
-- `opencode_lane_delta` — Real-time OpenCode streaming per lane
-- `opencode_permission_requested` — OpenCode permission approval queue
-- `gemini_lane_delta` — Real-time Gemini streaming per lane
-- `gemini_permission_requested` — Gemini tool request (observational; backend already denied)
-- `cursor_lane_delta` — Real-time Cursor streaming per lane
-- `cursor_permission_requested` — Cursor tool request (observational; backend already denied)
-- `pi_lane_delta` — Real-time PI streaming per lane
+Backend emits `review_progress`, lane deltas (`<provider>_lane_delta`), and permission queue events (`<provider>_permission_requested`).
 
 ## STREAMING (`StreamingActivity.tsx`)
 
@@ -58,14 +51,15 @@ Shows last meaningful line from streaming buffer per lane:
 
 ## APPROVAL (`ApprovalModal.tsx`)
 
-Modal queue for interactive approval/permission requests (multi-provider):
+Modal queue is provider-agnostic.
+- Codex / Copilot / OpenCode resolve via their provider-specific IPC actions.
+- Gemini / Cursor are observational-only; requests resolve to dismiss-only UI.
 
-- Queue-based: multiple approvals stack
-- Codex: shows method, command, cwd, thread/turn IDs → `resolveCodexApproval(requestId, decision)`
-- Copilot: shows permission kind, event details → `resolveCopilotPermission(sessionId, eventId, allow)`
-- OpenCode: shows permission message → `resolveOpenCodePermission(requestId, reply)`
-- Gemini: **observational only** — shows "Tool request denied" + Acknowledge button; no IPC call (backend auto-denied before event fires)
-- Cursor: **observational only** — same dismiss-only card pattern as Gemini; `resolve_cursor_permission` IPC is a no-op stub
+## TESTING
+
+Focus coverage:
+- Review event handling, lane streaming, and permission queue UI.
+- Diff annotation click-through path (`focusedFindingId` + `revealFinding`) should stay aligned with panel rendering.
 
 ## CONVENTIONS
 
@@ -77,3 +71,6 @@ Modal queue for interactive approval/permission requests (multi-provider):
 - LaneProgress shows per-lane icons: Shield (security), Layers (arch), Gauge (perf)
 - FixPreview/FixBatchBar handle auto-fix suggestions via `apply_fix` IPC
 - ApprovalModal is globally rendered (fixed inset-0 z-50)
+- `revealFinding` routes diff annotation clicks to signal focus for 2 seconds
+- `focusedFindingId` is part of `ReviewState` and bubbles through `ReviewContext`
+- Diff rendering collapses large file sets by default and remains usable via expand behavior

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, Loader2, Send, FileCode, List } from "lucide-react";
@@ -12,6 +12,7 @@ import LaneProgress from "./LaneProgress";
 import { SessionDrawer } from "./SessionDrawer";
 import { SubmitDialog } from "../submission/SubmitDialog";
 import { ApprovalModal } from "./ApprovalModal";
+import { normalizeFilePath } from "./diff/normalizeFilePath";
 
 type Panel = "signals" | "diff";
 
@@ -45,6 +46,7 @@ export function ReviewWorkspace() {
           prev?.selectedFile && snap.changed_files.includes(prev.selectedFile)
             ? prev.selectedFile
             : null,
+        focusedFindingId: null,
       }));
     } catch (err) {
       setError(parseError(err).message);
@@ -74,6 +76,35 @@ export function ReviewWorkspace() {
   const setSelectedFile = (file: string | null) => {
     setState((prev) => (prev ? { ...prev, selectedFile: file } : prev));
   };
+
+  const knownFilesSet = useMemo(() => new Set(state?.changedFiles ?? []), [state?.changedFiles]);
+
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    };
+  }, []);
+
+  const revealFinding = useCallback(
+    (findingId: string) => {
+      const finding = state?.findings.find((f) => f.id === findingId);
+      if (!finding) return;
+
+      if (finding.file_path) {
+        setSelectedFile(normalizeFilePath(finding.file_path, knownFilesSet));
+      }
+      setActivePanel("signals");
+      setState((prev) => (prev ? { ...prev, focusedFindingId: findingId } : prev));
+
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+      focusTimerRef.current = setTimeout(() => {
+        setState((prev) => (prev ? { ...prev, focusedFindingId: null } : prev));
+      }, 2000);
+    },
+    [state?.findings, knownFilesSet],
+  );
 
   if (loading) {
     return (
@@ -110,7 +141,7 @@ export function ReviewWorkspace() {
   };
 
   return (
-    <ReviewContext.Provider value={{ state, setSelectedFile, refreshSnapshot }}>
+    <ReviewContext.Provider value={{ state, setSelectedFile, refreshSnapshot, revealFinding }}>
       <div className="h-screen bg-zinc-950 text-zinc-100 flex flex-col">
         {/* Header */}
         <header className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
@@ -207,7 +238,11 @@ export function ReviewWorkspace() {
 
           {/* Main panel */}
           <main className="flex-1 min-w-0 overflow-hidden">
-            {activePanel === "signals" ? <SignalBoard /> : <DiffPanel />}
+            {activePanel === "signals" ? (
+              <SignalBoard />
+            ) : (
+              <DiffPanel onRevealFinding={revealFinding} />
+            )}
           </main>
         </div>
 

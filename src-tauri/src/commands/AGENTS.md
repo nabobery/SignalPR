@@ -21,6 +21,7 @@
 | `opencode.rs`    | `resolve_opencode_permission`                          | OpenCode permission reply         |
 | `gemini.rs`      | `resolve_gemini_permission`                            | Gemini permission stub (no-op; future: interactive approval gate) |
 | `cursor.rs`      | `resolve_cursor_permission`                            | Cursor permission stub (no-op; future: interactive approval gate) |
+| `providers.rs`   | `get_provider_credential_statuses`, `store_provider_secret`, `delete_provider_secret`, `get_provider_capabilities`, `get_agent_run_metadata` | Provider credentials + capability metadata |
 | `channels.rs`    | `configure_channel`, `remove_channel`, `get_channel_status`, etc. | Channel management |
 | `preferences.rs` | `get_preferences`                                      | Reviewer preference summaries     |
 
@@ -38,3 +39,5 @@
 - Use `queries::*` functions for DB operations
 - Emit `review_progress` event for status updates
 - Settings stored as `HashMap<String, String>` key-value pairs
+- Provider and channel commands expose errors through `AppError` conversion paths before serialization
+- Command handlers are intentionally slim; orchestration/business logic stays in non-command modules

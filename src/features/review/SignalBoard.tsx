@@ -70,19 +70,30 @@ export function SignalBoard() {
         {clusterGroups.length > 0 && ` in ${clusterGroups.length + unclustered.length} groups`}
         {selectedFile && <span> in {selectedFile}</span>}
       </div>
-      {clusterGroups.map((group) => (
-        <ClusterCard
-          key={group.cluster.id}
-          cluster={{
-            ...group.cluster,
-            representative: group.representative,
-            members: group.members,
-          }}
-          onUpdate={refreshSnapshot}
-        />
-      ))}
+      {clusterGroups.map((group) => {
+        const isFocused =
+          state.focusedFindingId != null &&
+          group.members.some((m) => m.id === state.focusedFindingId);
+        return (
+          <ClusterCard
+            key={group.cluster.id}
+            cluster={{
+              ...group.cluster,
+              representative: group.representative,
+              members: group.members,
+            }}
+            onUpdate={refreshSnapshot}
+            focused={isFocused}
+          />
+        );
+      })}
       {unclustered.map((finding) => (
-        <FindingCard key={finding.id} finding={finding} onUpdated={refreshSnapshot} />
+        <FindingCard
+          key={finding.id}
+          finding={finding}
+          onUpdated={refreshSnapshot}
+          focused={state.focusedFindingId === finding.id}
+        />
       ))}
     </div>
   );

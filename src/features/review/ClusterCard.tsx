@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -26,6 +26,7 @@ interface HydratedCluster {
 interface ClusterCardProps {
   cluster: HydratedCluster;
   onUpdate: () => void;
+  focused?: boolean;
 }
 
 const SEVERITY_CONFIG: Record<string, { icon: typeof AlertTriangle; color: string }> = {
@@ -59,9 +60,16 @@ function FindingSubItem({ finding }: { finding: Finding }) {
   );
 }
 
-export default function ClusterCard({ cluster, onUpdate }: ClusterCardProps) {
+export default function ClusterCard({ cluster, onUpdate, focused = false }: ClusterCardProps) {
+  const cardRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (focused && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [focused]);
   const [editBody, setEditBody] = useState(cluster.representative.body);
   const rep = cluster.representative;
   const config = SEVERITY_CONFIG[rep.severity] ?? SEVERITY_CONFIG.info;
@@ -81,7 +89,10 @@ export default function ClusterCard({ cluster, onUpdate }: ClusterCardProps) {
   };
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+    <div
+      ref={cardRef}
+      className={`bg-zinc-900 border rounded-lg overflow-hidden ${focused ? "border-blue-500 ring-1 ring-blue-500/50" : "border-zinc-800"}`}
+    >
       {/* Header */}
       <div className="flex items-start gap-3 p-4">
         <Icon className={`w-4 h-4 mt-0.5 ${config.color} shrink-0`} />

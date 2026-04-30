@@ -12,7 +12,7 @@ settings/
 ├── AgentPanel.tsx     # Custom agent management
 ├── AgentForm.tsx      # Agent create/edit form
 ├── ChannelPanel.tsx   # Discord/Slack webhook config
-└── (no AGENTS.md previously)
+└── AGENTS.md          # This module guidance
 ```
 
 ## TABS
@@ -22,7 +22,7 @@ settings/
 | General  | GeneralPanel | get_settings, update_setting         |
 | Presets  | PresetPanel  | get_settings, update_setting         |
 | Agents   | AgentPanel   | get_agents, save_agent, delete_agent |
-| Channels | ChannelPanel | get_settings, get_channel_statuses   |
+| Channels | ChannelPanel | get_settings, get_channel_status      |
 
 ## GENERAL PANEL NOTES
 
