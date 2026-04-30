@@ -255,3 +255,19 @@ export interface PiLaneDelta {
   delta: string;
   buffer: string;
 }
+
+// Claude Code streaming delta event
+export interface ClaudeCodeLaneDelta {
+  lane_id: string;
+  delta: string;
+  buffer: string;
+}
+
+// Claude Code permission request (observational in v1)
+export interface ClaudeCodePermissionRequest {
+  lane_id: string;
+  tool_name: string;
+  tool_input: unknown;
+  reason: string;
+  action: string;
+}

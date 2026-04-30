@@ -139,6 +139,9 @@ export function GeneralPanel() {
           <option value="gemini">Gemini</option>
           <option value="cursor">Cursor</option>
           <option value="pi">PI</option>
+          <option value="claude_code">
+            Claude Code (opt-in, read-only, requires ANTHROPIC_API_KEY)
+          </option>
         </select>
         <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
         {form.preferred_provider === "gemini" && (

@@ -1,0 +1,12 @@
+{
+  "id": "002-sql-injection",
+  "description": "Python web handler with a SQL injection vulnerability via string formatting.",
+  "diff": "--- a/app/handlers.py\n+++ b/app/handlers.py\n@@ -1,3 +1,15 @@\n+import sqlite3\n+from flask import Flask, request\n+\n+app = Flask(__name__)\n+\n+@app.route('/users')\n+def get_users():\n+    name = request.args.get('name', '')\n+    conn = sqlite3.connect('app.db')\n+    cursor = conn.cursor()\n+    query = f\"SELECT * FROM users WHERE name = '{name}'\"\n+    cursor.execute(query)\n+    return str(cursor.fetchall())\n",
+  "expected": {
+    "min_findings": 1,
+    "max_findings": 4,
+    "must_mention_files": ["app/handlers.py"],
+    "severity_range": ["critical", "blocker"],
+    "must_contain_keywords": ["injection", "SQL", "parameterized"]
+  }
+}

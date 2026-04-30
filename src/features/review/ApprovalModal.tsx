@@ -7,6 +7,7 @@ import {
   resolveOpenCodePermission,
 } from "../../lib/ipc";
 import type {
+  ClaudeCodePermissionRequest,
   CodexApprovalRequest,
   CopilotPermissionRequest,
   CursorPermissionRequest,
@@ -19,7 +20,8 @@ type QueueItem =
   | { source: "copilot"; request: CopilotPermissionRequest }
   | { source: "opencode"; request: OpenCodePermissionRequest }
   | { source: "gemini"; request: GeminiPermissionRequest }
-  | { source: "cursor"; request: CursorPermissionRequest };
+  | { source: "cursor"; request: CursorPermissionRequest }
+  | { source: "claude_code"; request: ClaudeCodePermissionRequest };
 
 export function ApprovalModal() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -52,12 +54,19 @@ export function ApprovalModal() {
         setQueue((prev) => [...prev, { source: "cursor", request: event.payload }]);
       },
     );
+    const unlistenClaudeCode = listen<ClaudeCodePermissionRequest>(
+      "claude_code_permission_requested",
+      (event) => {
+        setQueue((prev) => [...prev, { source: "claude_code", request: event.payload }]);
+      },
+    );
     return () => {
       unlistenCodex.then((fn) => fn());
       unlistenCopilot.then((fn) => fn());
       unlistenOpenCode.then((fn) => fn());
       unlistenGemini.then((fn) => fn());
       unlistenCursor.then((fn) => fn());
+      unlistenClaudeCode.then((fn) => fn());
     };
   }, []);
 
@@ -75,17 +84,14 @@ export function ApprovalModal() {
         return item.request.metadata?.command as string | undefined;
       case "gemini":
       case "cursor": {
-        // ACP tool-call shape:
-        //   https://agentclientprotocol.com/protocol/tool-calls
-        // `title` is the preferred UI hint; fall back to `kind` and
-        // then `name` so we never show an empty card on an unexpected
-        // shape.
         const tool = item.request.tool_call as Record<string, unknown> | undefined;
         const title = typeof tool?.title === "string" ? (tool.title as string) : undefined;
         const kind = typeof tool?.kind === "string" ? (tool.kind as string) : undefined;
         const name = typeof tool?.name === "string" ? (tool.name as string) : undefined;
         return title ?? kind ?? name;
       }
+      case "claude_code":
+        return item.request.tool_name;
     }
   };
 
@@ -104,6 +110,8 @@ export function ApprovalModal() {
         return `Session: ${item.request.session_id.slice(0, 8)}...`;
       case "cursor":
         return `Session: ${item.request.session_id.slice(0, 8)}...`;
+      case "claude_code":
+        return `Lane: ${item.request.lane_id.slice(0, 8)}...`;
     }
   };
 
@@ -123,6 +131,8 @@ export function ApprovalModal() {
         const label = kind ? `Tool request (${kind})` : "Tool request";
         return `${label} denied — SignalPR runs in ${mode} mode (review-only)`;
       }
+      case "claude_code":
+        return `Tool '${item.request.tool_name}' denied — ${item.request.reason}`;
     }
   };
 
@@ -155,8 +165,10 @@ export function ApprovalModal() {
     opencode: "OpenCode",
     gemini: "Gemini",
     cursor: "Cursor",
+    claude_code: "Claude Code",
   };
-  const isObservational = current.source === "gemini" || current.source === "cursor";
+  const isObservational =
+    current.source === "gemini" || current.source === "cursor" || current.source === "claude_code";
   const title = isObservational
     ? `${providerLabel[current.source]} Tool Request (Denied)`
     : `${providerLabel[current.source]} Approval Required`;

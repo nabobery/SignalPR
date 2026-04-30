@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use channels::manager::ChannelManager;
+use providers::claude_code::manager::ClaudeCodeManager;
 use providers::codex_app_server::manager::CodexAppServerManager;
 use providers::copilot::manager::CopilotManager;
 use providers::cursor::manager::CursorManager;
@@ -68,6 +69,13 @@ struct CursorLaneDelta {
 
 #[derive(Debug, Clone, Serialize)]
 struct PiLaneDelta {
+    lane_id: String,
+    delta: String,
+    buffer: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClaudeCodeLaneDelta {
     lane_id: String,
     delta: String,
     buffer: String,
@@ -148,6 +156,11 @@ pub fn run() {
             // Requires `pi` CLI installed and API keys configured in PI's config.
             let pi_manager = Arc::new(PiManager::new());
             app.manage(pi_manager);
+
+            // Shared Claude Code manager (per-review sidecar spawning).
+            // Requires ANTHROPIC_API_KEY and the compiled sidecar binary.
+            let claude_code_manager = Arc::new(ClaudeCodeManager::new());
+            app.manage(claude_code_manager);
 
             // Channel listener lifecycle tokens
             app.manage(ChannelListenerTokens(tokio::sync::Mutex::new(
@@ -596,6 +609,61 @@ pub fn run() {
                 });
             }
 
+            // Forward Claude Code permission requests to the frontend.
+            {
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<ClaudeCodeManager>>().inner().clone();
+                let mut rx = manager.subscribe_permissions();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(req) => {
+                                let _ = app_handle.emit("claude_code_permission_requested", req);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
+                    }
+                });
+            }
+
+            // Forward Claude Code streaming deltas to the frontend (lane-scoped).
+            {
+                const MAX_LANE_BUFFER: usize = 16 * 1024;
+                let app_handle = app.handle().clone();
+                let manager = app.state::<Arc<ClaudeCodeManager>>().inner().clone();
+                let mut rx = manager.subscribe_events();
+                tauri::async_runtime::spawn(async move {
+                    let mut buffers: HashMap<String, String> = HashMap::new();
+                    loop {
+                        let event = match rx.recv().await {
+                            Ok(e) => e,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        };
+
+                        match event.event_type.as_str() {
+                            "review.delta" if !event.delta.is_empty() => {
+                                let buf = buffers.entry(event.lane_id.clone()).or_default();
+                                push_capped(buf, &event.delta, MAX_LANE_BUFFER);
+                                let _ = app_handle.emit(
+                                    "claude_code_lane_delta",
+                                    ClaudeCodeLaneDelta {
+                                        lane_id: event.lane_id.clone(),
+                                        delta: event.delta.clone(),
+                                        buffer: buf.clone(),
+                                    },
+                                );
+                            }
+                            "review.completed" | "review.error" => {
+                                buffers.remove(&event.lane_id);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+
             // Set up system tray
             tray::setup_tray(app.handle())?;
 
@@ -683,6 +751,7 @@ pub fn run() {
             commands::opencode::resolve_opencode_permission,
             commands::gemini::resolve_gemini_permission,
             commands::cursor::resolve_cursor_permission,
+            commands::claude_code::resolve_claude_code_permission,
             commands::agents::get_agent_definitions,
             commands::agents::save_agent_definition,
             commands::agents::delete_agent_definition,

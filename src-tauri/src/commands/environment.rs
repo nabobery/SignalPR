@@ -1,7 +1,9 @@
 use serde::Serialize;
 use tauri::AppHandle;
+use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
+use crate::providers::claude_code::manager::ClaudeCodeManager;
 use crate::storage::models::ToolStatus;
 
 #[derive(Debug, Serialize)]
@@ -25,6 +27,7 @@ pub async fn inspect_environment(
     results.push(check_copilot(&app, &now).await);
     results.push(check_opencode(&app, &now).await);
     results.push(check_gemini(&app, &now).await);
+    results.push(check_claude_code(&app, &now));
 
     Ok(results)
 }
@@ -43,6 +46,8 @@ pub async fn get_environment_summary(
     tools.push(check_opencode(&app, &now).await);
     tools.push(check_gemini(&app, &now).await);
 
+    tools.push(check_claude_code(&app, &now));
+
     let can_submit = tools
         .iter()
         .any(|t| t.tool_name == "gh" && t.status == "ready");
@@ -53,7 +58,8 @@ pub async fn get_environment_summary(
                 || t.tool_name == "claude"
                 || t.tool_name == "copilot"
                 || t.tool_name == "opencode"
-                || t.tool_name == "gemini")
+                || t.tool_name == "gemini"
+                || t.tool_name == "claude_code")
                 && t.status == "ready"
         })
         .map(|t| t.tool_name.clone())
@@ -272,6 +278,55 @@ async fn check_gemini(app: &AppHandle, now: &str) -> ToolStatus {
         version,
         message: None,
         checked_at: now.into(),
+    }
+}
+
+fn check_claude_code(app: &AppHandle, now: &str) -> ToolStatus {
+    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    let sidecar_path = crate::config::resolve_sidecar_path_pub("claude-code-bridge");
+
+    if let Err(error) =
+        ClaudeCodeManager::validate_sidecar_binary(std::path::Path::new(&sidecar_path))
+    {
+        return ToolStatus {
+            tool_name: "claude_code".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some(error),
+            checked_at: now.into(),
+        };
+    }
+
+    let has_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
+    match ClaudeCodeManager::check_health(&sidecar_path, &app_data_dir, !has_key) {
+        Ok(info) => {
+            if !has_key {
+                return ToolStatus {
+                    tool_name: "claude_code".into(),
+                    status: "unauthenticated".into(),
+                    version: Some(format!("bridge={}", info.bridge_version)),
+                    message: Some("Set ANTHROPIC_API_KEY to use Claude Code provider.".into()),
+                    checked_at: now.into(),
+                };
+            }
+            ToolStatus {
+                tool_name: "claude_code".into(),
+                status: "ready".into(),
+                version: Some(format!(
+                    "bridge={} sdk={}",
+                    info.bridge_version, info.sdk_version
+                )),
+                message: None,
+                checked_at: now.into(),
+            }
+        }
+        Err(e) => ToolStatus {
+            tool_name: "claude_code".into(),
+            status: "degraded".into(),
+            version: None,
+            message: Some(format!("Health check failed: {}", e)),
+            checked_at: now.into(),
+        },
     }
 }
 

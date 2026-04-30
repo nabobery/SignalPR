@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod autofix;
 pub mod channels;
+pub mod claude_code;
 pub mod codex;
 pub mod copilot;
 pub mod cursor;

@@ -1,0 +1,12 @@
+{
+  "id": "001-unused-variable",
+  "description": "Simple Rust file with an unused variable and a missing error handling pattern.",
+  "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,5 +1,12 @@\n fn main() {\n-    println!(\"Hello, world!\");\n+    let result = compute_value();\n+    let unused = 42;\n+    println!(\"Result: {}\", result);\n+}\n+\n+fn compute_value() -> i32 {\n+    let data = std::fs::read_to_string(\"config.txt\").unwrap();\n+    data.len() as i32\n }",
+  "expected": {
+    "min_findings": 1,
+    "max_findings": 5,
+    "must_mention_files": ["src/main.rs"],
+    "severity_range": ["info", "warning", "critical"],
+    "must_not_contain_severities": ["blocker"]
+  }
+}

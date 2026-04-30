@@ -189,3 +189,10 @@ export async function resolveCopilotPermission(
 export async function resolveOpenCodePermission(requestId: string, reply: string): Promise<void> {
   return invoke("resolve_opencode_permission", { requestId, reply });
 }
+
+export async function resolveClaudeCodePermission(
+  requestId: string,
+  approved: boolean,
+): Promise<void> {
+  return invoke("resolve_claude_code_permission", { requestId, approved });
+}

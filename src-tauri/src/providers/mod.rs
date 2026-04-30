@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod claude_code;
 pub mod codex;
 pub mod codex_app_server;
 pub mod copilot;

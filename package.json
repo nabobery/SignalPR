@@ -20,9 +20,12 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:frontend": "vitest run",
     "test": "pnpm test:rust && pnpm test:frontend",
+    "check:bridge": "pnpm --dir src-tauri/bridges/claude-code typecheck && pnpm --dir src-tauri/bridges/claude-code build && pnpm --dir src-tauri/bridges/claude-code pkg",
     "check:frontend": "pnpm typecheck && pnpm lint && pnpm format:check",
     "check:rust": "pnpm lint:rust && pnpm format:rust:check && pnpm test:rust",
-    "check": "pnpm check:frontend && pnpm check:rust"
+    "check": "pnpm check:frontend && pnpm check:bridge && pnpm check:rust",
+    "sidecar:claude-code:build": "(test -d src-tauri/bridges/claude-code/node_modules || (CI=true pnpm --dir src-tauri/bridges/claude-code --ignore-workspace install --offline --frozen-lockfile || CI=true pnpm --dir src-tauri/bridges/claude-code --ignore-workspace install --frozen-lockfile)) && pnpm check:bridge",
+    "eval:validate": "node evals/validate.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

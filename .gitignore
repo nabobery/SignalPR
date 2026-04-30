@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Sidecar binaries (generated at build time)
+src-tauri/binaries/claude-code-bridge-*
+
+# Eval run outputs (local/manual only)
+evals/runs/

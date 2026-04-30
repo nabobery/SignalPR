@@ -99,6 +99,9 @@ pub enum ProviderError {
     #[error("PI agent failed: {0}")]
     PiFailed(String),
 
+    #[error("Claude Code failed: {0}")]
+    ClaudeCodeFailed(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 
@@ -183,6 +186,15 @@ impl ProviderError {
                     || msg.contains("timeout")
                     || msg.contains("503")
                     || msg.contains("connection refused")
+            }
+            ProviderError::ClaudeCodeFailed(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("rate")
+                    || msg.contains("429")
+                    || msg.contains("overloaded")
+                    || msg.contains("retry")
+                    || msg.contains("timeout")
+                    || msg.contains("529")
             }
             ProviderError::GhFailed(msg) => {
                 let msg = msg.to_lowercase();
