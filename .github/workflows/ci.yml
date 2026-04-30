@@ -36,8 +36,8 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'tsconfig*.json'
               - 'vite.config.*'
-              - 'eslint.config.*'
-              - '.prettierrc*'
+              - '.oxlintrc.json'
+              - '.oxfmtrc.json'
               - '.github/workflows/ci.yml'
             rust:
               - 'src-tauri/**'

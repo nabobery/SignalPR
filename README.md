@@ -193,10 +193,10 @@ This starts the Vite dev server on `localhost:1420` and opens the Tauri window w
 | `pnpm test:rust` | Run Rust tests only |
 | `pnpm check` | Full quality check (typecheck + lint + format + tests) |
 | `pnpm typecheck` | TypeScript type check |
-| `pnpm lint` | ESLint |
-| `pnpm lint:fix` | ESLint with auto-fix |
+| `pnpm lint` | Oxlint |
+| `pnpm lint:fix` | Oxlint with auto-fix |
 | `pnpm lint:rust` | Cargo clippy |
-| `pnpm format` | Prettier (frontend) + cargo fmt (Rust) |
+| `pnpm format` | Oxfmt (frontend TS/TSX/CSS) |
 
 ---
 

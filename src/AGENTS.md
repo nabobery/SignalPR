@@ -52,3 +52,4 @@ Frontend listens to `review_progress`, provider lane deltas, and permission requ
 - Never call `invoke()` directly — use `ipc.ts`
 - Event listeners use `listen<T>("event", handler)` from `@tauri-apps/api/event`
 - Always cleanup: `unlisten.then((fn) => fn())` in useEffect return
+- Use `pnpm lint` (oxlint) and `pnpm format:check` (oxfmt) as part of frontend change validation.

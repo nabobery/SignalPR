@@ -78,6 +78,8 @@ See `src-tauri/src/providers/AGENTS.md` for full provider table and details.
 - Feature-based folder structure (`features/<name>/`)
 - IPC calls wrapped in `src/lib/ipc.ts` (never inline `invoke`)
 - Manual interfaces in `types.ts`, `ReviewContext` via React.createContext
+- Frontend linting uses `oxlint` via `pnpm lint` and `pnpm lint:fix`.
+- Frontend formatting uses `oxfmt` via `pnpm format` and `pnpm format:check` for `src/**/*.{ts,tsx,css}`.
 
 ### Testing
 
@@ -105,12 +107,17 @@ Frontend and backend stream event updates through `review_progress` and per-lane
 - **Never** use `as any` or `@ts-ignore` in TypeScript
 - **Never** write tests without mocking Tauri APIs
 - **Never** bypass `DiffPanel` fallback behavior when touching parser/renderer changes
+- **Never** run tooling binaries with ad-hoc `npx` invocations when repo scripts can call `pnpm exec`
 
 ## COMMANDS
 
 ```bash
 pnpm tauri dev        # Full dev mode (Vite + Rust)
 pnpm tauri build      # Production build
+pnpm lint             # Oxlint frontend JS/TS checks (`pnpm exec oxlint src/`)
+pnpm lint:fix         # Auto-fix frontend lint violations
+pnpm format           # Oxfmt frontend source formatting (`src/**/*.{ts,tsx,css}`)
+pnpm format:check     # Check frontend formatting
 pnpm check            # All checks (typecheck + lint + format + clippy + tests)
 pnpm test             # Both rust + frontend tests
 ```
