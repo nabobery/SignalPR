@@ -767,6 +767,9 @@ pub fn run() {
             commands::providers::delete_provider_secret,
             commands::providers::get_provider_capabilities,
             commands::providers::get_agent_run_metadata,
+            commands::inbox::get_inbox_overview,
+            commands::drafts::get_review_draft,
+            commands::drafts::save_review_draft,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

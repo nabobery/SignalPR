@@ -1,20 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
 import { useParams, useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowLeft, Loader2, Send, FileCode, List } from "lucide-react";
+import { ArrowLeft, Loader2, LayoutDashboard, List, FileCode, PenLine } from "lucide-react";
 import { getReviewSnapshot, acceptFix, parseError } from "../../lib/ipc";
 import { FixBatchBar } from "./FixBatchBar";
 import { ReviewContext, type ReviewState } from "../../lib/store";
 import { FileTree } from "./FileTree";
 import { SignalBoard } from "./SignalBoard";
 import { DiffPanel } from "./DiffPanel";
+import { SummaryTab } from "./SummaryTab";
 import LaneProgress from "./LaneProgress";
 import { SessionDrawer } from "./SessionDrawer";
-import { SubmitDialog } from "../submission/SubmitDialog";
 import { ApprovalModal } from "./ApprovalModal";
+import { DraftReviewTab } from "./DraftReviewTab";
 import { normalizeFilePath } from "./diff/normalizeFilePath";
 
-type Panel = "signals" | "diff";
+type WorkspaceTab = "summary" | "findings" | "diff" | "draft";
+
+function DraftReviewTabLazy({ runId, onSubmitted }: { runId: string; onSubmitted: () => void }) {
+  return <DraftReviewTab runId={runId} onSubmitted={onSubmitted} />;
+}
 
 export function ReviewWorkspace() {
   const { runId } = useParams<{ runId: string }>();
@@ -22,9 +27,14 @@ export function ReviewWorkspace() {
   const [state, setState] = useState<ReviewState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activePanel, setActivePanel] = useState<Panel>("signals");
-  const [showSubmit, setShowSubmit] = useState(false);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("summary");
   const [batchBarDismissed, setBatchBarDismissed] = useState(false);
+
+  const switchTab = (tab: WorkspaceTab) => {
+    startTransition(() => {
+      setActiveTab(tab);
+    });
+  };
 
   const refreshSnapshot = useCallback(async () => {
     if (!runId) return;
@@ -47,6 +57,13 @@ export function ReviewWorkspace() {
             ? prev.selectedFile
             : null,
         focusedFindingId: null,
+        sessionDecisions: (() => {
+          const nextFindingIds = new Set(snap.findings.map((f) => f.id));
+          const prevDecisions = prev?.sessionDecisions ?? {};
+          return Object.fromEntries(
+            Object.entries(prevDecisions).filter(([id]) => nextFindingIds.has(id)),
+          ) as Record<string, "accept" | "skip">;
+        })(),
       }));
     } catch (err) {
       setError(parseError(err).message);
@@ -77,6 +94,24 @@ export function ReviewWorkspace() {
     setState((prev) => (prev ? { ...prev, selectedFile: file } : prev));
   };
 
+  const setSessionDecision = (findingId: string, decision: "accept" | "skip" | null) => {
+    setState((prev) => {
+      if (!prev) return prev;
+      if (decision === null) {
+        const next = { ...prev.sessionDecisions };
+        delete next[findingId];
+        return { ...prev, sessionDecisions: next };
+      }
+      return {
+        ...prev,
+        sessionDecisions: {
+          ...prev.sessionDecisions,
+          [findingId]: decision,
+        },
+      };
+    });
+  };
+
   const knownFilesSet = useMemo(() => new Set(state?.changedFiles ?? []), [state?.changedFiles]);
 
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,7 +130,7 @@ export function ReviewWorkspace() {
       if (finding.file_path) {
         setSelectedFile(normalizeFilePath(finding.file_path, knownFilesSet));
       }
-      setActivePanel("signals");
+      setActiveTab("findings");
       setState((prev) => (prev ? { ...prev, focusedFindingId: findingId } : prev));
 
       if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
@@ -119,7 +154,7 @@ export function ReviewWorkspace() {
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center gap-4">
         <p className="text-red-400">{error ?? "Failed to load review"}</p>
         <button onClick={() => navigate("/")} className="text-zinc-400 hover:text-zinc-200 text-sm">
-          Back to intake
+          Back to inbox
         </button>
       </div>
     );
@@ -140,11 +175,22 @@ export function ReviewWorkspace() {
     await refreshSnapshot();
   };
 
+  const tabs: { id: WorkspaceTab; label: string; icon: typeof LayoutDashboard }[] = [
+    { id: "summary", label: "Summary", icon: LayoutDashboard },
+    { id: "findings", label: `Findings (${activeCount})`, icon: List },
+    { id: "diff", label: "Diff", icon: FileCode },
+    { id: "draft", label: "Draft Review", icon: PenLine },
+  ];
+
+  const showSidebar = activeTab === "findings" || activeTab === "diff";
+
   return (
-    <ReviewContext.Provider value={{ state, setSelectedFile, refreshSnapshot, revealFinding }}>
+    <ReviewContext.Provider
+      value={{ state, setSelectedFile, setSessionDecision, refreshSnapshot, revealFinding }}
+    >
       <div className="h-screen bg-zinc-950 text-zinc-100 flex flex-col">
         {/* Header */}
-        <header className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
+        <header className="flex items-center gap-3 px-4 py-2.5 border-b border-zinc-800 shrink-0">
           <button onClick={() => navigate("/")} className="text-zinc-400 hover:text-zinc-200">
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -168,34 +214,29 @@ export function ReviewWorkspace() {
             {state.status === "submitted" && (
               <span className="text-xs text-emerald-400">Submitted</span>
             )}
-
-            {/* Panel toggle */}
-            <div className="flex border border-zinc-700 rounded-lg overflow-hidden ml-2">
-              <button
-                onClick={() => setActivePanel("signals")}
-                className={`px-2 py-1 text-xs ${activePanel === "signals" ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
-              >
-                <List className="w-3 h-3" />
-              </button>
-              <button
-                onClick={() => setActivePanel("diff")}
-                className={`px-2 py-1 text-xs ${activePanel === "diff" ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
-              >
-                <FileCode className="w-3 h-3" />
-              </button>
-            </div>
-
-            {isReady && state.status !== "submitted" && (
-              <button
-                onClick={() => setShowSubmit(true)}
-                className="flex items-center gap-1 bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-emerald-500"
-              >
-                <Send className="w-3 h-3" />
-                Submit ({activeCount})
-              </button>
-            )}
           </div>
         </header>
+
+        {/* Secondary tab navigation */}
+        <nav className="flex items-center gap-0.5 px-4 py-1.5 border-b border-zinc-800 shrink-0">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => switchTab(tab.id)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  activeTab === tab.id
+                    ? "bg-zinc-800 text-zinc-100"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </nav>
 
         {/* Lane progress */}
         {isRunning && state.laneStatuses.length > 0 && (
@@ -231,31 +272,23 @@ export function ReviewWorkspace() {
 
         {/* Body */}
         <div className="flex flex-1 min-h-0">
-          {/* File tree sidebar */}
-          <aside className="w-56 border-r border-zinc-800 shrink-0 overflow-hidden">
-            <FileTree />
-          </aside>
+          {/* File tree sidebar (only for Findings/Diff) */}
+          {showSidebar && (
+            <aside className="w-56 border-r border-zinc-800 shrink-0 overflow-hidden">
+              <FileTree />
+            </aside>
+          )}
 
           {/* Main panel */}
           <main className="flex-1 min-w-0 overflow-hidden">
-            {activePanel === "signals" ? (
-              <SignalBoard />
-            ) : (
-              <DiffPanel onRevealFinding={revealFinding} />
+            {activeTab === "summary" && <SummaryTab />}
+            {activeTab === "findings" && <SignalBoard />}
+            {activeTab === "diff" && <DiffPanel onRevealFinding={revealFinding} />}
+            {activeTab === "draft" && runId && (
+              <DraftReviewTabLazy runId={runId} onSubmitted={refreshSnapshot} />
             )}
           </main>
         </div>
-
-        {showSubmit && runId && (
-          <SubmitDialog
-            runId={runId}
-            onClose={() => setShowSubmit(false)}
-            onSubmitted={() => {
-              setShowSubmit(false);
-              refreshSnapshot();
-            }}
-          />
-        )}
 
         <ApprovalModal />
 

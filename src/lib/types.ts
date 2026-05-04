@@ -273,6 +273,53 @@ export interface ClaudeCodePermissionRequest {
   request_id?: string;
 }
 
+// --- Inbox Overview ---
+
+export interface InboxReviewRow {
+  run_id: string;
+  pr_id: string;
+  pr_number: number;
+  title: string;
+  author: string | null;
+  pr_url: string;
+  status: string;
+  last_updated: string;
+  active_finding_count: number;
+  providers_used: string[];
+}
+
+export interface InboxWorkspaceRow {
+  workspace_id: string;
+  local_path: string;
+  remote_owner: string;
+  remote_repo: string;
+  last_reviewed_at: string;
+}
+
+export interface EnvironmentSummary {
+  can_review: boolean;
+  can_submit: boolean;
+  available_providers: string[];
+  warnings: string[];
+  tools: ToolStatus[];
+}
+
+export interface InboxOverview {
+  environment_summary: EnvironmentSummary;
+  incomplete_reviews: InboxReviewRow[];
+  recent_reviews: InboxReviewRow[];
+  recent_workspaces: InboxWorkspaceRow[];
+}
+
+// --- Review Draft ---
+
+export interface ReviewDraft {
+  run_id: string;
+  summary_markdown: string;
+  review_action: ReviewAction;
+  updated_at: string;
+}
+
 // --- Provider Credential Platform ---
 
 export type CredentialSource = "environment" | "keychain" | "none";

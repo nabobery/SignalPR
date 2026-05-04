@@ -194,6 +194,15 @@ ALTER TABLE agent_runs ADD COLUMN checkpoint_metadata_json TEXT;
 ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;
 "#;
 
+const MIGRATION_V6: &str = r#"
+CREATE TABLE IF NOT EXISTS review_drafts (
+  run_id TEXT PRIMARY KEY REFERENCES review_runs(id),
+  summary_markdown TEXT NOT NULL DEFAULT '',
+  review_action TEXT NOT NULL DEFAULT 'comment',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -243,6 +252,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    if current_version < 6 {
+        conn.execute_batch(MIGRATION_V6)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (6)",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -278,6 +295,8 @@ mod tests {
         // V4 tables
         assert!(tables.contains(&"reviewer_decisions".to_string()));
         assert!(tables.contains(&"preference_summaries".to_string()));
+        // V6 tables
+        assert!(tables.contains(&"review_drafts".to_string()));
     }
 
     #[test]

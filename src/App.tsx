@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router";
 import { ErrorBoundary } from "react-error-boundary";
-import { IntakeView } from "./features/intake/IntakeView";
+import { AppShell } from "./features/shell/AppShell";
+import { InboxView } from "./features/inbox/InboxView";
 import { ReviewWorkspace } from "./features/review/ReviewWorkspace";
 import { SettingsView } from "./features/settings/SettingsView";
 import "./App.css";
@@ -32,9 +33,11 @@ function App() {
     <ErrorBoundary FallbackComponent={ErrorFallback}>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<IntakeView />} />
+          <Route element={<AppShell />}>
+            <Route path="/" element={<InboxView />} />
+            <Route path="/settings" element={<SettingsView />} />
+          </Route>
           <Route path="/review/:runId" element={<ReviewWorkspace />} />
-          <Route path="/settings" element={<SettingsView />} />
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>

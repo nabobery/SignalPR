@@ -144,3 +144,36 @@ pub struct ToolStatus {
     pub message: Option<String>,
     pub checked_at: String,
 }
+
+// V6 model: Draft Review persistence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewDraft {
+    pub run_id: String,
+    pub summary_markdown: String,
+    pub review_action: String,
+    pub updated_at: String,
+}
+
+// Inbox enriched review row (not persisted; composed in queries)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxReviewRow {
+    pub run_id: String,
+    pub pr_id: String,
+    pub pr_number: i32,
+    pub title: String,
+    pub author: Option<String>,
+    pub pr_url: String,
+    pub status: String,
+    pub last_updated: String,
+    pub active_finding_count: i32,
+    pub providers_used: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxWorkspaceRow {
+    pub workspace_id: String,
+    pub local_path: String,
+    pub remote_owner: String,
+    pub remote_repo: String,
+    pub last_reviewed_at: String,
+}

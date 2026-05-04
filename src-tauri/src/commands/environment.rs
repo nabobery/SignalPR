@@ -32,21 +32,17 @@ pub async fn inspect_environment(
     Ok(results)
 }
 
-#[tauri::command]
-pub async fn get_environment_summary(
-    app: AppHandle,
-) -> Result<EnvironmentSummary, crate::errors::AppError> {
+pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
     let now = chrono::Utc::now().to_rfc3339();
     let mut tools = vec![];
 
-    tools.push(check_gh(&app, &now).await);
-    tools.push(check_codex(&app, &now).await);
+    tools.push(check_gh(app, &now).await);
+    tools.push(check_codex(app, &now).await);
     tools.push(check_claude(&now));
-    tools.push(check_copilot(&app, &now).await);
-    tools.push(check_opencode(&app, &now).await);
-    tools.push(check_gemini(&app, &now).await);
-
-    tools.push(check_claude_code(&app, &now));
+    tools.push(check_copilot(app, &now).await);
+    tools.push(check_opencode(app, &now).await);
+    tools.push(check_gemini(app, &now).await);
+    tools.push(check_claude_code(app, &now));
 
     let can_submit = tools
         .iter()
@@ -74,13 +70,20 @@ pub async fn get_environment_summary(
         warnings.push("GitHub CLI not ready".into());
     }
 
-    Ok(EnvironmentSummary {
+    EnvironmentSummary {
         can_review,
         can_submit,
         available_providers,
         warnings,
         tools,
-    })
+    }
+}
+
+#[tauri::command]
+pub async fn get_environment_summary(
+    app: AppHandle,
+) -> Result<EnvironmentSummary, crate::errors::AppError> {
+    Ok(build_environment_summary(&app).await)
 }
 
 async fn check_gh(app: &AppHandle, now: &str) -> ToolStatus {

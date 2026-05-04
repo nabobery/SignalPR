@@ -11,6 +11,9 @@ import type {
   CredentialStatus,
   ProviderCapabilities,
   AgentRunMetadata,
+  InboxOverview,
+  EnvironmentSummary,
+  ReviewDraft,
 } from "./types";
 
 export function parseError(err: unknown): AppError {
@@ -33,13 +36,7 @@ export async function inspectEnvironment(): Promise<ToolStatus[]> {
   return invoke("inspect_environment");
 }
 
-export async function getEnvironmentSummary(): Promise<{
-  can_review: boolean;
-  can_submit: boolean;
-  available_providers: string[];
-  warnings: string[];
-  tools: ToolStatus[];
-}> {
+export async function getEnvironmentSummary(): Promise<EnvironmentSummary> {
   return invoke("get_environment_summary");
 }
 
@@ -76,8 +73,9 @@ export async function submitReview(
   runId: string,
   action: string,
   forceResubmit?: boolean,
+  reviewSummaryMarkdown?: string,
 ): Promise<void> {
-  return invoke("submit_review", { runId, action, forceResubmit });
+  return invoke("submit_review", { runId, action, forceResubmit, reviewSummaryMarkdown });
 }
 
 export async function getSubmissionHistory(runId: string): Promise<unknown[]> {
@@ -198,6 +196,26 @@ export async function resolveClaudeCodePermission(
   approved: boolean,
 ): Promise<void> {
   return invoke("resolve_claude_code_permission", { requestId, approved });
+}
+
+// --- Inbox Overview ---
+
+export async function getInboxOverview(): Promise<InboxOverview> {
+  return invoke("get_inbox_overview");
+}
+
+// --- Review Drafts ---
+
+export async function getReviewDraft(runId: string): Promise<ReviewDraft | null> {
+  return invoke("get_review_draft", { runId });
+}
+
+export async function saveReviewDraft(
+  runId: string,
+  summaryMarkdown: string,
+  reviewAction: string,
+): Promise<void> {
+  return invoke("save_review_draft", { runId, summaryMarkdown, reviewAction });
 }
 
 // --- Provider Credential Platform ---

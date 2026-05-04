@@ -463,16 +463,17 @@ pub fn update_submission_status(
     status: &str,
     gh_review_id: Option<&str>,
     error_message: Option<&str>,
+    timestamp_rfc3339: &str,
 ) -> Result<(), rusqlite::Error> {
     if status == "submitted" {
         conn.execute(
-            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = datetime('now'), submitted_at = datetime('now') WHERE id = ?4",
-            params![status, gh_review_id, error_message, sub_id],
+            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = ?4, submitted_at = ?4 WHERE id = ?5",
+            params![status, gh_review_id, error_message, timestamp_rfc3339, sub_id],
         )?;
     } else {
         conn.execute(
-            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = datetime('now') WHERE id = ?4",
-            params![status, gh_review_id, error_message, sub_id],
+            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = ?4 WHERE id = ?5",
+            params![status, gh_review_id, error_message, timestamp_rfc3339, sub_id],
         )?;
     }
     Ok(())
@@ -642,6 +643,164 @@ pub fn get_decisions_for_agent_type(
             category_tag: row.get(6)?,
             time_to_decision_ms: row.get(7)?,
             decided_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+// --- Review Drafts ---
+
+pub fn get_review_draft(
+    conn: &Connection,
+    run_id: &str,
+) -> Result<Option<ReviewDraft>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT run_id, summary_markdown, review_action, updated_at FROM review_drafts WHERE run_id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![run_id], |row| {
+        Ok(ReviewDraft {
+            run_id: row.get(0)?,
+            summary_markdown: row.get(1)?,
+            review_action: row.get(2)?,
+            updated_at: row.get(3)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+pub fn save_review_draft(
+    conn: &Connection,
+    run_id: &str,
+    summary_markdown: &str,
+    review_action: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO review_drafts (run_id, summary_markdown, review_action, updated_at) VALUES (?1, ?2, ?3, datetime('now'))",
+        params![run_id, summary_markdown, review_action],
+    )?;
+    Ok(())
+}
+
+// --- Inbox Overview Queries ---
+
+pub fn list_recent_review_runs(
+    conn: &Connection,
+    limit: i32,
+) -> Result<Vec<InboxReviewRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.pr_id, p.pr_number, p.title, p.author, p.url, r.status,
+                COALESCE(r.completed_at, r.started_at, '') as last_updated,
+                (SELECT COUNT(*) FROM findings f WHERE f.review_run_id = r.id AND f.status = 'active') as active_count,
+                COALESCE(
+                    (SELECT GROUP_CONCAT(DISTINCT ar.provider_name)
+                     FROM agent_runs ar
+                     WHERE ar.review_run_id = r.id AND ar.provider_name IS NOT NULL),
+                    ''
+                ) as providers_csv
+         FROM review_runs r
+         JOIN pull_requests p ON r.pr_id = p.id
+         WHERE r.status IN ('ready', 'submitted', 'failed')
+         ORDER BY last_updated DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        let providers_csv: String = row.get(9)?;
+        let providers_used = if providers_csv.is_empty() {
+            Vec::new()
+        } else {
+            providers_csv
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_string())
+                .collect()
+        };
+        Ok(InboxReviewRow {
+            run_id: row.get(0)?,
+            pr_id: row.get(1)?,
+            pr_number: row.get(2)?,
+            title: row.get(3)?,
+            author: row.get(4)?,
+            pr_url: row.get(5)?,
+            status: row.get(6)?,
+            last_updated: row.get(7)?,
+            active_finding_count: row.get(8)?,
+            providers_used,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_incomplete_review_runs_enriched(
+    conn: &Connection,
+    limit: i32,
+) -> Result<Vec<InboxReviewRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.pr_id, p.pr_number, p.title, p.author, p.url, r.status,
+                COALESCE(r.started_at, '') as last_updated,
+                (SELECT COUNT(*) FROM findings f WHERE f.review_run_id = r.id AND f.status = 'active') as active_count,
+                COALESCE(
+                    (SELECT GROUP_CONCAT(DISTINCT ar.provider_name)
+                     FROM agent_runs ar
+                     WHERE ar.review_run_id = r.id AND ar.provider_name IS NOT NULL),
+                    ''
+                ) as providers_csv
+         FROM review_runs r
+         JOIN pull_requests p ON r.pr_id = p.id
+         WHERE r.status NOT IN ('ready', 'submitted', 'failed')
+         ORDER BY r.started_at DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        let providers_csv: String = row.get(9)?;
+        let providers_used = if providers_csv.is_empty() {
+            Vec::new()
+        } else {
+            providers_csv
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_string())
+                .collect()
+        };
+        Ok(InboxReviewRow {
+            run_id: row.get(0)?,
+            pr_id: row.get(1)?,
+            pr_number: row.get(2)?,
+            title: row.get(3)?,
+            author: row.get(4)?,
+            pr_url: row.get(5)?,
+            status: row.get(6)?,
+            last_updated: row.get(7)?,
+            active_finding_count: row.get(8)?,
+            providers_used,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_recent_workspaces(
+    conn: &Connection,
+    limit: i32,
+) -> Result<Vec<InboxWorkspaceRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT w.id, w.local_path, w.remote_owner, w.remote_repo,
+                COALESCE(MAX(r.started_at), w.created_at) as last_reviewed_at
+         FROM workspaces w
+         LEFT JOIN pull_requests p ON p.workspace_id = w.id
+         LEFT JOIN review_runs r ON r.pr_id = p.id
+         GROUP BY w.id, w.local_path, w.remote_owner, w.remote_repo, w.created_at
+         ORDER BY last_reviewed_at DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        Ok(InboxWorkspaceRow {
+            workspace_id: row.get(0)?,
+            local_path: row.get(1)?,
+            remote_owner: row.get(2)?,
+            remote_repo: row.get(3)?,
+            last_reviewed_at: row.get(4)?,
         })
     })?;
     rows.collect()
@@ -1162,14 +1321,30 @@ mod tests {
         )
         .unwrap();
 
-        update_submission_status(&conn, "sub", "failed", None, Some("nope")).unwrap();
+        update_submission_status(
+            &conn,
+            "sub",
+            "failed",
+            None,
+            Some("nope"),
+            "2026-01-01T00:00:05Z",
+        )
+        .unwrap();
         let hist = get_submission_history(&conn, "run").unwrap();
         assert_eq!(hist.len(), 1);
         assert_eq!(hist[0].status, "failed");
         assert!(hist[0].last_attempt_at.is_some());
         assert!(hist[0].submitted_at.is_none());
 
-        update_submission_status(&conn, "sub", "submitted", Some("gh1"), None).unwrap();
+        update_submission_status(
+            &conn,
+            "sub",
+            "submitted",
+            Some("gh1"),
+            None,
+            "2026-01-01T00:00:10Z",
+        )
+        .unwrap();
         let hist = get_submission_history(&conn, "run").unwrap();
         assert_eq!(hist[0].status, "submitted");
         assert!(hist[0].submitted_at.is_some());
@@ -1308,5 +1483,197 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].accept_rate, 0.85);
         assert_eq!(summaries[0].total_decisions, 15);
+    }
+
+    // --- V6: Review Draft tests ---
+
+    fn setup_run(conn: &Connection) {
+        insert_workspace(
+            conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 42,
+                title: "Fix auth".into(),
+                author: Some("alice".into()),
+                base_branch: None,
+                head_branch: None,
+                url: "https://github.com/o/r/pull/42".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00".into(),
+                diff_hash: None,
+            },
+        )
+        .unwrap();
+        insert_review_run(
+            conn,
+            &ReviewRun {
+                id: "run".into(),
+                pr_id: "pr".into(),
+                status: "ready".into(),
+                started_at: Some("2026-01-01T00:00:00".into()),
+                completed_at: Some("2026-01-01T00:01:00".into()),
+                error_message: None,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_review_draft_round_trip() {
+        let conn = test_db();
+        setup_run(&conn);
+
+        assert!(get_review_draft(&conn, "run").unwrap().is_none());
+
+        save_review_draft(&conn, "run", "LGTM overall", "approve").unwrap();
+        let draft = get_review_draft(&conn, "run")
+            .unwrap()
+            .expect("draft should exist");
+        assert_eq!(draft.run_id, "run");
+        assert_eq!(draft.summary_markdown, "LGTM overall");
+        assert_eq!(draft.review_action, "approve");
+
+        save_review_draft(&conn, "run", "Actually, needs fixes", "request-changes").unwrap();
+        let draft = get_review_draft(&conn, "run").unwrap().unwrap();
+        assert_eq!(draft.summary_markdown, "Actually, needs fixes");
+        assert_eq!(draft.review_action, "request-changes");
+    }
+
+    #[test]
+    fn test_list_recent_review_runs() {
+        let conn = test_db();
+        setup_run(&conn);
+
+        let recent = list_recent_review_runs(&conn, 10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].run_id, "run");
+        assert_eq!(recent[0].pr_number, 42);
+        assert_eq!(recent[0].title, "Fix auth");
+        assert_eq!(recent[0].author.as_deref(), Some("alice"));
+        assert_eq!(recent[0].status, "ready");
+    }
+
+    #[test]
+    fn test_list_incomplete_review_runs_enriched() {
+        let conn = test_db();
+        setup_run(&conn);
+
+        let incomplete = list_incomplete_review_runs_enriched(&conn, 10).unwrap();
+        assert!(incomplete.is_empty(), "ready run should not be incomplete");
+
+        insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run2".into(),
+                pr_id: "pr".into(),
+                status: "running_agents".into(),
+                started_at: Some("2026-01-02T00:00:00".into()),
+                completed_at: None,
+                error_message: None,
+            },
+        )
+        .unwrap();
+
+        let incomplete = list_incomplete_review_runs_enriched(&conn, 10).unwrap();
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].run_id, "run2");
+        assert_eq!(incomplete[0].status, "running_agents");
+    }
+
+    #[test]
+    fn test_inbox_queries_include_finding_counts() {
+        let conn = test_db();
+        setup_run(&conn);
+
+        insert_finding(
+            &conn,
+            &Finding {
+                id: "f1".into(),
+                review_run_id: "run".into(),
+                agent_type: "security".into(),
+                file_path: None,
+                line_start: None,
+                line_end: None,
+                severity: "warning".into(),
+                confidence: 0.8,
+                title: "Test".into(),
+                body: "Body".into(),
+                evidence: None,
+                status: "active".into(),
+                user_edited_body: None,
+                user_severity_override: None,
+                is_anchored: false,
+                created_at: "2026-01-01T00:00:00".into(),
+                cluster_id: None,
+                lane_id: None,
+                provider_name: None,
+                diff_side: None,
+                diff_new_line: None,
+                fix_search: None,
+                fix_replace: None,
+                fix_explanation: None,
+                fix_status: None,
+            },
+        )
+        .unwrap();
+        insert_finding(
+            &conn,
+            &Finding {
+                id: "f2".into(),
+                review_run_id: "run".into(),
+                agent_type: "security".into(),
+                file_path: None,
+                line_start: None,
+                line_end: None,
+                severity: "info".into(),
+                confidence: 0.5,
+                title: "Test2".into(),
+                body: "Body2".into(),
+                evidence: None,
+                status: "suppressed".into(),
+                user_edited_body: None,
+                user_severity_override: None,
+                is_anchored: false,
+                created_at: "2026-01-01T00:00:00".into(),
+                cluster_id: None,
+                lane_id: None,
+                provider_name: None,
+                diff_side: None,
+                diff_new_line: None,
+                fix_search: None,
+                fix_replace: None,
+                fix_explanation: None,
+                fix_status: None,
+            },
+        )
+        .unwrap();
+
+        let recent = list_recent_review_runs(&conn, 10).unwrap();
+        assert_eq!(recent[0].active_finding_count, 1);
+    }
+
+    #[test]
+    fn test_list_recent_workspaces() {
+        let conn = test_db();
+        setup_run(&conn);
+
+        let workspaces = list_recent_workspaces(&conn, 10).unwrap();
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].workspace_id, "ws");
+        assert_eq!(workspaces[0].remote_owner, "o");
+        assert_eq!(workspaces[0].remote_repo, "r");
     }
 }

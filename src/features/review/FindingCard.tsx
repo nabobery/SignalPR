@@ -9,8 +9,10 @@ import {
   Check,
   Pencil,
   Wrench,
+  ThumbsUp,
+  Clock,
 } from "lucide-react";
-import { updateFinding } from "../../lib/ipc";
+import { updateFinding, recordDecision } from "../../lib/ipc";
 import type { Finding } from "../../lib/types";
 import { FixPreview } from "./FixPreview";
 
@@ -28,10 +30,14 @@ export function FindingCard({
   finding,
   onUpdated,
   focused = false,
+  sessionDecision,
+  onDecision,
 }: {
   finding: Finding;
   onUpdated: () => void;
   focused?: boolean;
+  sessionDecision?: string | null;
+  onDecision?: (findingId: string, decision: string) => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
@@ -44,6 +50,7 @@ export function FindingCard({
     }
   }, [focused]);
   const [showFix, setShowFix] = useState(false);
+  const [showEvidence, setShowEvidence] = useState(false);
 
   const hasPendingFix =
     finding.fix_status === "pending" && finding.fix_search !== null && finding.fix_replace !== null;
@@ -71,7 +78,54 @@ export function FindingCard({
     onUpdated();
   };
 
-  if (finding.status === "suppressed") return null;
+  const handleRestore = async () => {
+    await updateFinding(finding.id, undefined, undefined, "active");
+    onUpdated();
+  };
+
+  const handleAccept = async () => {
+    await recordDecision(finding.id, "accept");
+    onDecision?.(finding.id, "accept");
+  };
+
+  const handleDefer = async () => {
+    await recordDecision(finding.id, "skip");
+    onDecision?.(finding.id, "skip");
+  };
+
+  if (finding.status === "suppressed") {
+    return (
+      <div
+        ref={cardRef}
+        className={`border rounded-lg p-3 bg-zinc-900/40 ${focused ? "border-blue-500 ring-1 ring-blue-500/50" : "border-zinc-800"}`}
+      >
+        <div className="flex items-start gap-2">
+          <Info className="w-4 h-4 mt-0.5 shrink-0 text-zinc-500" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs font-semibold uppercase text-zinc-500">suppressed</span>
+              <span className="text-sm font-medium text-zinc-200 truncate">{finding.title}</span>
+              <span className="text-xs text-zinc-600 ml-auto shrink-0">
+                {Math.round(finding.confidence * 100)}%
+              </span>
+            </div>
+            {finding.file_path && (
+              <code className="text-xs text-zinc-500 block mb-2">{finding.file_path}</code>
+            )}
+            <p className="text-sm text-zinc-500 whitespace-pre-wrap">{displayBody}</p>
+            <div className="flex gap-3 mt-2 items-center">
+              <button
+                onClick={handleRestore}
+                className="flex items-center gap-1 text-xs text-zinc-300 hover:text-zinc-100"
+              >
+                <Check className="w-3 h-3" /> Restore
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -91,10 +145,33 @@ export function FindingCard({
               </span>
             )}
             <span className="text-sm font-medium text-zinc-100 truncate">{finding.title}</span>
+            {sessionDecision && (
+              <span
+                className={`text-xs px-1.5 py-0.5 rounded ${sessionDecision === "accept" ? "bg-emerald-900/30 text-emerald-400" : "bg-zinc-700 text-zinc-400"}`}
+              >
+                {sessionDecision === "accept" ? "Accepted" : "Deferred"}
+              </span>
+            )}
             <span className="text-xs text-zinc-500 ml-auto shrink-0">
               {Math.round(finding.confidence * 100)}%
             </span>
           </div>
+
+          {/* Provenance chips */}
+          {(finding.lane_id || finding.provider_name) && (
+            <div className="flex gap-1.5 mb-1 flex-wrap">
+              {finding.lane_id && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 capitalize">
+                  {finding.lane_id}
+                </span>
+              )}
+              {finding.provider_name && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
+                  {finding.provider_name}
+                </span>
+              )}
+            </div>
+          )}
 
           {finding.file_path && (
             <code className="text-xs text-zinc-400 block mb-2">
@@ -142,7 +219,23 @@ export function FindingCard({
           )}
 
           {!editing && (
-            <div className="flex gap-3 mt-2 items-center">
+            <div className="flex gap-3 mt-2 items-center flex-wrap">
+              {!sessionDecision && (
+                <>
+                  <button
+                    onClick={handleAccept}
+                    className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+                  >
+                    <ThumbsUp className="w-3 h-3" /> Accept
+                  </button>
+                  <button
+                    onClick={handleDefer}
+                    className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
+                  >
+                    <Clock className="w-3 h-3" /> Defer
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setEditing(true)}
                 className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
@@ -173,6 +266,22 @@ export function FindingCard({
                   Fix rejected
                 </span>
               )}
+              {finding.evidence && (
+                <button
+                  onClick={() => setShowEvidence((v) => !v)}
+                  className="text-xs text-zinc-400 hover:text-zinc-200"
+                >
+                  {showEvidence ? "Hide evidence" : "Evidence"}
+                </button>
+              )}
+            </div>
+          )}
+
+          {showEvidence && finding.evidence && (
+            <div className="mt-2 p-2 rounded bg-zinc-800/50 border border-zinc-700">
+              <pre className="text-xs text-zinc-400 whitespace-pre-wrap break-words">
+                {finding.evidence}
+              </pre>
             </div>
           )}
 

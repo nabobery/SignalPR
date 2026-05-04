@@ -6,7 +6,7 @@ use crate::commands::intake::parse_pr_url;
 use crate::preferences::{decisions, scoring};
 use crate::storage::db::AppDb;
 use crate::storage::hashing::sha256_hex;
-use crate::storage::models::{Finding, SubmissionRecord};
+use crate::storage::models::{Finding, ReviewerDecision, SubmissionRecord};
 use crate::storage::queries;
 
 #[tauri::command]
@@ -15,6 +15,7 @@ pub async fn submit_review(
     run_id: String,
     action: String,
     force_resubmit: Option<bool>,
+    review_summary_markdown: Option<String>,
     db: tauri::State<'_, AppDb>,
 ) -> Result<(), crate::errors::AppError> {
     use crate::errors::AppError;
@@ -41,7 +42,7 @@ pub async fn submit_review(
     }
 
     // Get run + PR + findings
-    let (pr_id, owner, repo, pr_number, mut findings, old_diff, old_diff_hash) = {
+    let (pr_id, owner, repo, pr_number, mut findings, reviewer_decisions, old_diff, old_diff_hash) = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
@@ -50,6 +51,7 @@ pub async fn submit_review(
         let pr = queries::get_pull_request(&conn, &run.pr_id)?
             .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
         let findings = queries::get_findings_for_run(&conn, &run_id)?;
+        let reviewer_decisions = queries::get_decisions_for_run(&conn, &run_id)?;
 
         let parsed = parse_pr_url(&pr.url)?;
         let owner = parsed.owner;
@@ -67,6 +69,7 @@ pub async fn submit_review(
             repo,
             pr.pr_number,
             findings,
+            reviewer_decisions,
             old_diff,
             old_hash,
         )
@@ -132,11 +135,16 @@ pub async fn submit_review(
         tracing::warn!("Failed to fetch latest PR diff; skipping anchor reconciliation");
     }
 
-    // Filter to active findings only
-    let active_findings: Vec<&Finding> = findings.iter().filter(|f| f.status == "active").collect();
+    let latest_decisions = latest_decisions_by_finding(&reviewer_decisions);
 
-    // Format review body
-    let body = format_review_body(&active_findings);
+    // Filter to active findings only, excluding per-session deferred decisions.
+    let active_findings: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| should_include_in_submission(f, &latest_decisions))
+        .collect();
+
+    // Format review body with optional reviewer summary prepended
+    let body = format_review_body(&active_findings, review_summary_markdown.as_deref());
 
     let idempotency_key = sha256_hex(&format!("{}|{}|{}", run_id, action, body));
 
@@ -209,7 +217,8 @@ pub async fn submit_review(
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        queries::update_submission_status(&conn, &sub_id, "submitted", None, None)?;
+        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+        queries::update_submission_status(&conn, &sub_id, "submitted", None, None, &now_rfc3339)?;
         queries::update_review_run_status(&conn, &run_id, "submitted", None)?;
 
         // Best-effort: record reviewer decisions from the final submitted set.
@@ -223,7 +232,15 @@ pub async fn submit_review(
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        queries::update_submission_status(&conn, &sub_id, "failed", None, Some(&stderr))?;
+        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
+        queries::update_submission_status(
+            &conn,
+            &sub_id,
+            "failed",
+            None,
+            Some(&stderr),
+            &now_rfc3339,
+        )?;
         Err(AppError::Transient(format!(
             "gh pr review failed: {}",
             stderr
@@ -461,9 +478,58 @@ fn next_attempt_count(history: &[SubmissionRecord]) -> i32 {
         + 1
 }
 
-fn format_review_body(findings: &[&Finding]) -> String {
+fn latest_decisions_by_finding(
+    decisions: &[ReviewerDecision],
+) -> std::collections::HashMap<String, String> {
+    use chrono::{DateTime, Utc};
+    use std::collections::HashMap;
+
+    let mut latest: HashMap<String, (DateTime<Utc>, String)> = HashMap::new();
+    for decision in decisions {
+        let parsed = DateTime::parse_from_rfc3339(&decision.decided_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH));
+        match latest.get(&decision.finding_id) {
+            Some((existing_ts, _)) if *existing_ts > parsed => {}
+            _ => {
+                latest.insert(
+                    decision.finding_id.clone(),
+                    (parsed, decision.decision.clone()),
+                );
+            }
+        }
+    }
+
+    latest
+        .into_iter()
+        .map(|(id, (_, decision))| (id, decision))
+        .collect()
+}
+
+fn should_include_in_submission(
+    finding: &Finding,
+    latest_decisions: &std::collections::HashMap<String, String>,
+) -> bool {
+    if finding.status != "active" {
+        return false;
+    }
+    !matches!(
+        latest_decisions.get(&finding.id).map(|d| d.as_str()),
+        Some("skip")
+    )
+}
+
+fn format_review_body(findings: &[&Finding], summary: Option<&str>) -> String {
     let mut body = String::new();
     body.push_str("## SignalPR Review\n\n");
+
+    if let Some(s) = summary {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            body.push_str(trimmed);
+            body.push_str("\n\n---\n\n");
+        }
+    }
 
     if findings.is_empty() {
         body.push_str("No significant findings.\n");
@@ -553,7 +619,7 @@ mod tests {
         );
         let f2 = make_finding("warning", "N+1 query", "Loop queries", Some("src/db.rs"));
         let findings: Vec<&Finding> = vec![&f1, &f2];
-        let body = format_review_body(&findings);
+        let body = format_review_body(&findings, None);
 
         assert!(body.contains("## SignalPR Review"));
         assert!(body.contains("### Findings (2 issues)"));
@@ -565,7 +631,7 @@ mod tests {
 
     #[test]
     fn test_format_review_body_empty() {
-        let body = format_review_body(&[]);
+        let body = format_review_body(&[], None);
         assert!(body.contains("No significant findings"));
     }
 
@@ -574,7 +640,7 @@ mod tests {
         let mut f = make_finding("warning", "Test", "Original", Some("file.rs"));
         f.user_edited_body = Some("Edited content".into());
         let findings: Vec<&Finding> = vec![&f];
-        let body = format_review_body(&findings);
+        let body = format_review_body(&findings, None);
         assert!(body.contains("Edited content"));
         assert!(!body.contains("Original"));
     }
@@ -584,7 +650,7 @@ mod tests {
         let mut f = make_finding("warning", "Test", "Body", Some("file.rs"));
         f.user_severity_override = Some("blocker".into());
         let findings: Vec<&Finding> = vec![&f];
-        let body = format_review_body(&findings);
+        let body = format_review_body(&findings, None);
         assert!(body.contains("**[BLOCKER]**"));
     }
 
@@ -593,9 +659,28 @@ mod tests {
         let mut f = make_finding("warning", "Test", "Line 1\nLine 2", Some("file.rs"));
         f.user_edited_body = Some("Edited 1\nEdited 2".into());
         let findings: Vec<&Finding> = vec![&f];
-        let body = format_review_body(&findings);
+        let body = format_review_body(&findings, None);
         assert!(body.contains("> Edited 1\n"));
         assert!(body.contains("> Edited 2\n"));
+    }
+
+    #[test]
+    fn test_format_review_body_with_summary() {
+        let f1 = make_finding("warning", "Test", "Body", Some("file.rs"));
+        let findings: Vec<&Finding> = vec![&f1];
+        let body = format_review_body(&findings, Some("Overall this PR looks good."));
+        assert!(body.contains("## SignalPR Review"));
+        assert!(body.contains("Overall this PR looks good."));
+        assert!(body.contains("---"));
+        assert!(body.contains("### Findings (1 issues)"));
+    }
+
+    #[test]
+    fn test_format_review_body_with_empty_summary() {
+        let f1 = make_finding("warning", "Test", "Body", Some("file.rs"));
+        let findings: Vec<&Finding> = vec![&f1];
+        let body = format_review_body(&findings, Some("   "));
+        assert!(!body.contains("---\n\n###"));
     }
 
     #[test]
@@ -646,5 +731,20 @@ mod tests {
         assert_eq!(updated[0].line_start, Some(15));
         assert_eq!(updated[0].diff_new_line, Some(15));
         assert_eq!(updated[0].diff_side.as_deref(), Some("RIGHT"));
+    }
+
+    #[test]
+    fn test_should_include_in_submission_excludes_skipped_findings() {
+        use std::collections::HashMap;
+
+        let mut f = make_finding("warning", "t", "b", Some("src/a.rs"));
+        f.id = "f1".into();
+        let included_without_decision = should_include_in_submission(&f, &HashMap::new());
+        assert!(included_without_decision);
+
+        let mut decisions = HashMap::new();
+        decisions.insert("f1".to_string(), "skip".to_string());
+        let included_with_skip = should_include_in_submission(&f, &decisions);
+        assert!(!included_with_skip);
     }
 }

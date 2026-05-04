@@ -39,6 +39,7 @@ index abc..def 100644
     clusters: [],
     selectedFile: null,
     focusedFindingId: null,
+    sessionDecisions: {},
     ...overrides,
   };
 }
@@ -50,6 +51,7 @@ function renderWithContext(
   const ctx: ReviewContextType = {
     state,
     setSelectedFile: vi.fn(),
+    setSessionDecision: vi.fn(),
     refreshSnapshot: vi.fn().mockResolvedValue(undefined),
     revealFinding: vi.fn(),
   };
@@ -98,6 +100,7 @@ describe("DiffPanel", () => {
     const ctx = {
       state,
       setSelectedFile: vi.fn(),
+      setSessionDecision: vi.fn(),
       refreshSnapshot: vi.fn().mockResolvedValue(undefined),
       revealFinding: vi.fn(),
     };

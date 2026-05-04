@@ -15,11 +15,13 @@ export interface ReviewState {
   clusters: FindingCluster[];
   selectedFile: string | null;
   focusedFindingId: string | null;
+  sessionDecisions: Record<string, "accept" | "skip">;
 }
 
 export interface ReviewContextType {
   state: ReviewState;
   setSelectedFile: (file: string | null) => void;
+  setSessionDecision: (findingId: string, decision: "accept" | "skip" | null) => void;
   refreshSnapshot: () => Promise<void>;
   revealFinding: (findingId: string) => void;
 }
