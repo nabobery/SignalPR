@@ -1,4 +1,5 @@
 use crate::errors::AppError;
+use crate::metrics;
 use crate::preferences::decisions::build_decision;
 use crate::preferences::scoring::compute_preference_summaries;
 use crate::storage::db::AppDb;
@@ -38,6 +39,12 @@ pub async fn record_decision(
     let summaries = compute_preference_summaries(&agent_decisions);
     for summary in &summaries {
         queries::upsert_preference_summary(&conn, summary)?;
+    }
+
+    // Recompute run scorecard after decision change
+    let run_id = &finding.review_run_id;
+    if let Ok(scorecard) = metrics::compute_run_scorecard(&conn, run_id) {
+        let _ = metrics::store_run_scorecard_cache(&conn, run_id, &scorecard);
     }
 
     Ok(())
@@ -93,6 +100,10 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00Z".into()),
             completed_at: Some("2026-01-01T00:01:00Z".into()),
             error_message: None,
+            baseline_run_id: None,
+            metrics_json: None,
+            analysis_diff_hash: None,
+            analysis_diff_text: None,
         };
         queries::insert_review_run(conn, &run).unwrap();
     }
@@ -124,6 +135,7 @@ mod tests {
             fix_replace: None,
             fix_explanation: None,
             fix_status: None,
+            fingerprint: None,
         };
         queries::insert_finding(conn, &finding).unwrap();
         finding

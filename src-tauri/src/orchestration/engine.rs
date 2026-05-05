@@ -250,6 +250,7 @@ pub async fn run_review_pipeline(
             if let Some(cid) = finding_cluster_map.get(&f.id) {
                 f.cluster_id = Some(cid.clone());
             }
+            f.fingerprint = Some(crate::review_delta::compute_finding_fingerprint(&f));
             queries::insert_finding(&conn, &f)?;
         }
     }
@@ -264,6 +265,18 @@ pub async fn run_review_pipeline(
     emit(ReviewEvent::ReviewReady {
         run_id: args.run_id.clone(),
     });
+
+    // Compute initial run scorecard at pipeline completion
+    {
+        let conn = db.0.lock().map_err(|e| {
+            AppError::Database(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::other(e.to_string()),
+            )))
+        })?;
+        if let Ok(scorecard) = crate::metrics::compute_run_scorecard(&conn, &args.run_id) {
+            let _ = crate::metrics::store_run_scorecard_cache(&conn, &args.run_id, &scorecard);
+        }
+    }
 
     Ok(())
 }
@@ -363,6 +376,16 @@ async fn run_agent_lanes(
             finding_count: 0,
             error_message: None,
         });
+
+        log_event(
+            event_log,
+            run_id,
+            "lane_call_started",
+            serde_json::json!({
+                "lane_id": lane_id,
+                "provider_name": provider_name,
+            }),
+        );
 
         let agent_run_id_clone = agent_run_id.clone();
 
@@ -485,13 +508,17 @@ async fn run_agent_lanes(
 
                 // Best-effort lane event log (for diagnostics + partial resume).
                 let event_type = match &lane_result.status {
-                    LaneStatus::Completed { .. } => "lane_completed",
+                    LaneStatus::Completed { .. } => "lane_call_completed",
                     LaneStatus::TimedOut => "lane_timed_out",
                     LaneStatus::Cancelled => "lane_cancelled",
                     LaneStatus::Failed { .. } => "lane_failed",
                     LaneStatus::Running => "lane_running",
                     LaneStatus::Pending => "lane_pending",
                 };
+                let duration_ms = chrono::DateTime::parse_from_rfc3339(&lane_result.completed_at)
+                    .ok()
+                    .zip(chrono::DateTime::parse_from_rfc3339(&lane_result.started_at).ok())
+                    .map(|(end, start)| (end - start).num_milliseconds());
                 log_event(
                     event_log,
                     run_id,
@@ -501,6 +528,7 @@ async fn run_agent_lanes(
                         "provider_name": lane_result.provider_name,
                         "status": lane_result.status.as_str(),
                         "finding_count": lane_result.findings.len(),
+                        "duration_ms": duration_ms,
                     }),
                 );
 
@@ -766,6 +794,10 @@ mod tests {
                 started_at: Some("2026-01-01T00:00:00Z".into()),
                 completed_at: None,
                 error_message: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
             },
         )
         .unwrap();
@@ -1020,6 +1052,7 @@ mod tests {
         // Findings should have lane attribution (Fix 4)
         assert!(findings.iter().all(|f| f.lane_id.is_some()));
         assert!(findings.iter().all(|f| f.provider_name.is_some()));
+        assert!(findings.iter().all(|f| f.fingerprint.is_some()));
     }
 
     #[tokio::test]

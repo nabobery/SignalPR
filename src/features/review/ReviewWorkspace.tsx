@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
 import { useParams, useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
-import { ArrowLeft, Loader2, LayoutDashboard, List, FileCode, PenLine } from "lucide-react";
+import {
+  ArrowLeft,
+  Loader2,
+  LayoutDashboard,
+  List,
+  FileCode,
+  PenLine,
+  Activity,
+} from "lucide-react";
 import { getReviewSnapshot, acceptFix, parseError } from "../../lib/ipc";
 import { FixBatchBar } from "./FixBatchBar";
 import { ReviewContext, type ReviewState } from "../../lib/store";
@@ -9,13 +17,14 @@ import { FileTree } from "./FileTree";
 import { SignalBoard } from "./SignalBoard";
 import { DiffPanel } from "./DiffPanel";
 import { SummaryTab } from "./SummaryTab";
+import { DiagnosticsTab } from "./DiagnosticsTab";
 import LaneProgress from "./LaneProgress";
 import { SessionDrawer } from "./SessionDrawer";
 import { ApprovalModal } from "./ApprovalModal";
 import { DraftReviewTab } from "./DraftReviewTab";
 import { normalizeFilePath } from "./diff/normalizeFilePath";
 
-type WorkspaceTab = "summary" | "findings" | "diff" | "draft";
+type WorkspaceTab = "summary" | "findings" | "diff" | "draft" | "diagnostics";
 
 function DraftReviewTabLazy({ runId, onSubmitted }: { runId: string; onSubmitted: () => void }) {
   return <DraftReviewTab runId={runId} onSubmitted={onSubmitted} />;
@@ -52,12 +61,24 @@ export function ReviewWorkspace() {
         errorMessage: snap.error_message,
         laneStatuses: snap.lane_statuses,
         clusters: snap.clusters,
+        baselineRunId: snap.baseline_run_id ?? null,
+        metrics: snap.metrics ?? null,
+        delta: snap.delta ?? null,
         selectedFile:
           prev?.selectedFile && snap.changed_files.includes(prev.selectedFile)
             ? prev.selectedFile
             : null,
         focusedFindingId: null,
         sessionDecisions: (() => {
+          if (snap.decisions_by_finding_id) {
+            const seeded: Record<string, "accept" | "skip"> = {};
+            for (const [id, d] of Object.entries(snap.decisions_by_finding_id)) {
+              if (d === "accept" || d === "skip") {
+                seeded[id] = d;
+              }
+            }
+            return seeded;
+          }
           const nextFindingIds = new Set(snap.findings.map((f) => f.id));
           const prevDecisions = prev?.sessionDecisions ?? {};
           return Object.fromEntries(
@@ -180,6 +201,7 @@ export function ReviewWorkspace() {
     { id: "findings", label: `Findings (${activeCount})`, icon: List },
     { id: "diff", label: "Diff", icon: FileCode },
     { id: "draft", label: "Draft Review", icon: PenLine },
+    { id: "diagnostics", label: "Diagnostics", icon: Activity },
   ];
 
   const showSidebar = activeTab === "findings" || activeTab === "diff";
@@ -287,6 +309,7 @@ export function ReviewWorkspace() {
             {activeTab === "draft" && runId && (
               <DraftReviewTabLazy runId={runId} onSubmitted={refreshSnapshot} />
             )}
+            {activeTab === "diagnostics" && runId && <DiagnosticsTab runId={runId} />}
           </main>
         </div>
 

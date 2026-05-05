@@ -194,6 +194,7 @@ index 2222222..3333333 100644
             fix_replace: None,
             fix_explanation: None,
             fix_status: None,
+            fingerprint: None,
         }
     }
 

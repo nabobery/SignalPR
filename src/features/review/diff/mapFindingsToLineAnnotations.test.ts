@@ -30,6 +30,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     fix_explanation: null,
     fix_status: null,
     ...overrides,
+    fingerprint: overrides.fingerprint ?? null,
   };
 }
 

@@ -1,4 +1,5 @@
 use crate::errors::AppError;
+use crate::metrics;
 use crate::preferences::decisions::build_decision;
 use crate::preferences::scoring;
 use crate::storage::db::AppDb;
@@ -47,6 +48,14 @@ pub async fn update_finding(
             tracing::warn!("Failed to record reject decision: {}", e);
         }
     }
+
+    // Recompute run scorecard after finding update
+    if let Ok(Some(finding)) = queries::get_finding_by_id(&conn, &finding_id) {
+        if let Ok(scorecard) = metrics::compute_run_scorecard(&conn, &finding.review_run_id) {
+            let _ = metrics::store_run_scorecard_cache(&conn, &finding.review_run_id, &scorecard);
+        }
+    }
+
     Ok(())
 }
 
@@ -89,6 +98,10 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00Z".into()),
             completed_at: Some("2026-01-01T00:01:00Z".into()),
             error_message: None,
+            baseline_run_id: None,
+            metrics_json: None,
+            analysis_diff_hash: None,
+            analysis_diff_text: None,
         };
         queries::insert_review_run(conn, &run).unwrap();
 
@@ -118,6 +131,7 @@ mod tests {
             fix_replace: None,
             fix_explanation: None,
             fix_status: None,
+            fingerprint: None,
         };
         queries::insert_finding(conn, &finding).unwrap();
     }

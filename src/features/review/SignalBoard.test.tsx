@@ -38,6 +38,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     fix_replace: null,
     fix_explanation: null,
     fix_status: null,
+    fingerprint: null,
     ...overrides,
   };
 }
@@ -64,6 +65,9 @@ function SignalBoardHarness() {
       selectedFile: null,
       focusedFindingId: null,
       sessionDecisions: {},
+      baselineRunId: null,
+      metrics: null,
+      delta: null,
     }),
     [findings],
   );

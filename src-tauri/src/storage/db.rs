@@ -203,6 +203,19 @@ CREATE TABLE IF NOT EXISTS review_drafts (
 );
 "#;
 
+const MIGRATION_V7: &str = r#"
+-- Phase 2: Trust metrics + incremental rerun
+ALTER TABLE review_runs ADD COLUMN baseline_run_id TEXT;
+ALTER TABLE review_runs ADD COLUMN metrics_json TEXT;
+ALTER TABLE review_runs ADD COLUMN analysis_diff_hash TEXT;
+ALTER TABLE review_runs ADD COLUMN analysis_diff_text TEXT;
+
+ALTER TABLE findings ADD COLUMN fingerprint TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_review_runs_baseline_run_id ON review_runs(baseline_run_id);
+CREATE INDEX IF NOT EXISTS idx_findings_run_fingerprint ON findings(review_run_id, fingerprint);
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -256,6 +269,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V6)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (6)",
+            [],
+        )?;
+    }
+
+    if current_version < 7 {
+        conn.execute_batch(MIGRATION_V7)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (7)",
             [],
         )?;
     }
@@ -407,6 +428,45 @@ mod tests {
             .unwrap();
         assert!(indexes.contains(&"idx_decisions_agent_type".to_string()));
         assert!(indexes.contains(&"idx_decisions_category".to_string()));
+    }
+
+    #[test]
+    fn test_v7_columns_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url) VALUES ('pr', 'ws', 1, 't', 'u')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO review_runs (id, pr_id, status, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text) VALUES ('run', 'pr', 'ready', NULL, '{\"test\":1}', 'abc123', 'diff text')",
+            [],
+        ).expect("V7 review_runs columns should exist");
+
+        conn.execute(
+            "INSERT INTO findings (id, review_run_id, agent_type, severity, confidence, title, body, fingerprint) VALUES ('f1', 'run', 'security', 'warning', 0.8, 'Test', 'Body', 'fp_abc')",
+            [],
+        ).expect("V7 findings.fingerprint column should exist");
+    }
+
+    #[test]
+    fn test_v7_indexes_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_review_runs_baseline_run_id".to_string()));
+        assert!(indexes.contains(&"idx_findings_run_fingerprint".to_string()));
     }
 
     #[test]

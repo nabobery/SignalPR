@@ -43,6 +43,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     fix_replace: null,
     fix_explanation: null,
     fix_status: null,
+    fingerprint: null,
     ...overrides,
   };
 }
@@ -74,6 +75,9 @@ function renderDraft(stateOverrides: Partial<ReviewState> = {}, onSubmitted = vi
     selectedFile: null,
     focusedFindingId: null,
     sessionDecisions: {},
+    baselineRunId: null,
+    metrics: null,
+    delta: null,
     ...stateOverrides,
   };
 

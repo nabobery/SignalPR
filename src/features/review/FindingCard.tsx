@@ -152,6 +152,24 @@ export function FindingCard({
                 {sessionDecision === "accept" ? "Accepted" : "Deferred"}
               </span>
             )}
+            {finding.baseline_decision && !sessionDecision && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800/60 text-zinc-500 italic">
+                Prev: {finding.baseline_decision}
+              </span>
+            )}
+            {finding.delta_state && (
+              <span
+                className={`text-xs px-1.5 py-0.5 rounded ${
+                  finding.delta_state === "new"
+                    ? "bg-emerald-900/30 text-emerald-400"
+                    : finding.delta_state === "stale"
+                      ? "bg-yellow-900/30 text-yellow-400"
+                      : "bg-zinc-800 text-zinc-500"
+                }`}
+              >
+                {finding.delta_state}
+              </span>
+            )}
             <span className="text-xs text-zinc-500 ml-auto shrink-0">
               {Math.round(finding.confidence * 100)}%
             </span>

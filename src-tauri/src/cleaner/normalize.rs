@@ -47,6 +47,7 @@ pub fn normalize(raw: Vec<RawFinding>, review_run_id: &str) -> Vec<Finding> {
                 } else {
                     None
                 },
+                fingerprint: None,
             }
         })
         .collect()

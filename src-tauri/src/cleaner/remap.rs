@@ -220,6 +220,7 @@ mod tests {
             fix_replace: None,
             fix_explanation: None,
             fix_status: None,
+            fingerprint: None,
         }
     }
 

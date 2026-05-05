@@ -92,8 +92,8 @@ pub fn update_pull_request_diff(
 
 pub fn insert_review_run(conn: &Connection, run: &ReviewRun) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO review_runs (id, pr_id, status, started_at) VALUES (?1, ?2, ?3, ?4)",
-        params![run.id, run.pr_id, run.status, run.started_at],
+        "INSERT INTO review_runs (id, pr_id, status, started_at, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![run.id, run.pr_id, run.status, run.started_at, run.baseline_run_id, run.metrics_json, run.analysis_diff_hash, run.analysis_diff_text],
     )?;
     Ok(())
 }
@@ -123,7 +123,7 @@ pub fn get_review_run(
     run_id: &str,
 ) -> Result<Option<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message FROM review_runs WHERE id = ?1",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text FROM review_runs WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![run_id], |row| {
         Ok(ReviewRun {
@@ -133,6 +133,10 @@ pub fn get_review_run(
             started_at: row.get(3)?,
             completed_at: row.get(4)?,
             error_message: row.get(5)?,
+            baseline_run_id: row.get(6)?,
+            metrics_json: row.get(7)?,
+            analysis_diff_hash: row.get(8)?,
+            analysis_diff_text: row.get(9)?,
         })
     })?;
     match rows.next() {
@@ -143,7 +147,7 @@ pub fn get_review_run(
 
 pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(ReviewRun {
@@ -153,6 +157,10 @@ pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, r
             started_at: row.get(3)?,
             completed_at: row.get(4)?,
             error_message: row.get(5)?,
+            baseline_run_id: row.get(6)?,
+            metrics_json: row.get(7)?,
+            analysis_diff_hash: row.get(8)?,
+            analysis_diff_text: row.get(9)?,
         })
     })?;
     rows.collect()
@@ -162,13 +170,13 @@ pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, r
 
 pub fn insert_finding(conn: &Connection, f: &Finding) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         params![
             f.id, f.review_run_id, f.agent_type, f.file_path, f.line_start, f.line_end,
             f.severity, f.confidence, f.title, f.body, f.evidence, f.status,
             f.user_edited_body, f.user_severity_override, f.is_anchored, f.created_at,
             f.cluster_id, f.lane_id, f.provider_name, f.diff_side, f.diff_new_line,
-            f.fix_search, f.fix_replace, f.fix_explanation, f.fix_status
+            f.fix_search, f.fix_replace, f.fix_explanation, f.fix_status, f.fingerprint
         ],
     )?;
     Ok(())
@@ -223,7 +231,7 @@ pub fn get_findings_for_run(
     review_run_id: &str,
 ) -> Result<Vec<Finding>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
+        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
     )?;
     let rows = stmt.query_map(params![review_run_id], |row| {
         Ok(Finding {
@@ -252,6 +260,7 @@ pub fn get_findings_for_run(
             fix_replace: row.get(22)?,
             fix_explanation: row.get(23)?,
             fix_status: row.get(24)?,
+            fingerprint: row.get(25)?,
         })
     })?;
     rows.collect()
@@ -262,7 +271,7 @@ pub fn get_finding_by_id(
     finding_id: &str,
 ) -> Result<Option<Finding>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status FROM findings WHERE id = ?1 LIMIT 1",
+        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint FROM findings WHERE id = ?1 LIMIT 1",
     )?;
     let mut rows = stmt.query_map(params![finding_id], |row| {
         Ok(Finding {
@@ -291,6 +300,7 @@ pub fn get_finding_by_id(
             fix_replace: row.get(22)?,
             fix_explanation: row.get(23)?,
             fix_status: row.get(24)?,
+            fingerprint: row.get(25)?,
         })
     })?;
     match rows.next() {
@@ -845,6 +855,33 @@ pub fn get_workspace_by_id(
     }
 }
 
+// --- Review Run Metrics/Analysis ---
+
+pub fn update_review_run_metrics(
+    conn: &Connection,
+    run_id: &str,
+    metrics_json: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE review_runs SET metrics_json = ?1 WHERE id = ?2",
+        params![metrics_json, run_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_review_run_analysis_diff(
+    conn: &Connection,
+    run_id: &str,
+    analysis_diff_text: &str,
+    analysis_diff_hash: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE review_runs SET analysis_diff_text = ?1, analysis_diff_hash = ?2 WHERE id = ?3",
+        params![analysis_diff_text, analysis_diff_hash, run_id],
+    )?;
+    Ok(())
+}
+
 // --- Finding Fix Status ---
 
 pub fn update_finding_fix_status(
@@ -1029,6 +1066,10 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00".into()),
             completed_at: None,
             error_message: None,
+            baseline_run_id: None,
+            metrics_json: None,
+            analysis_diff_hash: None,
+            analysis_diff_text: None,
         };
         insert_review_run(&conn, &run).unwrap();
 
@@ -1084,6 +1125,10 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
             },
         )
         .unwrap();
@@ -1114,6 +1159,7 @@ mod tests {
             fix_replace: None,
             fix_explanation: None,
             fix_status: None,
+            fingerprint: None,
         };
         insert_finding(&conn, &finding).unwrap();
 
@@ -1180,6 +1226,10 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
             },
         )
         .unwrap();
@@ -1218,6 +1268,7 @@ mod tests {
                     fix_replace: None,
                     fix_explanation: None,
                     fix_status: None,
+                    fingerprint: None,
                 },
             )
             .unwrap();
@@ -1300,6 +1351,10 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
             },
         )
         .unwrap();
@@ -1393,6 +1448,10 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
             },
         )
         .unwrap();
@@ -1424,6 +1483,7 @@ mod tests {
                 fix_replace: None,
                 fix_explanation: None,
                 fix_status: None,
+                fingerprint: None,
             },
         )
         .unwrap();
@@ -1526,6 +1586,10 @@ mod tests {
                 started_at: Some("2026-01-01T00:00:00".into()),
                 completed_at: Some("2026-01-01T00:01:00".into()),
                 error_message: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
             },
         )
         .unwrap();
@@ -1583,6 +1647,10 @@ mod tests {
                 started_at: Some("2026-01-02T00:00:00".into()),
                 completed_at: None,
                 error_message: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
             },
         )
         .unwrap();
@@ -1626,6 +1694,7 @@ mod tests {
                 fix_replace: None,
                 fix_explanation: None,
                 fix_status: None,
+                fingerprint: None,
             },
         )
         .unwrap();
@@ -1657,6 +1726,7 @@ mod tests {
                 fix_replace: None,
                 fix_explanation: None,
                 fix_status: None,
+                fingerprint: None,
             },
         )
         .unwrap();

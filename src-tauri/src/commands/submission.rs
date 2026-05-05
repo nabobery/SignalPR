@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
@@ -5,6 +7,7 @@ use crate::cleaner::{remap, verify};
 use crate::commands::intake::parse_pr_url;
 use crate::preferences::{decisions, scoring};
 use crate::storage::db::AppDb;
+use crate::storage::event_log::EventLog;
 use crate::storage::hashing::sha256_hex;
 use crate::storage::models::{Finding, ReviewerDecision, SubmissionRecord};
 use crate::storage::queries;
@@ -17,6 +20,7 @@ pub async fn submit_review(
     force_resubmit: Option<bool>,
     review_summary_markdown: Option<String>,
     db: tauri::State<'_, AppDb>,
+    event_log: tauri::State<'_, Arc<EventLog>>,
 ) -> Result<(), crate::errors::AppError> {
     use crate::errors::AppError;
 
@@ -173,6 +177,16 @@ pub async fn submit_review(
         )?;
     }
 
+    // Log submission started event
+    let _ = event_log.append(
+        &run_id,
+        "submission_started",
+        serde_json::json!({
+            "action": action,
+            "finding_count": active_findings.len(),
+        }),
+    );
+
     // Submit via gh
     let shell = app.shell();
     let gh_action = match action.as_str() {
@@ -225,6 +239,21 @@ pub async fn submit_review(
         if let Err(e) = record_decisions_for_submission(&conn, &active_findings) {
             tracing::warn!("Failed to record reviewer decisions: {}", e);
         }
+
+        // Recompute and persist run scorecard after submission
+        if let Ok(scorecard) = crate::metrics::compute_run_scorecard(&conn, &run_id) {
+            let _ = crate::metrics::store_run_scorecard_cache(&conn, &run_id, &scorecard);
+        }
+
+        // Log submission completed event
+        let _ = event_log.append(
+            &run_id,
+            "submission_completed",
+            serde_json::json!({
+                "action": action,
+                "finding_count": active_findings.len(),
+            }),
+        );
 
         Ok(())
     } else {
@@ -606,6 +635,7 @@ mod tests {
             fix_replace: None,
             fix_explanation: None,
             fix_status: None,
+            fingerprint: None,
         }
     }
 

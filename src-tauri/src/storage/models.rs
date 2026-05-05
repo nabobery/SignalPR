@@ -34,6 +34,11 @@ pub struct ReviewRun {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub error_message: Option<String>,
+    // V7 fields: trust metrics + incremental rerun
+    pub baseline_run_id: Option<String>,
+    pub metrics_json: Option<String>,
+    pub analysis_diff_hash: Option<String>,
+    pub analysis_diff_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +70,8 @@ pub struct Finding {
     pub fix_replace: Option<String>,
     pub fix_explanation: Option<String>,
     pub fix_status: Option<String>,
+    // V7 field: stable identity across reruns
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

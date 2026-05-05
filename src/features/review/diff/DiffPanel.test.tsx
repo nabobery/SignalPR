@@ -40,6 +40,9 @@ index abc..def 100644
     selectedFile: null,
     focusedFindingId: null,
     sessionDecisions: {},
+    baselineRunId: null,
+    metrics: null,
+    delta: null,
     ...overrides,
   };
 }

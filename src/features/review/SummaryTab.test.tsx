@@ -1,9 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { ReviewContext, type ReviewState, type ReviewContextType } from "../../lib/store";
 import { SummaryTab } from "./SummaryTab";
-import type { Finding, LaneSnapshot } from "../../lib/types";
+import type { Finding, LaneSnapshot, RunScorecard } from "../../lib/types";
+
+vi.mock("../../lib/ipc", () => ({
+  rerunReview: vi.fn(),
+  parseError: (err: unknown) => ({ code: "unknown", message: String(err) }),
+}));
 
 function makeFinding(overrides: Partial<Finding> = {}): Finding {
   return {
@@ -32,6 +38,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     fix_replace: null,
     fix_explanation: null,
     fix_status: null,
+    fingerprint: null,
     ...overrides,
   };
 }
@@ -63,6 +70,9 @@ function renderWithContext(state: Partial<ReviewState>) {
     selectedFile: null,
     focusedFindingId: null,
     sessionDecisions: {},
+    baselineRunId: null,
+    metrics: null,
+    delta: null,
     ...state,
   };
 
@@ -75,9 +85,11 @@ function renderWithContext(state: Partial<ReviewState>) {
   };
 
   return render(
-    <ReviewContext.Provider value={ctx}>
-      <SummaryTab />
-    </ReviewContext.Provider>,
+    <MemoryRouter>
+      <ReviewContext.Provider value={ctx}>
+        <SummaryTab />
+      </ReviewContext.Provider>
+    </MemoryRouter>,
   );
 }
 
@@ -172,6 +184,9 @@ describe("SummaryTab", () => {
         selectedFile: null,
         focusedFindingId: null,
         sessionDecisions: {},
+        baselineRunId: null,
+        metrics: null,
+        delta: null,
       },
       setSelectedFile,
       setSessionDecision: vi.fn(),
@@ -181,9 +196,11 @@ describe("SummaryTab", () => {
 
     const user = userEvent.setup();
     render(
-      <ReviewContext.Provider value={ctx}>
-        <SummaryTab />
-      </ReviewContext.Provider>,
+      <MemoryRouter>
+        <ReviewContext.Provider value={ctx}>
+          <SummaryTab />
+        </ReviewContext.Provider>
+      </MemoryRouter>,
     );
 
     expect(screen.getByText("src/main.rs")).toBeInTheDocument();
@@ -207,5 +224,82 @@ describe("SummaryTab", () => {
     });
     expect(screen.getByText("1/2")).toBeInTheDocument();
     expect(screen.getByText("lanes (1 failed)")).toBeInTheDocument();
+  });
+
+  it("renders Rerun button when status is ready", () => {
+    renderWithContext({ status: "ready" });
+    expect(screen.getByRole("button", { name: /rerun/i })).toBeInTheDocument();
+  });
+
+  it("renders Rerun button when status is submitted", () => {
+    renderWithContext({ status: "submitted" });
+    expect(screen.getByRole("button", { name: /rerun/i })).toBeInTheDocument();
+  });
+
+  it("does not render Rerun button when running", () => {
+    renderWithContext({ status: "running_agents" });
+    expect(screen.queryByRole("button", { name: /rerun/i })).not.toBeInTheDocument();
+  });
+
+  it("calls rerunReview and navigates on click", async () => {
+    const { rerunReview } = await import("../../lib/ipc");
+    (rerunReview as ReturnType<typeof vi.fn>).mockResolvedValue("new-run-id");
+
+    const user = userEvent.setup();
+    renderWithContext({ status: "ready" });
+
+    await user.click(screen.getByRole("button", { name: /rerun/i }));
+    expect(rerunReview).toHaveBeenCalledWith("run-1");
+  });
+
+  it("renders provider scorecard when metrics are present", () => {
+    const scorecard: RunScorecard = {
+      lanes: [
+        {
+          lane_id: "security",
+          provider_name: "codex",
+          lane_latency_ms: 12500,
+          raw_findings_count: 10,
+          surfaced_findings_count: 5,
+          reviewer_accept_rate: 0.8,
+          reviewer_edit_rate: 0.1,
+          suppress_rate: 0.1,
+          anchor_validity: 0.9,
+          submission_inclusion_rate: 0.7,
+          cost_usd: 0.0023,
+        },
+      ],
+      overall_surfaced: 5,
+      overall_accept_rate: 0.8,
+      overall_edit_rate: 0.1,
+      overall_suppress_rate: 0.1,
+    };
+    renderWithContext({ metrics: scorecard });
+    expect(screen.getByText("Provider scorecard")).toBeInTheDocument();
+    expect(screen.getByText("security")).toBeInTheDocument();
+    expect(screen.getAllByText("80%").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Overall")).toBeInTheDocument();
+    expect(screen.getByText("12.5s")).toBeInTheDocument();
+  });
+
+  it("renders delta summary for reruns", () => {
+    renderWithContext({
+      delta: {
+        changed_files: ["src/main.rs"],
+        changed_hunks_by_file: {},
+        counts: { new: 3, unchanged: 2, stale: 1, resolved: 4 },
+        resolved: [],
+      },
+    });
+    expect(screen.getByText("Changes since last run")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("new")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+    expect(screen.getByText("resolved")).toBeInTheDocument();
+  });
+
+  it("does not show scorecard when metrics is null", () => {
+    renderWithContext({ metrics: null });
+    expect(screen.queryByText("Provider scorecard")).not.toBeInTheDocument();
   });
 });

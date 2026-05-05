@@ -61,6 +61,11 @@ export interface Finding {
   fix_replace: string | null;
   fix_explanation: string | null;
   fix_status: FixStatus | null;
+  // Phase 2: fingerprint + delta state
+  fingerprint: string | null;
+  delta_state?: "new" | "unchanged" | "stale";
+  baseline_finding_id?: string | null;
+  baseline_decision?: "accept" | "reject" | "edit" | "skip" | null;
 }
 
 export interface LaneSnapshot {
@@ -87,6 +92,44 @@ export interface ReviewRun {
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;
+  baseline_run_id: string | null;
+}
+
+// Phase 2: Scorecard metrics
+export interface LaneScorecard {
+  lane_id: string;
+  provider_name: string;
+  lane_latency_ms: number | null;
+  raw_findings_count: number;
+  surfaced_findings_count: number;
+  reviewer_accept_rate: number;
+  reviewer_edit_rate: number;
+  suppress_rate: number;
+  anchor_validity: number;
+  submission_inclusion_rate: number;
+  cost_usd: number | null;
+}
+
+export interface RunScorecard {
+  lanes: LaneScorecard[];
+  overall_surfaced: number;
+  overall_accept_rate: number;
+  overall_edit_rate: number;
+  overall_suppress_rate: number;
+}
+
+// Phase 2: Rerun delta
+export interface ReviewDeltaSnapshot {
+  changed_files: string[];
+  changed_hunks_by_file: Record<string, { new_start: number; new_count: number }[]>;
+  counts: { new: number; unchanged: number; stale: number; resolved: number };
+  resolved: {
+    id: string;
+    title: string;
+    file_path: string | null;
+    agent_type: string;
+    severity: string;
+  }[];
 }
 
 export interface ReviewSnapshot {
@@ -101,6 +144,10 @@ export interface ReviewSnapshot {
   error_message: string | null;
   lane_statuses: LaneSnapshot[];
   clusters: FindingCluster[];
+  baseline_run_id: string | null;
+  metrics: RunScorecard | null;
+  delta: ReviewDeltaSnapshot | null;
+  decisions_by_finding_id: Record<string, string> | null;
 }
 
 export interface ReviewerDecision {

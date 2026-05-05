@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import {
   AlertTriangle,
   ShieldAlert,
@@ -9,8 +10,11 @@ import {
   CheckCircle,
   XCircle,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 import { useReviewContext } from "../../lib/store";
+import { rerunReview, parseError } from "../../lib/ipc";
+import type { RunScorecard } from "../../lib/types";
 
 const severityIcons: Record<string, typeof AlertTriangle> = {
   blocker: ShieldAlert,
@@ -30,6 +34,9 @@ const severityColors: Record<string, string> = {
 
 export function SummaryTab() {
   const { state, setSelectedFile } = useReviewContext();
+  const navigate = useNavigate();
+  const [rerunning, setRerunning] = useState(false);
+  const [rerunError, setRerunError] = useState<string | null>(null);
   const activeFindings = state.findings.filter((f) => f.status === "active");
 
   const severityBreakdown = useMemo(() => {
@@ -57,10 +64,24 @@ export function SummaryTab() {
   const hasCritical = "critical" in severityBreakdown;
   const isRunning =
     state.status === "created" || state.status === "running_agents" || state.status === "cleaning";
+  const canRerun = state.status === "ready" || state.status === "submitted";
   const completedLanes = state.laneStatuses.filter((l) => l.status === "completed").length;
   const failedLanes = state.laneStatuses.filter(
     (l) => l.status === "failed" || l.status === "timed_out",
   ).length;
+
+  const handleRerun = async () => {
+    setRerunning(true);
+    setRerunError(null);
+    try {
+      const newRunId = await rerunReview(state.runId);
+      navigate(`/review/${newRunId}`);
+    } catch (err) {
+      setRerunError(parseError(err).message);
+    } finally {
+      setRerunning(false);
+    }
+  };
 
   return (
     <div className="overflow-y-auto p-4 space-y-5">
@@ -92,7 +113,20 @@ export function SummaryTab() {
             <ShieldAlert className="w-3 h-3" /> High risk
           </span>
         )}
+        {canRerun && (
+          <button
+            onClick={handleRerun}
+            disabled={rerunning}
+            className="flex items-center gap-1.5 text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 px-2.5 py-1 rounded transition-colors disabled:opacity-50 ml-auto"
+          >
+            <RefreshCw className={`w-3 h-3 ${rerunning ? "animate-spin" : ""}`} />
+            {rerunning ? "Rerunning..." : "Rerun"}
+          </button>
+        )}
       </div>
+      {rerunError && (
+        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded">{rerunError}</p>
+      )}
 
       {/* Stats row */}
       <div className="grid grid-cols-3 gap-3">
@@ -205,6 +239,133 @@ export function SummaryTab() {
           </div>
         </section>
       )}
+
+      {/* Delta summary (for reruns) */}
+      {state.delta && (
+        <section>
+          <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+            Changes since last run
+          </h3>
+          <div className="flex gap-3 flex-wrap">
+            <div className="bg-emerald-900/20 border border-emerald-800/50 rounded px-2.5 py-1.5">
+              <span className="text-sm font-medium text-emerald-400">{state.delta.counts.new}</span>
+              <span className="text-xs text-zinc-500 ml-1">new</span>
+            </div>
+            <div className="bg-zinc-900/50 border border-zinc-800/50 rounded px-2.5 py-1.5">
+              <span className="text-sm font-medium text-zinc-300">
+                {state.delta.counts.unchanged}
+              </span>
+              <span className="text-xs text-zinc-500 ml-1">unchanged</span>
+            </div>
+            <div className="bg-yellow-900/20 border border-yellow-800/50 rounded px-2.5 py-1.5">
+              <span className="text-sm font-medium text-yellow-400">
+                {state.delta.counts.stale}
+              </span>
+              <span className="text-xs text-zinc-500 ml-1">stale</span>
+            </div>
+            <div className="bg-blue-900/20 border border-blue-800/50 rounded px-2.5 py-1.5">
+              <span className="text-sm font-medium text-blue-400">
+                {state.delta.counts.resolved}
+              </span>
+              <span className="text-xs text-zinc-500 ml-1">resolved</span>
+            </div>
+          </div>
+          {state.delta.changed_files.length > 0 && (
+            <p className="text-xs text-zinc-500 mt-2">
+              {state.delta.changed_files.length} file
+              {state.delta.changed_files.length !== 1 ? "s" : ""} changed since baseline
+            </p>
+          )}
+        </section>
+      )}
+
+      {/* Provider scorecard */}
+      {state.metrics && <ProviderScorecard scorecard={state.metrics} />}
     </div>
   );
+}
+
+function ProviderScorecard({ scorecard }: { scorecard: RunScorecard }) {
+  return (
+    <section>
+      <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+        Provider scorecard
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-zinc-500 border-b border-zinc-800">
+              <th className="text-left py-1.5 pr-3 font-medium">Lane</th>
+              <th className="text-right py-1.5 px-2 font-medium">Latency</th>
+              <th className="text-right py-1.5 px-2 font-medium">Raw</th>
+              <th className="text-right py-1.5 px-2 font-medium">Surfaced</th>
+              <th className="text-right py-1.5 px-2 font-medium">Accept%</th>
+              <th className="text-right py-1.5 px-2 font-medium">Edit%</th>
+              <th className="text-right py-1.5 px-2 font-medium">Suppress%</th>
+              <th className="text-right py-1.5 px-2 font-medium">Anchored%</th>
+              {scorecard.lanes.some((l) => l.cost_usd !== null) && (
+                <th className="text-right py-1.5 pl-2 font-medium">Cost</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {scorecard.lanes.map((lane) => (
+              <tr key={lane.lane_id} className="border-b border-zinc-800/50">
+                <td className="py-1.5 pr-3 text-zinc-300 capitalize">{lane.lane_id}</td>
+                <td className="text-right py-1.5 px-2 text-zinc-400">
+                  {lane.lane_latency_ms ? `${(lane.lane_latency_ms / 1000).toFixed(1)}s` : "—"}
+                </td>
+                <td className="text-right py-1.5 px-2 text-zinc-400">{lane.raw_findings_count}</td>
+                <td className="text-right py-1.5 px-2 text-zinc-300">
+                  {lane.surfaced_findings_count}
+                </td>
+                <td className="text-right py-1.5 px-2 text-emerald-400">
+                  {pct(lane.reviewer_accept_rate)}
+                </td>
+                <td className="text-right py-1.5 px-2 text-blue-400">
+                  {pct(lane.reviewer_edit_rate)}
+                </td>
+                <td className="text-right py-1.5 px-2 text-yellow-400">
+                  {pct(lane.suppress_rate)}
+                </td>
+                <td className="text-right py-1.5 px-2 text-zinc-400">
+                  {pct(lane.anchor_validity)}
+                </td>
+                {scorecard.lanes.some((l) => l.cost_usd !== null) && (
+                  <td className="text-right py-1.5 pl-2 text-zinc-400">
+                    {lane.cost_usd !== null ? `$${lane.cost_usd.toFixed(4)}` : "—"}
+                  </td>
+                )}
+              </tr>
+            ))}
+            {/* Overall row */}
+            <tr className="border-t border-zinc-700 font-medium">
+              <td className="py-1.5 pr-3 text-zinc-200">Overall</td>
+              <td className="text-right py-1.5 px-2 text-zinc-500">—</td>
+              <td className="text-right py-1.5 px-2 text-zinc-500">—</td>
+              <td className="text-right py-1.5 px-2 text-zinc-200">{scorecard.overall_surfaced}</td>
+              <td className="text-right py-1.5 px-2 text-emerald-400">
+                {pct(scorecard.overall_accept_rate)}
+              </td>
+              <td className="text-right py-1.5 px-2 text-blue-400">
+                {pct(scorecard.overall_edit_rate)}
+              </td>
+              <td className="text-right py-1.5 px-2 text-yellow-400">
+                {pct(scorecard.overall_suppress_rate)}
+              </td>
+              <td className="text-right py-1.5 px-2 text-zinc-500">—</td>
+              {scorecard.lanes.some((l) => l.cost_usd !== null) && (
+                <td className="text-right py-1.5 pl-2 text-zinc-500">—</td>
+              )}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function pct(value: number): string {
+  if (value === 0) return "0%";
+  return `${Math.round(value * 100)}%`;
 }

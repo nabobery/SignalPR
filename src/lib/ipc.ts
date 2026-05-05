@@ -198,6 +198,12 @@ export async function resolveClaudeCodePermission(
   return invoke("resolve_claude_code_permission", { requestId, approved });
 }
 
+// --- Incremental Rerun ---
+
+export async function rerunReview(baselineRunId: string): Promise<string> {
+  return invoke("rerun_review", { baselineRunId });
+}
+
 // --- Inbox Overview ---
 
 export async function getInboxOverview(): Promise<InboxOverview> {

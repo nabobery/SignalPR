@@ -5,10 +5,12 @@ mod cleaner;
 mod commands;
 mod config;
 mod errors;
+mod metrics;
 mod notifications;
 mod orchestration;
 mod preferences;
 mod providers;
+mod review_delta;
 mod secrets;
 mod storage;
 mod tray;
@@ -770,6 +772,7 @@ pub fn run() {
             commands::inbox::get_inbox_overview,
             commands::drafts::get_review_draft,
             commands::drafts::save_review_draft,
+            commands::rerun::rerun_review,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

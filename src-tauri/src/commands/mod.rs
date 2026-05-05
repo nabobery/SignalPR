@@ -15,6 +15,7 @@ pub mod intake;
 pub mod opencode;
 pub mod preferences;
 pub mod providers;
+pub mod rerun;
 pub mod review;
 pub mod settings;
 pub mod submission;

@@ -1,5 +1,11 @@
 import { createContext, useContext } from "react";
-import type { Finding, FindingCluster, LaneSnapshot } from "./types";
+import type {
+  Finding,
+  FindingCluster,
+  LaneSnapshot,
+  RunScorecard,
+  ReviewDeltaSnapshot,
+} from "./types";
 
 export interface ReviewState {
   runId: string;
@@ -16,6 +22,9 @@ export interface ReviewState {
   selectedFile: string | null;
   focusedFindingId: string | null;
   sessionDecisions: Record<string, "accept" | "skip">;
+  baselineRunId: string | null;
+  metrics: RunScorecard | null;
+  delta: ReviewDeltaSnapshot | null;
 }
 
 export interface ReviewContextType {
