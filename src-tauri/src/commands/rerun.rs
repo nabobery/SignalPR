@@ -6,9 +6,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
 use crate::config;
+use crate::context_pack::ContextPackBuilder;
 use crate::errors::AppError;
+use crate::local_checks::{self, LocalChecksRunner};
 use crate::orchestration::engine;
-use crate::providers::traits::ReviewProvider;
+use crate::preferences::scoring;
+use crate::providers::traits::{RawFinding, ReviewProvider};
 use crate::storage::db::AppDb;
 use crate::storage::hashing::sha256_hex;
 use crate::storage::models::{PullRequest, ReviewRun};
@@ -84,6 +87,8 @@ pub async fn rerun_review(
         super::review::build_agent_lanes(&diff_text, provider.clone(), &resolved, &conn)
     };
     let cleaner_config = resolved.cleaner;
+    let context_pack_config = resolved.context_pack;
+    let local_checks_config = resolved.local_checks;
 
     {
         let conn =
@@ -124,6 +129,51 @@ pub async fn rerun_review(
         let event_log = app_clone
             .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
             .map(|s| s.inner().clone());
+
+        // Phase 3: Build context pack
+        let preference_text = {
+            let conn = db.0.lock().ok();
+            conn.and_then(|c| {
+                let decisions = queries::get_all_decisions(&c).ok()?;
+                let summaries = scoring::compute_preference_summaries(&decisions);
+                scoring::build_preference_prompt_section(&summaries)
+            })
+        };
+
+        let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
+            .with_preferences(preference_text)
+            .build();
+
+        let context_suffix = if context_pack.prompt_suffix.is_empty() {
+            None
+        } else {
+            Some(context_pack.prompt_suffix.clone())
+        };
+
+        if let Ok(json) = serde_json::to_string(&context_pack) {
+            if let Ok(conn) = db.0.lock() {
+                let _ = queries::update_review_run_context_pack(&conn, &run_id_clone, &json);
+            }
+        }
+
+        // Phase 3: Run local checks if enabled
+        let mut extra_raw_findings: Vec<RawFinding> = Vec::new();
+        let local_checks_summary = {
+            let runner = LocalChecksRunner::new(&cwd_path, &changed_files, token.clone())
+                .with_config(Some(&local_checks_config));
+            let summary = runner.run().await;
+            if !summary.items.is_empty() {
+                extra_raw_findings = local_checks::items_to_raw_findings(&summary.items);
+            }
+            summary
+        };
+
+        if let Ok(json) = serde_json::to_string(&local_checks_summary) {
+            if let Ok(conn) = db.0.lock() {
+                let _ = queries::update_review_run_local_checks(&conn, &run_id_clone, &json);
+            }
+        }
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -140,6 +190,8 @@ pub async fn rerun_review(
                 fallback_input: None,
                 fallback_provider: None,
                 event_log,
+                context_suffix,
+                extra_raw_findings,
             },
         )
         .await;
@@ -251,6 +303,8 @@ fn create_rerun_records(
             metrics_json: None,
             analysis_diff_hash: Some(input.diff_hash.to_string()),
             analysis_diff_text: Some(input.diff_text.to_string()),
+            context_pack_json: None,
+            local_checks_json: None,
         },
     )?;
 
@@ -300,6 +354,8 @@ mod tests {
             metrics_json: None,
             analysis_diff_hash: Some("basehash".into()),
             analysis_diff_text: Some("diff --git a/src/a.rs b/src/a.rs".into()),
+            context_pack_json: None,
+            local_checks_json: None,
         };
         queries::insert_review_run(conn, &baseline_run).unwrap();
 

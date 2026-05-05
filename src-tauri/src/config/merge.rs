@@ -14,6 +14,8 @@ pub fn deep_merge_configs(base: RepoConfig, overlay: RepoConfig) -> RepoConfig {
         lane_timeout_secs: overlay.lane_timeout_secs.or(base.lane_timeout_secs),
         preferred_provider: overlay.preferred_provider.or(base.preferred_provider),
         custom_agents: overlay.custom_agents.or(base.custom_agents),
+        context_pack: overlay.context_pack.or(base.context_pack),
+        local_checks: overlay.local_checks.or(base.local_checks),
     }
 }
 

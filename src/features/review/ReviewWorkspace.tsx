@@ -64,6 +64,8 @@ export function ReviewWorkspace() {
         baselineRunId: snap.baseline_run_id ?? null,
         metrics: snap.metrics ?? null,
         delta: snap.delta ?? null,
+        contextPackSummary: snap.context_pack_summary ?? null,
+        localChecksSummary: snap.local_checks_summary ?? null,
         selectedFile:
           prev?.selectedFile && snap.changed_files.includes(prev.selectedFile)
             ? prev.selectedFile
@@ -309,7 +311,13 @@ export function ReviewWorkspace() {
             {activeTab === "draft" && runId && (
               <DraftReviewTabLazy runId={runId} onSubmitted={refreshSnapshot} />
             )}
-            {activeTab === "diagnostics" && runId && <DiagnosticsTab runId={runId} />}
+            {activeTab === "diagnostics" && runId && (
+              <DiagnosticsTab
+                runId={runId}
+                contextPackSummary={state?.contextPackSummary ?? null}
+                localChecksSummary={state?.localChecksSummary ?? null}
+              />
+            )}
           </main>
         </div>
 

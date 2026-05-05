@@ -43,6 +43,8 @@ index abc..def 100644
     baselineRunId: null,
     metrics: null,
     delta: null,
+    contextPackSummary: null,
+    localChecksSummary: null,
     ...overrides,
   };
 }

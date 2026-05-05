@@ -92,8 +92,8 @@ pub fn update_pull_request_diff(
 
 pub fn insert_review_run(conn: &Connection, run: &ReviewRun) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO review_runs (id, pr_id, status, started_at, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![run.id, run.pr_id, run.status, run.started_at, run.baseline_run_id, run.metrics_json, run.analysis_diff_hash, run.analysis_diff_text],
+        "INSERT INTO review_runs (id, pr_id, status, started_at, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![run.id, run.pr_id, run.status, run.started_at, run.baseline_run_id, run.metrics_json, run.analysis_diff_hash, run.analysis_diff_text, run.context_pack_json, run.local_checks_json],
     )?;
     Ok(())
 }
@@ -123,7 +123,7 @@ pub fn get_review_run(
     run_id: &str,
 ) -> Result<Option<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text FROM review_runs WHERE id = ?1",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![run_id], |row| {
         Ok(ReviewRun {
@@ -137,6 +137,8 @@ pub fn get_review_run(
             metrics_json: row.get(7)?,
             analysis_diff_hash: row.get(8)?,
             analysis_diff_text: row.get(9)?,
+            context_pack_json: row.get(10)?,
+            local_checks_json: row.get(11)?,
         })
     })?;
     match rows.next() {
@@ -147,7 +149,7 @@ pub fn get_review_run(
 
 pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(ReviewRun {
@@ -161,6 +163,8 @@ pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, r
             metrics_json: row.get(7)?,
             analysis_diff_hash: row.get(8)?,
             analysis_diff_text: row.get(9)?,
+            context_pack_json: row.get(10)?,
+            local_checks_json: row.get(11)?,
         })
     })?;
     rows.collect()
@@ -170,13 +174,14 @@ pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, r
 
 pub fn insert_finding(conn: &Connection, f: &Finding) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+        "INSERT INTO findings (id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint, source_kind, source_id, explain_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
         params![
             f.id, f.review_run_id, f.agent_type, f.file_path, f.line_start, f.line_end,
             f.severity, f.confidence, f.title, f.body, f.evidence, f.status,
             f.user_edited_body, f.user_severity_override, f.is_anchored, f.created_at,
             f.cluster_id, f.lane_id, f.provider_name, f.diff_side, f.diff_new_line,
-            f.fix_search, f.fix_replace, f.fix_explanation, f.fix_status, f.fingerprint
+            f.fix_search, f.fix_replace, f.fix_explanation, f.fix_status, f.fingerprint,
+            f.source_kind, f.source_id, f.explain_json
         ],
     )?;
     Ok(())
@@ -226,43 +231,52 @@ pub fn update_finding_anchor(
     Ok(())
 }
 
+fn row_to_finding(row: &rusqlite::Row) -> Result<Finding, rusqlite::Error> {
+    Ok(Finding {
+        id: row.get(0)?,
+        review_run_id: row.get(1)?,
+        agent_type: row.get(2)?,
+        file_path: row.get(3)?,
+        line_start: row.get(4)?,
+        line_end: row.get(5)?,
+        severity: row.get(6)?,
+        confidence: row.get(7)?,
+        title: row.get(8)?,
+        body: row.get(9)?,
+        evidence: row.get(10)?,
+        status: row.get(11)?,
+        user_edited_body: row.get(12)?,
+        user_severity_override: row.get(13)?,
+        is_anchored: row.get(14)?,
+        created_at: row.get(15)?,
+        cluster_id: row.get(16)?,
+        lane_id: row.get(17)?,
+        provider_name: row.get(18)?,
+        diff_side: row.get(19)?,
+        diff_new_line: row.get(20)?,
+        fix_search: row.get(21)?,
+        fix_replace: row.get(22)?,
+        fix_explanation: row.get(23)?,
+        fix_status: row.get(24)?,
+        fingerprint: row.get(25)?,
+        source_kind: row.get(26)?,
+        source_id: row.get(27)?,
+        explain_json: row.get(28)?,
+    })
+}
+
+const FINDING_COLUMNS: &str = "id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint, source_kind, source_id, explain_json";
+
 pub fn get_findings_for_run(
     conn: &Connection,
     review_run_id: &str,
 ) -> Result<Vec<Finding>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
-    )?;
-    let rows = stmt.query_map(params![review_run_id], |row| {
-        Ok(Finding {
-            id: row.get(0)?,
-            review_run_id: row.get(1)?,
-            agent_type: row.get(2)?,
-            file_path: row.get(3)?,
-            line_start: row.get(4)?,
-            line_end: row.get(5)?,
-            severity: row.get(6)?,
-            confidence: row.get(7)?,
-            title: row.get(8)?,
-            body: row.get(9)?,
-            evidence: row.get(10)?,
-            status: row.get(11)?,
-            user_edited_body: row.get(12)?,
-            user_severity_override: row.get(13)?,
-            is_anchored: row.get(14)?,
-            created_at: row.get(15)?,
-            cluster_id: row.get(16)?,
-            lane_id: row.get(17)?,
-            provider_name: row.get(18)?,
-            diff_side: row.get(19)?,
-            diff_new_line: row.get(20)?,
-            fix_search: row.get(21)?,
-            fix_replace: row.get(22)?,
-            fix_explanation: row.get(23)?,
-            fix_status: row.get(24)?,
-            fingerprint: row.get(25)?,
-        })
-    })?;
+    let sql = format!(
+        "SELECT {} FROM findings WHERE review_run_id = ?1 ORDER BY CASE severity WHEN 'blocker' THEN 1 WHEN 'critical' THEN 2 WHEN 'warning' THEN 3 WHEN 'info' THEN 4 WHEN 'nitpick' THEN 5 ELSE 6 END, confidence DESC",
+        FINDING_COLUMNS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![review_run_id], row_to_finding)?;
     rows.collect()
 }
 
@@ -270,39 +284,12 @@ pub fn get_finding_by_id(
     conn: &Connection,
     finding_id: &str,
 ) -> Result<Option<Finding>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, agent_type, file_path, line_start, line_end, severity, confidence, title, body, evidence, status, user_edited_body, user_severity_override, is_anchored, created_at, cluster_id, lane_id, provider_name, diff_side, diff_new_line, fix_search, fix_replace, fix_explanation, fix_status, fingerprint FROM findings WHERE id = ?1 LIMIT 1",
-    )?;
-    let mut rows = stmt.query_map(params![finding_id], |row| {
-        Ok(Finding {
-            id: row.get(0)?,
-            review_run_id: row.get(1)?,
-            agent_type: row.get(2)?,
-            file_path: row.get(3)?,
-            line_start: row.get(4)?,
-            line_end: row.get(5)?,
-            severity: row.get(6)?,
-            confidence: row.get(7)?,
-            title: row.get(8)?,
-            body: row.get(9)?,
-            evidence: row.get(10)?,
-            status: row.get(11)?,
-            user_edited_body: row.get(12)?,
-            user_severity_override: row.get(13)?,
-            is_anchored: row.get(14)?,
-            created_at: row.get(15)?,
-            cluster_id: row.get(16)?,
-            lane_id: row.get(17)?,
-            provider_name: row.get(18)?,
-            diff_side: row.get(19)?,
-            diff_new_line: row.get(20)?,
-            fix_search: row.get(21)?,
-            fix_replace: row.get(22)?,
-            fix_explanation: row.get(23)?,
-            fix_status: row.get(24)?,
-            fingerprint: row.get(25)?,
-        })
-    })?;
+    let sql = format!(
+        "SELECT {} FROM findings WHERE id = ?1 LIMIT 1",
+        FINDING_COLUMNS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query_map(params![finding_id], row_to_finding)?;
     match rows.next() {
         Some(result) => Ok(Some(result?)),
         None => Ok(None),
@@ -882,6 +869,44 @@ pub fn update_review_run_analysis_diff(
     Ok(())
 }
 
+// --- Review Run Artifacts (Phase 3) ---
+
+pub fn update_review_run_context_pack(
+    conn: &Connection,
+    run_id: &str,
+    context_pack_json: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE review_runs SET context_pack_json = ?1 WHERE id = ?2",
+        params![context_pack_json, run_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_review_run_local_checks(
+    conn: &Connection,
+    run_id: &str,
+    local_checks_json: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE review_runs SET local_checks_json = ?1 WHERE id = ?2",
+        params![local_checks_json, run_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_finding_explain(
+    conn: &Connection,
+    finding_id: &str,
+    explain_json: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE findings SET explain_json = ?1 WHERE id = ?2",
+        params![explain_json, finding_id],
+    )?;
+    Ok(())
+}
+
 // --- Finding Fix Status ---
 
 pub fn update_finding_fix_status(
@@ -1070,6 +1095,8 @@ mod tests {
             metrics_json: None,
             analysis_diff_hash: None,
             analysis_diff_text: None,
+            context_pack_json: None,
+            local_checks_json: None,
         };
         insert_review_run(&conn, &run).unwrap();
 
@@ -1129,6 +1156,8 @@ mod tests {
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )
         .unwrap();
@@ -1160,6 +1189,9 @@ mod tests {
             fix_explanation: None,
             fix_status: None,
             fingerprint: None,
+            source_kind: None,
+            source_id: None,
+            explain_json: None,
         };
         insert_finding(&conn, &finding).unwrap();
 
@@ -1230,6 +1262,8 @@ mod tests {
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )
         .unwrap();
@@ -1269,6 +1303,9 @@ mod tests {
                     fix_explanation: None,
                     fix_status: None,
                     fingerprint: None,
+                    source_kind: None,
+                    source_id: None,
+                    explain_json: None,
                 },
             )
             .unwrap();
@@ -1355,6 +1392,8 @@ mod tests {
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )
         .unwrap();
@@ -1452,6 +1491,8 @@ mod tests {
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )
         .unwrap();
@@ -1484,6 +1525,9 @@ mod tests {
                 fix_explanation: None,
                 fix_status: None,
                 fingerprint: None,
+                source_kind: None,
+                source_id: None,
+                explain_json: None,
             },
         )
         .unwrap();
@@ -1590,6 +1634,8 @@ mod tests {
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )
         .unwrap();
@@ -1651,6 +1697,8 @@ mod tests {
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )
         .unwrap();
@@ -1695,6 +1743,9 @@ mod tests {
                 fix_explanation: None,
                 fix_status: None,
                 fingerprint: None,
+                source_kind: None,
+                source_id: None,
+                explain_json: None,
             },
         )
         .unwrap();
@@ -1727,6 +1778,9 @@ mod tests {
                 fix_explanation: None,
                 fix_status: None,
                 fingerprint: None,
+                source_kind: None,
+                source_id: None,
+                explain_json: None,
             },
         )
         .unwrap();

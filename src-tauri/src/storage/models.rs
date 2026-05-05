@@ -39,6 +39,9 @@ pub struct ReviewRun {
     pub metrics_json: Option<String>,
     pub analysis_diff_hash: Option<String>,
     pub analysis_diff_text: Option<String>,
+    // V8 fields: hybrid analysis context/checks artifacts
+    pub context_pack_json: Option<String>,
+    pub local_checks_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +75,10 @@ pub struct Finding {
     pub fix_status: Option<String>,
     // V7 field: stable identity across reruns
     pub fingerprint: Option<String>,
+    // V8 fields: hybrid analysis provenance + explainability
+    pub source_kind: Option<String>,
+    pub source_id: Option<String>,
+    pub explain_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -9,10 +9,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cleaner::{self, CleanerConfig};
 use crate::errors::{AppError, ProviderError};
+use crate::explainability::{self, ExplainContext};
 use crate::orchestration::lane::{AgentLaneConfig, AgentLaneResult, LaneSnapshot, LaneStatus};
 use crate::providers::capabilities::ToolGovernanceTier;
 use crate::providers::governance;
-use crate::providers::traits::{ReviewInput, ReviewProvider};
+use crate::providers::traits::{RawFinding, ReviewInput, ReviewProvider};
 use crate::storage::db::AppDb;
 use crate::storage::event_log::EventLog;
 use crate::storage::models::AgentRun;
@@ -51,6 +52,11 @@ pub struct ReviewPipelineArgs {
     pub fallback_input: Option<ReviewInput>,
     pub fallback_provider: Option<Arc<dyn ReviewProvider>>,
     pub event_log: Option<Arc<EventLog>>,
+    /// Optional context/local-checks suffix appended to each lane's system prompt.
+    pub context_suffix: Option<String>,
+    /// Deterministic findings from local checks, merged before the cleaner stage.
+    #[allow(dead_code)]
+    pub extra_raw_findings: Vec<RawFinding>,
 }
 
 /// Per-provider concurrency limits so one provider's rate limits don't block others.
@@ -98,13 +104,26 @@ pub async fn run_review_pipeline(
         serde_json::json!({"lane_count": args.lanes.len()}),
     );
 
-    let (all_findings, diff_text) = if args.lanes.is_empty() {
+    // Apply context suffix to lane inputs if provided
+    let mut lanes = args.lanes;
+    let mut fallback_input = args.fallback_input;
+    if let Some(ref suffix) = args.context_suffix {
+        for lane in &mut lanes {
+            lane.input.system_prompt.push('\n');
+            lane.input.system_prompt.push_str(suffix);
+        }
+        if let Some(ref mut input) = fallback_input {
+            input.system_prompt.push('\n');
+            input.system_prompt.push_str(suffix);
+        }
+    }
+
+    let (all_findings, diff_text) = if lanes.is_empty() {
         // Single-lane backward-compat mode
         let provider = args
             .fallback_provider
             .ok_or_else(|| AppError::InvalidInput("No provider or lanes configured".into()))?;
-        let input = args
-            .fallback_input
+        let input = fallback_input
             .ok_or_else(|| AppError::InvalidInput("No input or lanes configured".into()))?;
         let diff = input.diff.clone();
         match provider
@@ -124,11 +143,11 @@ pub async fn run_review_pipeline(
         }
     } else {
         // Multi-lane mode
-        let diff = args.lanes[0].input.diff.clone();
+        let diff = lanes[0].input.diff.clone();
         let results = run_agent_lanes(
             db,
             &args.run_id,
-            args.lanes,
+            lanes,
             &args.cwd,
             args.cancel.clone(),
             provider_semaphores,
@@ -193,6 +212,18 @@ pub async fn run_review_pipeline(
         return Ok(());
     }
 
+    // Merge deterministic findings from local checks into the provider findings
+    let mut all_findings = all_findings;
+    if !args.extra_raw_findings.is_empty() {
+        log_event(
+            &event_log,
+            &args.run_id,
+            "extra_findings_merged",
+            serde_json::json!({"count": args.extra_raw_findings.len()}),
+        );
+        all_findings.extend(args.extra_raw_findings);
+    }
+
     // Stage 2: Cleaner pipeline
     update_status(db, &args.run_id, "cleaning", &mut emit)?;
     log_event(
@@ -244,13 +275,18 @@ pub async fn run_review_pipeline(
             }
         }
 
-        // Persist findings with cluster_id stamped
+        // Persist findings with cluster_id + explain_json stamped
         for finding in &result.surfaced {
             let mut f = finding.clone();
             if let Some(cid) = finding_cluster_map.get(&f.id) {
                 f.cluster_id = Some(cid.clone());
             }
             f.fingerprint = Some(crate::review_delta::compute_finding_fingerprint(&f));
+
+            let ctx = ExplainContext::default();
+            let explanation = explainability::build_explanation(&f, &ctx);
+            f.explain_json = explainability::to_json(&explanation);
+
             queries::insert_finding(&conn, &f)?;
         }
     }
@@ -798,6 +834,8 @@ mod tests {
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )
         .unwrap();
@@ -852,6 +890,8 @@ mod tests {
                 fallback_input: Some(test_input()),
                 fallback_provider: Some(provider),
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await
@@ -894,6 +934,8 @@ mod tests {
                 fallback_input: Some(test_input()),
                 fallback_provider: Some(provider),
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await
@@ -962,6 +1004,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await
@@ -1038,6 +1082,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await
@@ -1092,6 +1138,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await;
@@ -1138,6 +1186,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await;
@@ -1186,6 +1236,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await;
@@ -1243,6 +1295,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await
@@ -1290,6 +1344,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await
@@ -1333,6 +1389,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await
@@ -1383,6 +1441,8 @@ mod tests {
                 fallback_input: None,
                 fallback_provider: None,
                 event_log: None,
+                context_suffix: None,
+                extra_raw_findings: vec![],
             },
         )
         .await;

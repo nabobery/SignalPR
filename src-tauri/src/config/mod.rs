@@ -38,6 +38,8 @@ pub struct ResolvedConfig {
     pub lane_timeout: Duration,
     pub lanes: Vec<String>,
     pub custom_agents: Vec<AgentDefinition>,
+    pub context_pack: crate::context_pack::ContextPackConfig,
+    pub local_checks: LocalChecksRepoConfig,
 }
 
 const CUSTOM_AGENT_PREFIX: &str = "custom_agent_";
@@ -111,6 +113,8 @@ pub fn resolve_config(
                     lane_timeout_secs: repo.lane_timeout_secs,
                     preferred_provider: repo.preferred_provider.clone(),
                     custom_agents: repo.custom_agents.clone(),
+                    context_pack: repo.context_pack.clone(),
+                    local_checks: repo.local_checks.clone(),
                 };
                 resolved_repo = Some(merge::deep_merge_configs(parent, overlay));
                 resolved_repo.as_ref()
@@ -201,6 +205,14 @@ pub fn resolve_config(
     let registry = AgentRegistry::load_from_config(&merged_agents);
     let custom_agents = registry.definitions().to_vec();
 
+    let context_pack_config = repo
+        .and_then(|r| r.context_pack.clone())
+        .unwrap_or_default();
+
+    let local_checks_config = repo
+        .and_then(|r| r.local_checks.clone())
+        .unwrap_or_default();
+
     ResolvedConfig {
         cleaner: CleanerConfig {
             similarity_threshold,
@@ -212,6 +224,8 @@ pub fn resolve_config(
         lane_timeout: Duration::from_secs(lane_timeout_secs),
         lanes,
         custom_agents,
+        context_pack: context_pack_config,
+        local_checks: local_checks_config,
     }
 }
 
@@ -379,6 +393,19 @@ pub struct RepoConfig {
     pub preferred_provider: Option<String>,
     #[serde(default)]
     pub custom_agents: Option<Vec<AgentDefinition>>,
+    #[serde(default)]
+    pub context_pack: Option<crate::context_pack::ContextPackConfig>,
+    #[serde(default)]
+    pub local_checks: Option<LocalChecksRepoConfig>,
+}
+
+/// Repo-level configuration for local deterministic checks.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LocalChecksRepoConfig {
+    pub enabled: Option<bool>,
+    pub oxlint: Option<bool>,
+    pub clippy: Option<bool>,
 }
 
 /// Load `.signalpr.yml` from the workspace root. Returns None if file

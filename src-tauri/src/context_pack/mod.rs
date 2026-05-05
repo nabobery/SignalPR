@@ -1,0 +1,943 @@
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+const DEFAULT_MAX_BYTES_TOTAL: usize = 16_384; // 16KB
+const DEFAULT_MAX_BYTES_PER_ITEM: usize = 4_096; // 4KB
+
+const STANDARD_DOC_NAMES: &[&str] = &[
+    "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "docs/ARCHITECTURE.md",
+    "docs/SECURITY.md",
+];
+
+/// GitHub searches in this order: .github/, root, docs/
+const CODEOWNERS_LOCATIONS: &[&str] = &[".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+
+/// Truncate a UTF-8 string to at most `max_bytes` bytes on a valid char boundary.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Return true if `child` is safely inside `root` (no path-traversal escape).
+fn is_inside_workspace(root: &Path, child: &Path) -> bool {
+    match (root.canonicalize(), child.canonicalize()) {
+        (Ok(r), Ok(c)) => c.starts_with(&r),
+        _ => {
+            // Fall back to component check when canonicalize fails (file doesn't exist yet)
+            !child
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+                && !child.is_absolute()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextPackConfig {
+    #[serde(default = "default_max_bytes_total")]
+    pub max_bytes_total: usize,
+    #[serde(default = "default_max_bytes_per_item")]
+    pub max_bytes_per_item: usize,
+    #[serde(default = "default_true")]
+    pub include_docs: bool,
+    #[serde(default = "default_true")]
+    pub include_codeowners: bool,
+    #[serde(default = "default_true")]
+    pub include_preferences: bool,
+    #[serde(default)]
+    pub include_issue_context: bool,
+    #[serde(default)]
+    pub additional_docs: Vec<String>,
+}
+
+fn default_max_bytes_total() -> usize {
+    DEFAULT_MAX_BYTES_TOTAL
+}
+fn default_max_bytes_per_item() -> usize {
+    DEFAULT_MAX_BYTES_PER_ITEM
+}
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ContextPackConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes_total: DEFAULT_MAX_BYTES_TOTAL,
+            max_bytes_per_item: DEFAULT_MAX_BYTES_PER_ITEM,
+            include_docs: true,
+            include_codeowners: true,
+            include_preferences: true,
+            include_issue_context: false,
+            additional_docs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextItem {
+    pub kind: String,
+    pub label: String,
+    pub source: String,
+    pub bytes: usize,
+    pub included: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub omit_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextPack {
+    pub total_bytes: usize,
+    pub item_count: usize,
+    pub items: Vec<ContextItem>,
+    pub prompt_suffix: String,
+}
+
+pub struct ContextPackBuilder<'a> {
+    config: &'a ContextPackConfig,
+    workspace_path: &'a Path,
+    changed_files: &'a [String],
+    preference_text: Option<String>,
+    issue_refs: Vec<IssueRef>,
+    items: Vec<ContextItem>,
+    used_bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct IssueRef {
+    pub number: String,
+    pub title: String,
+    pub body_excerpt: String,
+}
+
+impl<'a> ContextPackBuilder<'a> {
+    pub fn new(
+        config: &'a ContextPackConfig,
+        workspace_path: &'a Path,
+        changed_files: &'a [String],
+    ) -> Self {
+        Self {
+            config,
+            workspace_path,
+            changed_files,
+            preference_text: None,
+            issue_refs: Vec::new(),
+            items: Vec::new(),
+            used_bytes: 0,
+        }
+    }
+
+    pub fn with_preferences(mut self, preference_text: Option<String>) -> Self {
+        self.preference_text = preference_text;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_issues(mut self, issues: Vec<IssueRef>) -> Self {
+        self.issue_refs = issues;
+        self
+    }
+
+    pub fn build(mut self) -> ContextPack {
+        if self.config.include_docs {
+            self.add_docs();
+        }
+        if self.config.include_codeowners {
+            self.add_codeowners();
+        }
+        if self.config.include_preferences {
+            self.add_preferences();
+        }
+        if self.config.include_issue_context {
+            self.add_issues();
+        }
+
+        let prompt_suffix = self.build_prompt_suffix();
+        let item_count = self.items.iter().filter(|i| i.included).count();
+
+        ContextPack {
+            total_bytes: self.used_bytes,
+            item_count,
+            items: self.items,
+            prompt_suffix,
+        }
+    }
+
+    fn try_add_item(&mut self, kind: &str, label: &str, source: &str, content: &str) {
+        let bytes = content.len();
+
+        if bytes == 0 {
+            self.items.push(ContextItem {
+                kind: kind.into(),
+                label: label.into(),
+                source: source.into(),
+                bytes: 0,
+                included: false,
+                omit_reason: Some("empty".into()),
+                content: None,
+            });
+            return;
+        }
+
+        let truncated = truncate_utf8(content, self.config.max_bytes_per_item);
+        let actual_bytes = truncated.len();
+
+        if self.used_bytes + actual_bytes > self.config.max_bytes_total {
+            self.items.push(ContextItem {
+                kind: kind.into(),
+                label: label.into(),
+                source: source.into(),
+                bytes,
+                included: false,
+                omit_reason: Some("budget_exceeded".into()),
+                content: None,
+            });
+            return;
+        }
+
+        self.used_bytes += actual_bytes;
+        self.items.push(ContextItem {
+            kind: kind.into(),
+            label: label.into(),
+            source: source.into(),
+            bytes: actual_bytes,
+            included: true,
+            omit_reason: None,
+            content: Some(truncated.to_string()),
+        });
+    }
+
+    fn add_docs(&mut self) {
+        let mut doc_paths: Vec<String> = STANDARD_DOC_NAMES.iter().map(|s| s.to_string()).collect();
+        doc_paths.extend(self.config.additional_docs.iter().cloned());
+
+        for doc_name in &doc_paths {
+            let candidate = Path::new(doc_name);
+            if candidate.is_absolute()
+                || candidate
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                self.items.push(ContextItem {
+                    kind: "doc".into(),
+                    label: doc_name.clone(),
+                    source: doc_name.clone(),
+                    bytes: 0,
+                    included: false,
+                    omit_reason: Some("outside_workspace".into()),
+                    content: None,
+                });
+                continue;
+            }
+
+            let full_path = self.workspace_path.join(doc_name);
+            if full_path.exists() && !is_inside_workspace(self.workspace_path, &full_path) {
+                self.items.push(ContextItem {
+                    kind: "doc".into(),
+                    label: doc_name.clone(),
+                    source: full_path.display().to_string(),
+                    bytes: 0,
+                    included: false,
+                    omit_reason: Some("outside_workspace".into()),
+                    content: None,
+                });
+                continue;
+            }
+
+            match std::fs::read_to_string(&full_path) {
+                Ok(content) => {
+                    self.try_add_item("doc", doc_name, &full_path.display().to_string(), &content);
+                }
+                Err(_) => {
+                    self.items.push(ContextItem {
+                        kind: "doc".into(),
+                        label: doc_name.clone(),
+                        source: full_path.display().to_string(),
+                        bytes: 0,
+                        included: false,
+                        omit_reason: Some("not_found".into()),
+                        content: None,
+                    });
+                }
+            }
+        }
+    }
+
+    fn add_codeowners(&mut self) {
+        let mut owners_content: Option<String> = None;
+        let mut found_path = String::new();
+
+        for location in CODEOWNERS_LOCATIONS {
+            let full_path = self.workspace_path.join(location);
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                found_path = full_path.display().to_string();
+                owners_content = Some(content);
+                break;
+            }
+        }
+
+        let Some(raw) = owners_content else {
+            self.items.push(ContextItem {
+                kind: "codeowners".into(),
+                label: "CODEOWNERS".into(),
+                source: "not found".into(),
+                bytes: 0,
+                included: false,
+                omit_reason: Some("not_found".into()),
+                content: None,
+            });
+            return;
+        };
+
+        let ownership = resolve_codeowners(&raw, self.changed_files);
+        if ownership.is_empty() {
+            self.items.push(ContextItem {
+                kind: "codeowners".into(),
+                label: "CODEOWNERS".into(),
+                source: found_path,
+                bytes: 0,
+                included: false,
+                omit_reason: Some("no_matches".into()),
+                content: None,
+            });
+            return;
+        }
+
+        let mut summary = String::from("File ownership (changed files):\n");
+        for (file, owners) in &ownership {
+            summary.push_str(&format!("  {} → {}\n", file, owners.join(", ")));
+        }
+
+        self.try_add_item("codeowners", "CODEOWNERS", &found_path, &summary);
+    }
+
+    fn add_preferences(&mut self) {
+        let text = self.preference_text.clone();
+        if let Some(text) = text {
+            if !text.trim().is_empty() {
+                self.try_add_item(
+                    "preferences",
+                    "Reviewer preferences",
+                    "preference_summaries",
+                    &text,
+                );
+            }
+        }
+    }
+
+    fn add_issues(&mut self) {
+        let issues: Vec<IssueRef> = self.issue_refs.clone();
+        for issue in &issues {
+            let content = format!("#{}: {}\n{}", issue.number, issue.title, issue.body_excerpt);
+            self.try_add_item(
+                "issue",
+                &format!("Issue #{}", issue.number),
+                &format!("github:issue:{}", issue.number),
+                &content,
+            );
+        }
+    }
+
+    fn build_prompt_suffix(&self) -> String {
+        let included: Vec<&ContextItem> = self.items.iter().filter(|i| i.included).collect();
+        if included.is_empty() {
+            return String::new();
+        }
+
+        let mut parts = Vec::new();
+        parts.push("--- Context Pack ---".to_string());
+
+        for item in &included {
+            if let Some(ref content) = item.content {
+                parts.push(format!("[{}] {}:", item.kind, item.label));
+                parts.push(content.clone());
+                parts.push(String::new());
+            }
+        }
+
+        parts.push("--- End Context Pack ---".to_string());
+        parts.join("\n")
+    }
+}
+
+/// Simple CODEOWNERS pattern matching (last-match-wins per GitHub spec).
+/// Patterns are glob-like: `*.rs` matches all .rs files, `/src/` matches the src directory.
+pub fn resolve_codeowners(raw: &str, changed_files: &[String]) -> Vec<(String, Vec<String>)> {
+    let rules = parse_codeowners(raw);
+    let mut result = Vec::new();
+
+    for file in changed_files {
+        if let Some(owners) = match_file(&rules, file) {
+            if !owners.is_empty() {
+                result.push((file.clone(), owners));
+            }
+        }
+    }
+
+    result
+}
+
+#[derive(Debug)]
+struct CodeownersRule {
+    pattern: String,
+    owners: Vec<String>,
+}
+
+fn parse_codeowners(raw: &str) -> Vec<CodeownersRule> {
+    raw.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        })
+        .filter_map(|line| {
+            // Strip inline comments: `pattern @owner # comment`
+            let effective = if let Some(idx) = line.find(" #") {
+                &line[..idx]
+            } else {
+                line
+            };
+            let parts: Vec<&str> = effective.split_whitespace().collect();
+            if parts.len() < 2 {
+                return None;
+            }
+            Some(CodeownersRule {
+                pattern: parts[0].to_string(),
+                owners: parts[1..].iter().map(|s| s.to_string()).collect(),
+            })
+        })
+        .collect()
+}
+
+/// Last-match-wins pattern matching per GitHub CODEOWNERS spec.
+fn match_file(rules: &[CodeownersRule], file: &str) -> Option<Vec<String>> {
+    let mut matched_owners: Option<Vec<String>> = None;
+
+    for rule in rules {
+        if pattern_matches(&rule.pattern, file) {
+            matched_owners = Some(rule.owners.clone());
+        }
+    }
+
+    matched_owners
+}
+
+fn pattern_matches(pattern: &str, file: &str) -> bool {
+    let pattern = pattern.trim_start_matches('/');
+
+    if pattern == "*" {
+        return true;
+    }
+
+    // Exact path match
+    if file == pattern || file.ends_with(&format!("/{}", pattern)) {
+        return true;
+    }
+
+    // Directory match: pattern ends with /
+    if pattern.ends_with('/') {
+        let dir = pattern.trim_end_matches('/');
+        return file.starts_with(dir) || file.contains(&format!("/{}/", dir));
+    }
+
+    // Extension match: pattern starts with *
+    if let Some(ext) = pattern.strip_prefix('*') {
+        return file.ends_with(ext);
+    }
+
+    // Prefix match: pattern ends with /*
+    if let Some(dir) = pattern.strip_suffix("/*") {
+        return file.starts_with(&format!("{}/", dir));
+    }
+
+    // Directory-recursive match: pattern contains **
+    if pattern.contains("**") {
+        let parts: Vec<&str> = pattern.split("**").collect();
+        if parts.len() == 2 {
+            let prefix = parts[0].trim_end_matches('/');
+            let suffix = parts[1].trim_start_matches('/');
+            if prefix.is_empty() {
+                return suffix.is_empty() || file.ends_with(suffix);
+            }
+            if !file.starts_with(prefix) {
+                return false;
+            }
+            return suffix.is_empty() || file.ends_with(suffix);
+        }
+    }
+
+    // Simple prefix match for directory patterns without trailing slash
+    if !pattern.contains('*') && !pattern.contains('.') {
+        return file.starts_with(&format!("{}/", pattern));
+    }
+
+    false
+}
+
+/// Extract issue references (`#123`, `owner/repo#456`) from a PR body.
+/// Returns strings like `"123"` or `"owner/repo#456"`.
+#[allow(dead_code)]
+pub fn extract_issue_refs(body: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let mut chars = body.chars().peekable();
+    let mut pos = 0;
+
+    while let Some(ch) = chars.next() {
+        if ch == '#' {
+            let hash_pos = pos;
+            pos += ch.len_utf8();
+            let mut num = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_digit() {
+                    num.push(next);
+                    pos += next.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if !num.is_empty() {
+                let ref_str = build_issue_ref(body, hash_pos, &num);
+                if !refs.contains(&ref_str) {
+                    refs.push(ref_str);
+                }
+            }
+        } else {
+            pos += ch.len_utf8();
+        }
+    }
+
+    refs
+}
+
+/// Try to expand a bare `#num` into `owner/repo#num` by looking at the preceding text.
+#[allow(dead_code)]
+fn build_issue_ref(body: &str, hash_pos: usize, num: &str) -> String {
+    let preceding = &body[..hash_pos];
+    if let Some(slash_pos) = preceding.rfind('/') {
+        let maybe_repo = &preceding[slash_pos + 1..];
+        if !maybe_repo.is_empty()
+            && maybe_repo
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            // Look for owner before the slash
+            let before_slash = &preceding[..slash_pos];
+            let owner_start = before_slash
+                .rfind(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let maybe_owner = &before_slash[owner_start..];
+            if !maybe_owner.is_empty()
+                && maybe_owner
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            {
+                return format!("{}/{}#{}", maybe_owner, maybe_repo, num);
+            }
+        }
+    }
+    num.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_default_config() {
+        let config = ContextPackConfig::default();
+        assert_eq!(config.max_bytes_total, 16_384);
+        assert_eq!(config.max_bytes_per_item, 4_096);
+        assert!(config.include_docs);
+        assert!(config.include_codeowners);
+        assert!(config.include_preferences);
+        assert!(!config.include_issue_context);
+    }
+
+    #[test]
+    fn test_empty_workspace_builds_empty_pack() {
+        let dir = tempdir().unwrap();
+        let config = ContextPackConfig::default();
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        assert_eq!(pack.total_bytes, 0);
+        assert_eq!(pack.item_count, 0);
+        assert!(pack.prompt_suffix.is_empty());
+        assert!(!pack.items.is_empty()); // manifest still lists not_found items
+    }
+
+    #[test]
+    fn test_docs_included_when_present() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "# My Project\nSome docs").unwrap();
+
+        let config = ContextPackConfig {
+            include_codeowners: false,
+            include_preferences: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        let readme = pack.items.iter().find(|i| i.label == "README.md").unwrap();
+        assert!(readme.included);
+        assert!(readme.bytes > 0);
+        assert!(pack.prompt_suffix.contains("My Project"));
+    }
+
+    #[test]
+    fn test_per_item_truncation() {
+        let dir = tempdir().unwrap();
+        let big = "x".repeat(10_000);
+        std::fs::write(dir.path().join("README.md"), &big).unwrap();
+
+        let config = ContextPackConfig {
+            max_bytes_per_item: 100,
+            include_codeowners: false,
+            include_preferences: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        let readme = pack.items.iter().find(|i| i.label == "README.md").unwrap();
+        assert!(readme.included);
+        assert_eq!(readme.bytes, 100);
+    }
+
+    #[test]
+    fn test_total_budget_enforced() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "a".repeat(200)).unwrap();
+        std::fs::write(dir.path().join("CONTRIBUTING.md"), "b".repeat(200)).unwrap();
+
+        let config = ContextPackConfig {
+            max_bytes_total: 300,
+            max_bytes_per_item: 500,
+            include_codeowners: false,
+            include_preferences: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        let included_count = pack.items.iter().filter(|i| i.included).count();
+        assert_eq!(included_count, 1);
+        let omitted = pack
+            .items
+            .iter()
+            .find(|i| i.label == "CONTRIBUTING.md")
+            .unwrap();
+        assert!(!omitted.included);
+        assert_eq!(omitted.omit_reason.as_deref(), Some("budget_exceeded"));
+    }
+
+    #[test]
+    fn test_codeowners_resolved_for_changed_files() {
+        let dir = tempdir().unwrap();
+        let codeowners = "*.rs @rust-team\nsrc/auth/ @security-team\n";
+        std::fs::create_dir_all(dir.path().join(".github")).unwrap();
+        std::fs::write(dir.path().join(".github/CODEOWNERS"), codeowners).unwrap();
+
+        let changed = vec![
+            "src/auth/login.rs".to_string(),
+            "docs/readme.md".to_string(),
+        ];
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_preferences: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &changed).build();
+
+        let co = pack.items.iter().find(|i| i.kind == "codeowners").unwrap();
+        assert!(co.included);
+        assert!(co.content.as_ref().unwrap().contains("@security-team"));
+    }
+
+    #[test]
+    fn test_codeowners_last_match_wins() {
+        let raw = "* @default\n*.rs @rust-team\nsrc/ @src-team\n";
+        let files = vec!["src/main.rs".to_string()];
+        let result = resolve_codeowners(raw, &files);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, vec!["@src-team".to_string()]);
+    }
+
+    #[test]
+    fn test_codeowners_no_match() {
+        let raw = "src/ @team\n";
+        let files = vec!["docs/readme.md".to_string()];
+        let result = resolve_codeowners(raw, &files);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_codeowners_wildcard_match() {
+        let raw = "* @everyone\n";
+        let files = vec!["anything.txt".to_string()];
+        let result = resolve_codeowners(raw, &files);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, vec!["@everyone"]);
+    }
+
+    #[test]
+    fn test_codeowners_extension_match() {
+        let raw = "*.rs @rust-team\n*.ts @ts-team\n";
+        let files = vec![
+            "src/main.rs".to_string(),
+            "src/app.ts".to_string(),
+            "docs/guide.md".to_string(),
+        ];
+        let result = resolve_codeowners(raw, &files);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_preferences_included() {
+        let dir = tempdir().unwrap();
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_codeowners: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[])
+            .with_preferences(Some("security/auth: accept_rate=0.8 (10 decisions)".into()))
+            .build();
+
+        let pref = pack.items.iter().find(|i| i.kind == "preferences").unwrap();
+        assert!(pref.included);
+        assert!(pack.prompt_suffix.contains("accept_rate"));
+    }
+
+    #[test]
+    fn test_issue_refs_included() {
+        let dir = tempdir().unwrap();
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_codeowners: false,
+            include_preferences: false,
+            include_issue_context: true,
+            ..Default::default()
+        };
+        let issues = vec![IssueRef {
+            number: "42".into(),
+            title: "Fix auth bypass".into(),
+            body_excerpt: "Users can bypass login".into(),
+        }];
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[])
+            .with_issues(issues)
+            .build();
+
+        let issue = pack.items.iter().find(|i| i.kind == "issue").unwrap();
+        assert!(issue.included);
+        assert!(pack.prompt_suffix.contains("Fix auth bypass"));
+    }
+
+    #[test]
+    fn test_extract_issue_refs() {
+        let body = "Fixes #123 and related to #456. See owner/repo#789.";
+        let refs = extract_issue_refs(body);
+        assert!(refs.contains(&"123".to_string()));
+        assert!(refs.contains(&"456".to_string()));
+        assert!(refs.contains(&"owner/repo#789".to_string()));
+    }
+
+    #[test]
+    fn test_extract_issue_refs_no_refs() {
+        let refs = extract_issue_refs("No issues here.");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_issue_refs_dedup() {
+        let body = "#123 is the same as #123";
+        let refs = extract_issue_refs(body);
+        assert_eq!(refs.len(), 1);
+    }
+
+    #[test]
+    fn test_prompt_suffix_format() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "Hello").unwrap();
+
+        let config = ContextPackConfig {
+            include_codeowners: false,
+            include_preferences: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        assert!(pack.prompt_suffix.starts_with("--- Context Pack ---"));
+        assert!(pack.prompt_suffix.ends_with("--- End Context Pack ---"));
+    }
+
+    #[test]
+    fn test_manifest_lists_all_items() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "content").unwrap();
+
+        let config = ContextPackConfig::default();
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        let found = pack
+            .items
+            .iter()
+            .any(|i| i.label == "README.md" && i.included);
+        let missing = pack
+            .items
+            .iter()
+            .any(|i| i.label == "CONTRIBUTING.md" && !i.included);
+        assert!(found);
+        assert!(missing);
+    }
+
+    #[test]
+    fn test_parse_codeowners_skips_comments_and_blanks() {
+        let raw = "\n# comment\n\n*.rs @team\n";
+        let rules = parse_codeowners(raw);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].pattern, "*.rs");
+    }
+
+    #[test]
+    fn test_additional_docs() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/API.md"), "API docs").unwrap();
+
+        let config = ContextPackConfig {
+            include_codeowners: false,
+            include_preferences: false,
+            additional_docs: vec!["docs/API.md".into()],
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        let api = pack
+            .items
+            .iter()
+            .find(|i| i.label == "docs/API.md")
+            .unwrap();
+        assert!(api.included);
+    }
+
+    // ---- Regression tests for Phase 3 fixes ----
+
+    #[test]
+    fn test_utf8_truncation_does_not_panic() {
+        // 3-byte UTF-8 char: '€' = 0xE2 0x82 0xAC
+        let content = "€€€€€€€€€€"; // 10 euro signs = 30 bytes
+        let result = truncate_utf8(content, 7);
+        assert!(result.len() <= 7);
+        assert!(result.is_char_boundary(result.len()));
+        // 7 bytes => 2 full '€' chars (6 bytes)
+        assert_eq!(result, "€€");
+    }
+
+    #[test]
+    fn test_truncation_on_ascii() {
+        let content = "hello world";
+        assert_eq!(truncate_utf8(content, 5), "hello");
+        assert_eq!(truncate_utf8(content, 100), "hello world");
+    }
+
+    #[test]
+    fn test_path_traversal_rejected() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("secret.txt"), "do not read").unwrap();
+
+        let config = ContextPackConfig {
+            include_codeowners: false,
+            include_preferences: false,
+            include_docs: true,
+            additional_docs: vec!["../../secret.txt".into(), "/etc/passwd".into()],
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        let traversal = pack
+            .items
+            .iter()
+            .find(|i| i.label == "../../secret.txt")
+            .unwrap();
+        assert!(!traversal.included);
+        assert_eq!(traversal.omit_reason.as_deref(), Some("outside_workspace"));
+
+        let absolute = pack
+            .items
+            .iter()
+            .find(|i| i.label == "/etc/passwd")
+            .unwrap();
+        assert!(!absolute.included);
+        assert_eq!(absolute.omit_reason.as_deref(), Some("outside_workspace"));
+    }
+
+    #[test]
+    fn test_codeowners_github_dir_wins() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".github")).unwrap();
+        std::fs::write(dir.path().join(".github/CODEOWNERS"), "* @github-team\n").unwrap();
+        std::fs::write(dir.path().join("CODEOWNERS"), "* @root-team\n").unwrap();
+
+        let files = vec!["any.txt".to_string()];
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_preferences: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &files).build();
+
+        let co = pack.items.iter().find(|i| i.kind == "codeowners").unwrap();
+        assert!(co.included);
+        assert!(co.content.as_ref().unwrap().contains("@github-team"));
+        assert!(!co.content.as_ref().unwrap().contains("@root-team"));
+    }
+
+    #[test]
+    fn test_parse_codeowners_inline_comments() {
+        let raw = "*.rs @rust-team # Rust files only\n";
+        let rules = parse_codeowners(raw);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].pattern, "*.rs");
+        assert_eq!(rules[0].owners, vec!["@rust-team"]);
+    }
+
+    #[test]
+    fn test_extract_cross_repo_ref() {
+        let body = "See octocat/hello-world#42 for details";
+        let refs = extract_issue_refs(body);
+        assert!(refs.contains(&"octocat/hello-world#42".to_string()));
+    }
+
+    #[test]
+    fn test_multibyte_truncation_in_builder() {
+        let dir = tempdir().unwrap();
+        // 4-byte emoji repeated
+        let content = "🎉".repeat(100); // 400 bytes
+        std::fs::write(dir.path().join("README.md"), &content).unwrap();
+
+        let config = ContextPackConfig {
+            max_bytes_per_item: 10,
+            include_codeowners: false,
+            include_preferences: false,
+            ..Default::default()
+        };
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[]).build();
+
+        let readme = pack.items.iter().find(|i| i.label == "README.md").unwrap();
+        assert!(readme.included);
+        // 10 bytes => 2 full 🎉 (8 bytes)
+        assert_eq!(readme.bytes, 8);
+    }
+}

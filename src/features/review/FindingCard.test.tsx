@@ -42,6 +42,9 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     fix_explanation: null,
     fix_status: null,
     fingerprint: null,
+    source_kind: null,
+    source_id: null,
+    explain_json: null,
     ...overrides,
   };
 }
@@ -254,6 +257,76 @@ describe("FindingCard", () => {
     await user.click(screen.getByText("Defer"));
     expect(recordDecision).toHaveBeenCalledWith("f-1", "skip");
     expect(onDecision).toHaveBeenCalledWith("f-1", "skip");
+  });
+
+  it("renders local check provenance chip when source_kind is local_check", () => {
+    render(
+      <FindingCard
+        finding={makeFinding({
+          source_kind: "local_check",
+          source_id: "no-unused-vars",
+          lane_id: "security",
+        })}
+        onUpdated={onUpdated}
+      />,
+    );
+    expect(screen.getByText("local")).toBeInTheDocument();
+  });
+
+  it("does not render provenance chip when source_kind is ai_provider", () => {
+    render(
+      <FindingCard
+        finding={makeFinding({
+          source_kind: "ai_provider",
+          lane_id: "security",
+        })}
+        onUpdated={onUpdated}
+      />,
+    );
+    expect(screen.queryByText("ai_provider")).not.toBeInTheDocument();
+  });
+
+  it("renders Why? button and explanation panel when explain_json is set", async () => {
+    const user = userEvent.setup();
+    const explanation = {
+      origin: {
+        source_kind: "ai_provider",
+        source_id: null,
+        lane_id: "security",
+        provider_name: "codex",
+      },
+      ranking: { confidence_raw: 0.85, severity_raw: "warning" },
+    };
+    render(
+      <FindingCard
+        finding={makeFinding({ explain_json: JSON.stringify(explanation) })}
+        onUpdated={onUpdated}
+      />,
+    );
+
+    expect(screen.getByText("Why?")).toBeInTheDocument();
+    await user.click(screen.getByText("Why?"));
+
+    expect(screen.getByText("Why this finding was surfaced")).toBeInTheDocument();
+    expect(screen.getByText(/Source: ai_provider/)).toBeInTheDocument();
+    expect(screen.getByText(/Lane: security/i)).toBeInTheDocument();
+    expect(screen.getByText(/Provider: codex/)).toBeInTheDocument();
+    expect(screen.getByText(/Confidence: 85%/)).toBeInTheDocument();
+  });
+
+  it("does not render Why? button when explain_json is null", () => {
+    render(<FindingCard finding={makeFinding()} onUpdated={onUpdated} />);
+    expect(screen.queryByText("Why?")).not.toBeInTheDocument();
+  });
+
+  it("tolerates malformed explain_json without crashing", () => {
+    render(
+      <FindingCard
+        finding={makeFinding({ explain_json: "not valid json" })}
+        onUpdated={onUpdated}
+      />,
+    );
+    expect(screen.queryByText("Why?")).not.toBeInTheDocument();
   });
 
   it("hides Accept/Defer when sessionDecision is set", () => {

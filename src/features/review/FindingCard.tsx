@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   AlertTriangle,
   ShieldAlert,
@@ -11,6 +11,7 @@ import {
   Wrench,
   ThumbsUp,
   Clock,
+  HelpCircle,
 } from "lucide-react";
 import { updateFinding, recordDecision } from "../../lib/ipc";
 import type { Finding } from "../../lib/types";
@@ -51,6 +52,16 @@ export function FindingCard({
   }, [focused]);
   const [showFix, setShowFix] = useState(false);
   const [showEvidence, setShowEvidence] = useState(false);
+  const [showWhy, setShowWhy] = useState(false);
+
+  const explanation = useMemo(() => {
+    if (!finding.explain_json) return null;
+    try {
+      return JSON.parse(finding.explain_json);
+    } catch {
+      return null;
+    }
+  }, [finding.explain_json]);
 
   const hasPendingFix =
     finding.fix_status === "pending" && finding.fix_search !== null && finding.fix_replace !== null;
@@ -176,8 +187,13 @@ export function FindingCard({
           </div>
 
           {/* Provenance chips */}
-          {(finding.lane_id || finding.provider_name) && (
+          {(finding.lane_id || finding.provider_name || finding.source_kind) && (
             <div className="flex gap-1.5 mb-1 flex-wrap">
+              {finding.source_kind && finding.source_kind !== "ai_provider" && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-900/30 text-indigo-400">
+                  {finding.source_kind === "local_check" ? "local" : finding.source_kind}
+                </span>
+              )}
               {finding.lane_id && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 capitalize">
                   {finding.lane_id}
@@ -292,6 +308,14 @@ export function FindingCard({
                   {showEvidence ? "Hide evidence" : "Evidence"}
                 </button>
               )}
+              {explanation && (
+                <button
+                  onClick={() => setShowWhy((v) => !v)}
+                  className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
+                >
+                  <HelpCircle className="w-3 h-3" /> {showWhy ? "Hide why" : "Why?"}
+                </button>
+              )}
             </div>
           )}
 
@@ -300,6 +324,62 @@ export function FindingCard({
               <pre className="text-xs text-zinc-400 whitespace-pre-wrap break-words">
                 {finding.evidence}
               </pre>
+            </div>
+          )}
+
+          {showWhy && explanation && (
+            <div className="mt-2 p-2 rounded bg-zinc-800/50 border border-zinc-700 space-y-1.5">
+              <div className="text-xs text-zinc-500 font-medium uppercase tracking-wider">
+                Why this finding was surfaced
+              </div>
+              <div className="flex gap-1.5 flex-wrap text-xs">
+                <span className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300">
+                  Source: {explanation.origin?.source_kind ?? "unknown"}
+                </span>
+                {explanation.origin?.lane_id && (
+                  <span className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 capitalize">
+                    Lane: {explanation.origin.lane_id}
+                  </span>
+                )}
+                {explanation.origin?.provider_name && (
+                  <span className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300">
+                    Provider: {explanation.origin.provider_name}
+                  </span>
+                )}
+              </div>
+              {explanation.ranking && (
+                <div className="text-xs text-zinc-400">
+                  Confidence: {Math.round(explanation.ranking.confidence_raw * 100)}%
+                  {explanation.ranking.suppressed_reason && (
+                    <span className="ml-2 text-yellow-500">
+                      Suppressed: {explanation.ranking.suppressed_reason}
+                    </span>
+                  )}
+                </div>
+              )}
+              {explanation.preferences && (
+                <div className="text-xs text-zinc-400">
+                  {explanation.preferences.category_tag && (
+                    <span>Category: {explanation.preferences.category_tag}</span>
+                  )}
+                  {explanation.preferences.accept_rate != null && (
+                    <span className="ml-2">
+                      Accept rate: {Math.round(explanation.preferences.accept_rate * 100)}%
+                      {explanation.preferences.total_decisions != null && (
+                        <span className="text-zinc-500">
+                          {" "}
+                          ({explanation.preferences.total_decisions} decisions)
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
+              )}
+              {explanation.ownership && explanation.ownership.owners?.length > 0 && (
+                <div className="text-xs text-zinc-400">
+                  Owners: {explanation.ownership.owners.join(", ")}
+                </div>
+              )}
             </div>
           )}
 

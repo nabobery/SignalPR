@@ -66,6 +66,70 @@ export interface Finding {
   delta_state?: "new" | "unchanged" | "stale";
   baseline_finding_id?: string | null;
   baseline_decision?: "accept" | "reject" | "edit" | "skip" | null;
+  // Phase 3: hybrid analysis provenance + explainability
+  source_kind: string | null;
+  source_id: string | null;
+  explain_json: string | null;
+}
+
+// Phase 3: Explainability payload stored per finding
+export interface FindingExplanation {
+  origin: {
+    source_kind: string;
+    source_id: string | null;
+    lane_id: string;
+    provider_name: string | null;
+  };
+  ranking?: {
+    confidence_raw: number;
+    severity_raw: string;
+    suppressed_reason?: string | null;
+  };
+  preferences?: {
+    category_tag: string | null;
+    accept_rate: number | null;
+    total_decisions: number | null;
+    override_action?: string | null;
+  };
+  ownership?: {
+    owners: string[];
+  };
+}
+
+// Phase 3: Context pack summary stored on review run
+export interface ContextPackSummary {
+  total_bytes: number;
+  item_count: number;
+  items: ContextPackItem[];
+  prompt_suffix: string;
+}
+
+export interface ContextPackItem {
+  kind: string;
+  label: string;
+  source: string;
+  bytes: number;
+  included: boolean;
+  omit_reason?: string;
+  content?: string;
+}
+
+// Phase 3: Local checks summary stored on review run
+export interface LocalChecksSummary {
+  total_errors: number;
+  included_count: number;
+  tools_run: string[];
+  items: LocalCheckItem[];
+}
+
+export interface LocalCheckItem {
+  tool: string;
+  file: string;
+  line: number | null;
+  column: number | null;
+  severity: string;
+  message: string;
+  rule_id: string | null;
 }
 
 export interface LaneSnapshot {
@@ -148,6 +212,9 @@ export interface ReviewSnapshot {
   metrics: RunScorecard | null;
   delta: ReviewDeltaSnapshot | null;
   decisions_by_finding_id: Record<string, string> | null;
+  // Phase 3: hybrid analysis artifacts
+  context_pack_summary: ContextPackSummary | null;
+  local_checks_summary: LocalChecksSummary | null;
 }
 
 export interface ReviewerDecision {

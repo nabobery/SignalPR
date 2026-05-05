@@ -216,6 +216,18 @@ CREATE INDEX IF NOT EXISTS idx_review_runs_baseline_run_id ON review_runs(baseli
 CREATE INDEX IF NOT EXISTS idx_findings_run_fingerprint ON findings(review_run_id, fingerprint);
 "#;
 
+const MIGRATION_V8: &str = r#"
+-- Phase 3: Hybrid analysis + richer context
+ALTER TABLE review_runs ADD COLUMN context_pack_json TEXT;
+ALTER TABLE review_runs ADD COLUMN local_checks_json TEXT;
+
+ALTER TABLE findings ADD COLUMN source_kind TEXT;
+ALTER TABLE findings ADD COLUMN source_id TEXT;
+ALTER TABLE findings ADD COLUMN explain_json TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_findings_source_kind ON findings(source_kind);
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -277,6 +289,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V7)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (7)",
+            [],
+        )?;
+    }
+
+    if current_version < 8 {
+        conn.execute_batch(MIGRATION_V8)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (8)",
             [],
         )?;
     }
@@ -467,6 +487,44 @@ mod tests {
             .unwrap();
         assert!(indexes.contains(&"idx_review_runs_baseline_run_id".to_string()));
         assert!(indexes.contains(&"idx_findings_run_fingerprint".to_string()));
+    }
+
+    #[test]
+    fn test_v8_columns_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url) VALUES ('pr', 'ws', 1, 't', 'u')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO review_runs (id, pr_id, status, context_pack_json, local_checks_json) VALUES ('run', 'pr', 'ready', '{\"items\":[]}', '{\"checks\":[]}')",
+            [],
+        ).expect("V8 review_runs columns should exist");
+
+        conn.execute(
+            "INSERT INTO findings (id, review_run_id, agent_type, severity, confidence, title, body, source_kind, source_id, explain_json) VALUES ('f1', 'run', 'security', 'warning', 0.8, 'Test', 'Body', 'local_check', 'oxlint', '{\"origin\":{\"source_kind\":\"local_check\"}}')",
+            [],
+        ).expect("V8 findings columns should exist");
+    }
+
+    #[test]
+    fn test_v8_source_kind_index_exists() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_findings_source_kind".to_string()));
     }
 
     #[test]

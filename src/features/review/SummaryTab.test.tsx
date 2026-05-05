@@ -39,6 +39,9 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     fix_explanation: null,
     fix_status: null,
     fingerprint: null,
+    source_kind: null,
+    source_id: null,
+    explain_json: null,
     ...overrides,
   };
 }
@@ -73,6 +76,8 @@ function renderWithContext(state: Partial<ReviewState>) {
     baselineRunId: null,
     metrics: null,
     delta: null,
+    contextPackSummary: null,
+    localChecksSummary: null,
     ...state,
   };
 
@@ -187,6 +192,8 @@ describe("SummaryTab", () => {
         baselineRunId: null,
         metrics: null,
         delta: null,
+        contextPackSummary: null,
+        localChecksSummary: null,
       },
       setSelectedFile,
       setSessionDecision: vi.fn(),

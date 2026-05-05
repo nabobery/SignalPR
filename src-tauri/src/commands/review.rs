@@ -11,11 +11,13 @@ use rusqlite::Connection;
 
 use crate::agents::definition::AgentDefinition;
 use crate::config;
+use crate::context_pack::ContextPackBuilder;
+use crate::local_checks::{self, LocalChecksRunner};
 use crate::orchestration::engine;
 use crate::orchestration::lane::{AgentLaneConfig, LaneSnapshot};
 use crate::preferences::scoring;
 use crate::providers::prompts::{self, AgentFocus};
-use crate::providers::traits::ReviewProvider;
+use crate::providers::traits::{RawFinding, ReviewProvider};
 use crate::review_delta::{self, ReviewDeltaCounts, ReviewDeltaSnapshot};
 use crate::storage::db::AppDb;
 use crate::storage::models::{Finding, FindingCluster, PullRequest, ReviewRun, ReviewerDecision};
@@ -47,6 +49,8 @@ pub struct ReviewSnapshot {
     pub metrics: Option<crate::metrics::RunScorecard>,
     pub delta: Option<ReviewDeltaSnapshot>,
     pub decisions_by_finding_id: Option<HashMap<String, String>>,
+    pub context_pack_summary: Option<serde_json::Value>,
+    pub local_checks_summary: Option<serde_json::Value>,
 }
 
 pub struct ActiveReviews(pub Mutex<HashMap<String, CancellationToken>>);
@@ -138,6 +142,8 @@ pub async fn start_review(
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )?;
     }
@@ -152,6 +158,22 @@ pub async fn start_review(
         map.insert(run_id.clone(), token.clone());
     }
 
+    // Build changed_files list for context pack
+    let changed_files: Vec<String> = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let pr = queries::get_pull_request(&conn, &pr_id)?
+            .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        pr.changed_files
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    };
+
+    let context_pack_config = resolved.context_pack;
+    let local_checks_config = resolved.local_checks;
+
     // Spawn WITHOUT awaiting: return run_id immediately.
     let app_clone = app.clone();
     let run_id_clone = run_id.clone();
@@ -161,6 +183,53 @@ pub async fn start_review(
         let event_log = app_clone
             .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
             .map(|s| s.inner().clone());
+
+        // Phase 3: Build context pack
+        let preference_text = {
+            let conn = db.0.lock().ok();
+            conn.and_then(|c| {
+                let decisions = queries::get_all_decisions(&c).ok()?;
+                let summaries = scoring::compute_preference_summaries(&decisions);
+                scoring::build_preference_prompt_section(&summaries)
+            })
+        };
+
+        let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
+            .with_preferences(preference_text)
+            .build();
+
+        let context_suffix = if context_pack.prompt_suffix.is_empty() {
+            None
+        } else {
+            Some(context_pack.prompt_suffix.clone())
+        };
+
+        // Persist context pack JSON
+        if let Ok(json) = serde_json::to_string(&context_pack) {
+            if let Ok(conn) = db.0.lock() {
+                let _ = queries::update_review_run_context_pack(&conn, &run_id_clone, &json);
+            }
+        }
+
+        // Phase 3: Run local checks if enabled
+        let mut extra_raw_findings: Vec<RawFinding> = Vec::new();
+        let local_checks_summary = {
+            let runner = LocalChecksRunner::new(&cwd_path, &changed_files, token.clone())
+                .with_config(Some(&local_checks_config));
+            let summary = runner.run().await;
+            if !summary.items.is_empty() {
+                extra_raw_findings = local_checks::items_to_raw_findings(&summary.items);
+            }
+            summary
+        };
+
+        // Persist local checks JSON
+        if let Ok(json) = serde_json::to_string(&local_checks_summary) {
+            if let Ok(conn) = db.0.lock() {
+                let _ = queries::update_review_run_local_checks(&conn, &run_id_clone, &json);
+            }
+        }
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -177,6 +246,8 @@ pub async fn start_review(
                 fallback_input: None,
                 fallback_provider: None,
                 event_log,
+                context_suffix,
+                extra_raw_findings,
             },
         )
         .await;
@@ -393,6 +464,14 @@ pub async fn get_review_snapshot(
         metrics,
         delta,
         decisions_by_finding_id,
+        context_pack_summary: run
+            .context_pack_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
+        local_checks_summary: run
+            .local_checks_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
     })
 }
 
@@ -609,6 +688,21 @@ pub async fn resume_review(
         build_agent_lanes(&diff, provider.clone(), &resolved, &conn)
     };
     let cleaner_config = resolved.cleaner;
+    let context_pack_config = resolved.context_pack;
+    let local_checks_config = resolved.local_checks;
+
+    // Build changed_files list
+    let changed_files: Vec<String> = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let pr = queries::get_pull_request(&conn, &pr_id)?
+            .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        pr.changed_files
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default()
+    };
 
     // Create new run
     let new_run_id = uuid::Uuid::new_v4().to_string();
@@ -629,6 +723,8 @@ pub async fn resume_review(
                 metrics_json: None,
                 analysis_diff_hash: None,
                 analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
             },
         )?;
     }
@@ -652,6 +748,51 @@ pub async fn resume_review(
         let event_log = app_clone
             .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
             .map(|s| s.inner().clone());
+
+        // Phase 3: Build context pack
+        let preference_text = {
+            let conn = db.0.lock().ok();
+            conn.and_then(|c| {
+                let decisions = queries::get_all_decisions(&c).ok()?;
+                let summaries = scoring::compute_preference_summaries(&decisions);
+                scoring::build_preference_prompt_section(&summaries)
+            })
+        };
+
+        let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
+            .with_preferences(preference_text)
+            .build();
+
+        let context_suffix = if context_pack.prompt_suffix.is_empty() {
+            None
+        } else {
+            Some(context_pack.prompt_suffix.clone())
+        };
+
+        if let Ok(json) = serde_json::to_string(&context_pack) {
+            if let Ok(conn) = db.0.lock() {
+                let _ = queries::update_review_run_context_pack(&conn, &run_id_clone, &json);
+            }
+        }
+
+        // Phase 3: Run local checks if enabled
+        let mut extra_raw_findings: Vec<RawFinding> = Vec::new();
+        let local_checks_summary = {
+            let runner = LocalChecksRunner::new(&cwd_path, &changed_files, token.clone())
+                .with_config(Some(&local_checks_config));
+            let summary = runner.run().await;
+            if !summary.items.is_empty() {
+                extra_raw_findings = local_checks::items_to_raw_findings(&summary.items);
+            }
+            summary
+        };
+
+        if let Ok(json) = serde_json::to_string(&local_checks_summary) {
+            if let Ok(conn) = db.0.lock() {
+                let _ = queries::update_review_run_local_checks(&conn, &run_id_clone, &json);
+            }
+        }
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -668,6 +809,8 @@ pub async fn resume_review(
                 fallback_input: None,
                 fallback_provider: None,
                 event_log,
+                context_suffix,
+                extra_raw_findings,
             },
         )
         .await;
@@ -890,6 +1033,8 @@ mod tests {
             metrics_json: None,
             analysis_diff_hash: None,
             analysis_diff_text: Some(baseline_diff.into()),
+            context_pack_json: None,
+            local_checks_json: None,
         };
         queries::insert_review_run(&conn, &baseline_run).unwrap();
 
@@ -904,6 +1049,8 @@ mod tests {
             metrics_json: None,
             analysis_diff_hash: None,
             analysis_diff_text: Some(baseline_diff.into()),
+            context_pack_json: None,
+            local_checks_json: None,
         };
         queries::insert_review_run(&conn, &current_run).unwrap();
 
@@ -934,6 +1081,9 @@ mod tests {
             fix_explanation: None,
             fix_status: None,
             fingerprint: None,
+            source_kind: None,
+            source_id: None,
+            explain_json: None,
         };
         baseline_finding.fingerprint =
             Some(review_delta::compute_finding_fingerprint(&baseline_finding));
@@ -983,6 +1133,9 @@ mod tests {
                 fix_explanation: None,
                 fix_status: None,
                 fingerprint: None,
+                source_kind: None,
+                source_id: None,
+                explain_json: None,
             },
             Finding {
                 id: "cur-f2".into(),
@@ -1011,6 +1164,9 @@ mod tests {
                 fix_explanation: None,
                 fix_status: None,
                 fingerprint: None,
+                source_kind: None,
+                source_id: None,
+                explain_json: None,
             },
         ];
 

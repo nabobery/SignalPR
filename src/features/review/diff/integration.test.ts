@@ -34,6 +34,9 @@ function makeFinding(overrides: Partial<Finding>): Finding {
     fix_replace: null,
     fix_explanation: null,
     fix_status: null,
+    source_kind: null,
+    source_id: null,
+    explain_json: null,
     ...overrides,
     fingerprint: overrides.fingerprint ?? null,
   };

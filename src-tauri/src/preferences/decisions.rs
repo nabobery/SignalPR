@@ -96,6 +96,9 @@ mod tests {
             fix_explanation: None,
             fix_status: None,
             fingerprint: None,
+            source_kind: None,
+            source_id: None,
+            explain_json: None,
         }
     }
 

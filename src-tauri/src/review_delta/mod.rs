@@ -300,6 +300,9 @@ mod tests {
             fix_explanation: None,
             fix_status: None,
             fingerprint: fingerprint.map(|s| s.to_string()),
+            source_kind: None,
+            source_id: None,
+            explain_json: None,
         }
     }
 
