@@ -74,6 +74,7 @@ mod tests {
             remote_owner: "owner".into(),
             remote_repo: "repo".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
+            remote_host: "github.com".into(),
         };
         queries::insert_workspace(conn, &ws).unwrap();
 

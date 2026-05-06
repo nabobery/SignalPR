@@ -1,10 +1,9 @@
-use regex::Regex;
 use serde::Serialize;
-use std::sync::OnceLock;
 use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
 use crate::errors::AppError;
+use crate::platform::{self, ParsedReviewUrl};
 use crate::storage::db::AppDb;
 use crate::storage::hashing::sha256_hex;
 use crate::storage::models::{PullRequest, Workspace};
@@ -25,86 +24,53 @@ pub struct PrIntakeResult {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ParsedPrUrl {
     pub owner: String,
     pub repo: String,
     pub number: i32,
 }
 
-static PR_URL_REGEX: OnceLock<Regex> = OnceLock::new();
-
+/// Legacy wrapper: parses a GitHub PR URL. Call sites that only need GitHub
+/// can continue to use this; new code should prefer `platform::parse_review_url`.
+#[allow(dead_code)]
 pub fn parse_pr_url(url: &str) -> Result<ParsedPrUrl, AppError> {
-    let re = PR_URL_REGEX.get_or_init(|| {
-        Regex::new(r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)")
-            .expect("PR URL regex should be valid")
-    });
-    let caps = re
-        .captures(url)
-        .ok_or_else(|| AppError::InvalidInput("Invalid GitHub PR URL format".into()))?;
-    Ok(ParsedPrUrl {
-        owner: caps["owner"].to_string(),
-        repo: caps["repo"].to_string(),
-        number: caps["number"]
-            .parse::<i32>()
-            .map_err(|_| AppError::InvalidInput("PR number is not a valid integer".into()))?,
-    })
+    let parsed = platform::parse_review_url(url)?;
+    match parsed {
+        ParsedReviewUrl::GitHub {
+            owner,
+            repo,
+            number,
+            ..
+        } => Ok(ParsedPrUrl {
+            owner,
+            repo,
+            number,
+        }),
+        ParsedReviewUrl::GitLab {
+            project_path, iid, ..
+        } => {
+            let (owner, repo) = if let Some(slash) = project_path.rfind('/') {
+                (
+                    project_path[..slash].to_string(),
+                    project_path[slash + 1..].to_string(),
+                )
+            } else {
+                (String::new(), project_path)
+            };
+            Ok(ParsedPrUrl {
+                owner,
+                repo,
+                number: iid,
+            })
+        }
+    }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ParsedRemote {
-    pub host: String,
-    pub owner: String,
-    pub repo: String,
-}
+pub use crate::platform::ParsedRemote;
 
 pub fn parse_git_remote_url(url: &str) -> Option<ParsedRemote> {
-    let url = url.trim();
-
-    // SSH: git@github.com:owner/repo.git (or without .git)
-    if let Some(rest) = url.strip_prefix("git@") {
-        let (host, path) = rest.split_once(':')?;
-        let path = path.strip_suffix(".git").unwrap_or(path);
-        let (owner, repo) = path.split_once('/')?;
-        if repo.is_empty() || repo.contains('/') {
-            return None;
-        }
-        return Some(ParsedRemote {
-            host: host.to_lowercase(),
-            owner: owner.to_lowercase(),
-            repo: repo.to_lowercase(),
-        });
-    }
-
-    // http(s)://github.com/owner/repo(.git) or ssh://git@github.com/owner/repo(.git)
-    let without_scheme = url.split_once("://").map(|(_, r)| r)?;
-
-    // Strip optional user prefix for ssh:// URLs
-    let without_user = without_scheme
-        .strip_prefix("git@")
-        .unwrap_or(without_scheme);
-
-    let (host, path) = without_user.split_once('/')?;
-    let path = path.split_once('?').map(|(p, _)| p).unwrap_or(path);
-    let path = path.split_once('#').map(|(p, _)| p).unwrap_or(path);
-
-    let mut parts = path.split('/').filter(|p| !p.is_empty());
-    let owner = parts.next()?;
-    let repo = parts.next()?;
-    if parts.next().is_some() {
-        // Extra path segments beyond owner/repo are not supported.
-        return None;
-    }
-
-    let repo = repo.strip_suffix(".git").unwrap_or(repo);
-    if repo.is_empty() {
-        return None;
-    }
-
-    Some(ParsedRemote {
-        host: host.to_lowercase(),
-        owner: owner.to_lowercase(),
-        repo: repo.to_lowercase(),
-    })
+    platform::parse_git_remote_url(url)
 }
 
 #[tauri::command]
@@ -121,17 +87,41 @@ async fn do_open_from_url(
     url: &str,
     db: &AppDb,
 ) -> Result<PrIntakeResult, AppError> {
-    let parsed = parse_pr_url(url)?;
-    let shell = app.shell();
-    let full_repo = format!("{}/{}", parsed.owner, parsed.repo);
+    let review_url = platform::parse_review_url(url)?;
+    let (owner, repo) = review_url.owner_and_repo();
+    let host = review_url.host().to_string();
+    let number = review_url.number_or_iid();
 
-    // Fetch PR metadata via gh
+    match &review_url {
+        ParsedReviewUrl::GitHub { .. } => {
+            do_open_github_pr(app, url, db, &host, &owner, &repo, number).await
+        }
+        ParsedReviewUrl::GitLab {
+            project_path,
+            iid,
+            host: gl_host,
+        } => do_open_gitlab_mr(app, url, db, gl_host, project_path, *iid, &owner, &repo).await,
+    }
+}
+
+async fn do_open_github_pr(
+    app: AppHandle,
+    url: &str,
+    db: &AppDb,
+    host: &str,
+    owner: &str,
+    repo: &str,
+    number: i32,
+) -> Result<PrIntakeResult, AppError> {
+    let shell = app.shell();
+    let full_repo = format!("{}/{}", owner, repo);
+
     let meta_output = shell
         .command("gh")
         .args([
             "pr",
             "view",
-            &parsed.number.to_string(),
+            &number.to_string(),
             "--repo",
             &full_repo,
             "--json",
@@ -164,16 +154,9 @@ async fn do_open_from_url(
         })
         .unwrap_or_default();
 
-    // Fetch diff
     let diff_output = shell
         .command("gh")
-        .args([
-            "pr",
-            "diff",
-            &parsed.number.to_string(),
-            "--repo",
-            &full_repo,
-        ])
+        .args(["pr", "diff", &number.to_string(), "--repo", &full_repo])
         .output()
         .await
         .map_err(|e| AppError::InvalidInput(format!("Failed to fetch diff: {}", e)))?;
@@ -185,23 +168,102 @@ async fn do_open_from_url(
     )?;
     let diff_hash = sha256_hex(&diff_text);
 
-    // Check for existing workspace suggestion
+    persist_intake(
+        db,
+        url,
+        host,
+        owner,
+        repo,
+        number,
+        &title,
+        author.as_deref(),
+        base_branch.as_deref(),
+        head_branch.as_deref(),
+        Some(&diff_text),
+        &changed_files,
+        Some(&diff_hash),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn do_open_gitlab_mr(
+    _app: AppHandle,
+    url: &str,
+    db: &AppDb,
+    host: &str,
+    project_path: &str,
+    iid: i32,
+    owner: &str,
+    repo: &str,
+) -> Result<PrIntakeResult, AppError> {
+    let token = crate::providers::gitlab::resolve_gitlab_token().ok_or_else(|| {
+        AppError::InvalidInput("GITLAB_TOKEN environment variable is not set. Set it to a GitLab personal access token with api scope.".into())
+    })?;
+    let api = crate::providers::gitlab::GitLabApi::new(token, host)
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+
+    let mr = api
+        .get_merge_request(project_path, iid)
+        .await
+        .map_err(|e| AppError::Transient(format!("GitLab MR fetch failed: {}", e)))?;
+    let diff_text = api
+        .get_raw_diffs(project_path, iid, host)
+        .await
+        .map_err(|e| AppError::Transient(format!("GitLab diff fetch failed: {}", e)))?;
+    let diff_hash = sha256_hex(&diff_text);
+    let changed_files = derive_changed_files_from_diff(&diff_text);
+
+    let title = mr.title;
+    let author = mr.author.map(|a| a.username);
+    let base_branch = Some(mr.target_branch);
+    let head_branch = Some(mr.source_branch);
+
+    persist_intake(
+        db,
+        url,
+        host,
+        owner,
+        repo,
+        iid,
+        &title,
+        author.as_deref(),
+        base_branch.as_deref(),
+        head_branch.as_deref(),
+        Some(&diff_text),
+        &changed_files,
+        Some(&diff_hash),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_intake(
+    db: &AppDb,
+    url: &str,
+    host: &str,
+    owner: &str,
+    repo: &str,
+    number: i32,
+    title: &str,
+    author: Option<&str>,
+    base_branch: Option<&str>,
+    head_branch: Option<&str>,
+    diff_text: Option<&str>,
+    changed_files: &[String],
+    diff_hash: Option<&str>,
+) -> Result<PrIntakeResult, AppError> {
     let workspace_suggestion = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        queries::get_workspace_by_remote(&conn, &parsed.owner, &parsed.repo)?
-            .map(|ws| ws.local_path)
+        queries::get_workspace_by_remote_and_host(&conn, host, owner, repo)?.map(|ws| ws.local_path)
     };
 
-    // Persist PR
     let pr_id = uuid::Uuid::new_v4().to_string();
     let ws_id = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        // Upsert workspace with a placeholder path if no suggestion exists
-        let existing = queries::get_workspace_by_remote(&conn, &parsed.owner, &parsed.repo)?;
+        let existing = queries::get_workspace_by_remote_and_host(&conn, host, owner, repo)?;
         match existing {
             Some(ws) => ws.id,
             None => {
@@ -210,10 +272,11 @@ async fn do_open_from_url(
                     &conn,
                     &Workspace {
                         id: new_ws_id.clone(),
-                        local_path: "".to_string(), // Will be set by confirm_workspace
-                        remote_owner: parsed.owner.clone(),
-                        remote_repo: parsed.repo.clone(),
+                        local_path: "".to_string(),
+                        remote_owner: owner.to_string(),
+                        remote_repo: repo.to_string(),
                         created_at: chrono::Utc::now().to_rfc3339(),
+                        remote_host: host.to_string(),
                     },
                 )?;
                 new_ws_id
@@ -230,16 +293,16 @@ async fn do_open_from_url(
             &PullRequest {
                 id: pr_id.clone(),
                 workspace_id: ws_id,
-                pr_number: parsed.number,
-                title: title.clone(),
-                author: author.clone(),
-                base_branch: base_branch.clone(),
-                head_branch: head_branch.clone(),
+                pr_number: number,
+                title: title.to_string(),
+                author: author.map(|s| s.to_string()),
+                base_branch: base_branch.map(|s| s.to_string()),
+                head_branch: head_branch.map(|s| s.to_string()),
                 url: url.to_string(),
-                diff_text: Some(diff_text),
+                diff_text: diff_text.map(|s| s.to_string()),
                 changed_files: Some(serde_json::to_string(&changed_files)?),
                 fetched_at: chrono::Utc::now().to_rfc3339(),
-                diff_hash: Some(diff_hash),
+                diff_hash: diff_hash.map(|s| s.to_string()),
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
             },
@@ -248,13 +311,13 @@ async fn do_open_from_url(
 
     Ok(PrIntakeResult {
         pr_id,
-        owner: parsed.owner,
-        repo: parsed.repo,
-        pr_number: parsed.number,
-        title,
-        author,
-        base_branch,
-        head_branch,
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        pr_number: number,
+        title: title.to_string(),
+        author: author.map(|s| s.to_string()),
+        base_branch: base_branch.map(|s| s.to_string()),
+        head_branch: head_branch.map(|s| s.to_string()),
         changed_file_count: changed_files.len(),
         workspace_suggestion,
     })
@@ -273,6 +336,27 @@ fn require_diff_text(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<Stri
     Err(AppError::Transient(msg))
 }
 
+fn derive_changed_files_from_diff(diff_text: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for line in diff_text.lines() {
+        let Some(rest) = line.strip_prefix("diff --git ") else {
+            continue;
+        };
+        let Some((_, new_part)) = rest.rsplit_once(" b/") else {
+            continue;
+        };
+        let path = new_part.trim();
+        if path.is_empty() {
+            continue;
+        }
+        if seen.insert(path.to_string()) {
+            files.push(path.to_string());
+        }
+    }
+    files
+}
+
 #[tauri::command]
 pub async fn confirm_workspace(
     app: AppHandle,
@@ -289,20 +373,17 @@ async fn do_confirm_workspace(
     local_path: &str,
     db: &AppDb,
 ) -> Result<(), AppError> {
-    // Get the PR to find owner/repo
-    let (owner, repo, workspace_id) = {
+    let (host, owner, repo, workspace_id) = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
         let pr = queries::get_pull_request(&conn, pr_id)?
             .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
-        // Parse owner/repo from the stored URL
-        let parsed = parse_pr_url(&pr.url)?;
-        (parsed.owner, parsed.repo, pr.workspace_id)
+        let review_url = platform::parse_review_url(&pr.url)?;
+        let (owner, repo) = review_url.owner_and_repo();
+        (review_url.host().to_string(), owner, repo, pr.workspace_id)
     };
 
-    // Validate: is it a git repo with a matching remote?
-    // Check ALL remotes (not just origin) to support forks and multi-remote setups.
     let shell = app.shell();
     let remote_output = shell
         .command("git")
@@ -321,21 +402,21 @@ async fn do_confirm_workspace(
     let remote_text = String::from_utf8_lossy(&remote_output.stdout).to_string();
     let remotes = parse_git_remotes(&remote_text);
 
-    if !matches_target_repo(&remotes, &owner, &repo) {
+    if !matches_target_repo_on_host(&remotes, &host, &owner, &repo) {
         return Err(AppError::InvalidInput(format!(
-            "No remote in '{}' matches repository {}/{}. Found remotes: {}",
+            "No remote in '{}' matches repository {}/{} on {}. Found remotes: {}",
             local_path,
             owner,
             repo,
+            host,
             remotes
                 .iter()
-                .map(|(name, o, r)| format!("{} ({}/{})", name, o, r))
+                .map(|(name, h, o, r)| format!("{} ({}/{} on {})", name, o, r, h))
                 .collect::<Vec<_>>()
                 .join(", ")
         )));
     }
 
-    // Update workspace local_path
     {
         let conn =
             db.0.lock()
@@ -349,12 +430,14 @@ async fn do_confirm_workspace(
     Ok(())
 }
 
-/// Parse `git remote -v` output into a list of (remote_name, owner, repo) tuples.
-/// Only fetch remotes are included (not push).
-pub fn parse_git_remotes(output: &str) -> Vec<(String, String, String)> {
+/// Parsed remote entry: name, host, owner, repo.
+pub type RemoteEntry = (String, String, String, String);
+
+/// Parse `git remote -v` output into a list of (remote_name, host, owner, repo) tuples.
+/// Only fetch remotes are included (not push). Supports all hosts (GitHub, GitLab, etc.).
+pub fn parse_git_remotes(output: &str) -> Vec<RemoteEntry> {
     let mut remotes = Vec::new();
     for line in output.lines() {
-        // Format: "origin\thttps://github.com/owner/repo.git (fetch)"
         if !line.contains("(fetch)") {
             continue;
         }
@@ -365,17 +448,29 @@ pub fn parse_git_remotes(output: &str) -> Vec<(String, String, String)> {
         let name = parts[0].to_string();
         let url = parts[1];
         if let Some(parsed) = parse_git_remote_url(url) {
-            if parsed.host == "github.com" {
-                remotes.push((name, parsed.owner, parsed.repo));
-            }
+            remotes.push((name, parsed.host, parsed.owner, parsed.repo));
         }
     }
     remotes
 }
 
-/// Check if any remote matches the target owner/repo.
-/// This supports forks: the PR target repo may be under a different owner
-/// than the local fork's origin.
+/// Check if any remote matches the target owner/repo for a specific host.
+pub fn matches_target_repo_on_host(
+    remotes: &[RemoteEntry],
+    target_host: &str,
+    target_owner: &str,
+    target_repo: &str,
+) -> bool {
+    let host_lc = target_host.to_lowercase();
+    let owner_lc = target_owner.to_lowercase();
+    let repo_lc = target_repo.to_lowercase();
+    remotes
+        .iter()
+        .any(|(_, h, o, r)| h == &host_lc && o == &owner_lc && r == &repo_lc)
+}
+
+/// Legacy 3-tuple version for backward compatibility with existing tests.
+#[allow(dead_code)]
 pub fn matches_target_repo(
     remotes: &[(String, String, String)],
     target_owner: &str,
@@ -416,8 +511,16 @@ mod tests {
     #[test]
     fn test_parse_invalid_url() {
         assert!(parse_pr_url("https://github.com/octocat/hello-world").is_err());
-        assert!(parse_pr_url("https://gitlab.com/octocat/hello-world/pull/42").is_err());
         assert!(parse_pr_url("not a url").is_err());
+    }
+
+    #[test]
+    fn test_parse_gitlab_mr_url_via_legacy() {
+        let result =
+            parse_pr_url("https://gitlab.com/group/subgroup/project/-/merge_requests/10").unwrap();
+        assert_eq!(result.owner, "group/subgroup");
+        assert_eq!(result.repo, "project");
+        assert_eq!(result.number, 10);
     }
 
     #[test]
@@ -469,19 +572,31 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_remote_spoof_host_mismatch() {
+    fn test_parse_remote_gitlab_nested_groups() {
         assert_eq!(
-            parse_git_remote_url("https://evil.com/owner/repo"),
+            parse_git_remote_url("git@gitlab.com:group/subgroup/project.git"),
             Some(ParsedRemote {
-                host: "evil.com".into(),
-                owner: "owner".into(),
-                repo: "repo".into(),
+                host: "gitlab.com".into(),
+                owner: "group/subgroup".into(),
+                repo: "project".into(),
             })
         );
     }
 
     #[test]
-    fn test_parse_remote_extra_path_segments_rejected() {
+    fn test_parse_remote_gitlab_https_nested() {
+        assert_eq!(
+            parse_git_remote_url("https://gitlab.com/group/subgroup/project.git"),
+            Some(ParsedRemote {
+                host: "gitlab.com".into(),
+                owner: "group/subgroup".into(),
+                repo: "project".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_extra_path_segments_rejected_on_github() {
         assert_eq!(parse_git_remote_url("https://github.com/a/b/c"), None);
         assert_eq!(parse_git_remote_url("git@github.com:a/b/c.git"), None);
     }
@@ -499,8 +614,24 @@ mod tests {
         let output = "origin\thttps://github.com/user/fork.git (fetch)\norigin\thttps://github.com/user/fork.git (push)\nupstream\thttps://github.com/org/repo.git (fetch)\nupstream\thttps://github.com/org/repo.git (push)\n";
         let remotes = parse_git_remotes(output);
         assert_eq!(remotes.len(), 2);
-        assert_eq!(remotes[0], ("origin".into(), "user".into(), "fork".into()));
-        assert_eq!(remotes[1], ("upstream".into(), "org".into(), "repo".into()));
+        assert_eq!(
+            remotes[0],
+            (
+                "origin".into(),
+                "github.com".into(),
+                "user".into(),
+                "fork".into()
+            )
+        );
+        assert_eq!(
+            remotes[1],
+            (
+                "upstream".into(),
+                "github.com".into(),
+                "org".into(),
+                "repo".into()
+            )
+        );
     }
 
     #[test]
@@ -508,7 +639,53 @@ mod tests {
         let output = "origin\tgit@github.com:user/repo.git (fetch)\norigin\tgit@github.com:user/repo.git (push)\n";
         let remotes = parse_git_remotes(output);
         assert_eq!(remotes.len(), 1);
-        assert_eq!(remotes[0], ("origin".into(), "user".into(), "repo".into()));
+        assert_eq!(
+            remotes[0],
+            (
+                "origin".into(),
+                "github.com".into(),
+                "user".into(),
+                "repo".into()
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_git_remotes_gitlab() {
+        let output = "origin\tgit@gitlab.com:group/subgroup/project.git (fetch)\norigin\tgit@gitlab.com:group/subgroup/project.git (push)\n";
+        let remotes = parse_git_remotes(output);
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(
+            remotes[0],
+            (
+                "origin".into(),
+                "gitlab.com".into(),
+                "group/subgroup".into(),
+                "project".into()
+            )
+        );
+    }
+
+    #[test]
+    fn test_matches_target_repo_on_host_direct() {
+        let remotes: Vec<RemoteEntry> = vec![(
+            "origin".into(),
+            "github.com".into(),
+            "org".into(),
+            "repo".into(),
+        )];
+        assert!(matches_target_repo_on_host(
+            &remotes,
+            "github.com",
+            "org",
+            "repo"
+        ));
+        assert!(!matches_target_repo_on_host(
+            &remotes,
+            "gitlab.com",
+            "org",
+            "repo"
+        ));
     }
 
     #[test]
@@ -544,5 +721,35 @@ mod tests {
         let err = require_diff_text(false, b"", b"rate limit exceeded").unwrap_err();
         assert!(matches!(err, AppError::Transient(_)));
         assert!(err.to_string().contains("rate limit"));
+    }
+
+    #[test]
+    fn test_derive_changed_files_from_diff_dedupes_paths() {
+        let diff = "\
+diff --git a/src/a.rs b/src/a.rs
+index 111..222 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1 +1 @@
+diff --git a/src/b.rs b/src/b.rs
+index 333..444 100644
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -1 +1 @@
+diff --git a/src/a.rs b/src/a.rs
+index 555..666 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -3 +3 @@
+";
+        let files = derive_changed_files_from_diff(diff);
+        assert_eq!(files, vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
+    }
+
+    #[test]
+    fn test_derive_changed_files_from_diff_handles_rename() {
+        let diff = "diff --git a/src/old_name.rs b/src/new_name.rs\n";
+        let files = derive_changed_files_from_diff(diff);
+        assert_eq!(files, vec!["src/new_name.rs".to_string()]);
     }
 }

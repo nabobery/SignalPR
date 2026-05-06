@@ -322,6 +322,7 @@ describe("SummaryTab", () => {
   it("renders GitHub metadata section with requested reviewers", () => {
     renderWithContext({
       platformMetadata: {
+        platform: "github",
         pr_body: null,
         head_sha: "abc",
         base_sha: "def",
@@ -345,6 +346,7 @@ describe("SummaryTab", () => {
   it("renders draft badge when PR is draft", () => {
     renderWithContext({
       platformMetadata: {
+        platform: "github",
         pr_body: null,
         head_sha: "abc",
         base_sha: "def",
@@ -365,6 +367,7 @@ describe("SummaryTab", () => {
   it("renders labels from platform metadata", () => {
     renderWithContext({
       platformMetadata: {
+        platform: "github",
         pr_body: null,
         head_sha: "abc",
         base_sha: "def",
@@ -386,6 +389,7 @@ describe("SummaryTab", () => {
   it("renders requested teams from platform metadata", () => {
     renderWithContext({
       platformMetadata: {
+        platform: "github",
         pr_body: null,
         head_sha: "abc",
         base_sha: "def",
@@ -404,8 +408,35 @@ describe("SummaryTab", () => {
     expect(screen.getByText(/security-team, docs-team/)).toBeInTheDocument();
   });
 
-  it("does not render GitHub metadata section when null", () => {
+  it("renders GitLab metadata with reviewers and approvals", () => {
+    renderWithContext({
+      platformMetadata: {
+        platform: "gitlab",
+        mr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: false,
+        labels: ["fix"],
+        reviewers: ["alice"],
+        approval_status: {
+          approved: true,
+          approved_by: ["alice"],
+          approvals_required: 1,
+          approvals_left: 0,
+        },
+        closes_issues: [42],
+      },
+    });
+    expect(screen.getByText("GitLab metadata")).toBeInTheDocument();
+    expect(screen.getAllByText(/alice/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+  });
+
+  it("does not render metadata section when null", () => {
     renderWithContext({ platformMetadata: null });
     expect(screen.queryByText("GitHub metadata")).not.toBeInTheDocument();
+    expect(screen.queryByText("GitLab metadata")).not.toBeInTheDocument();
   });
 });

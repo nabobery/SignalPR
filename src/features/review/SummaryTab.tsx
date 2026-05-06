@@ -325,11 +325,14 @@ function PlatformMetadataSection({
   refreshError: string | null;
 }) {
   const fetchedLabel = formatMaybeDate(fetchedAt);
+  const isGitLab = metadata.platform === "gitlab";
+  const platformLabel = isGitLab ? "GitLab" : "GitHub";
+  const entityLabel = isGitLab ? "MR" : "PR";
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
         <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
-          GitHub metadata
+          {platformLabel} metadata
           {fetchedLabel && (
             <span className="ml-2 font-normal normal-case text-zinc-600">{fetchedLabel}</span>
           )}
@@ -340,7 +343,7 @@ function PlatformMetadataSection({
           className="ml-auto flex items-center gap-1 text-[11px] text-zinc-300 bg-zinc-800 hover:bg-zinc-700 px-2 py-1 rounded transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
-          {isRefreshing ? "Refreshing..." : "Refresh GitHub metadata"}
+          {isRefreshing ? "Refreshing..." : `Refresh ${platformLabel} metadata`}
         </button>
       </div>
       {refreshError && (
@@ -349,7 +352,7 @@ function PlatformMetadataSection({
       <div className="space-y-2">
         {metadata.draft && (
           <span className="inline-flex items-center text-xs text-yellow-400 bg-yellow-900/20 px-2 py-0.5 rounded">
-            Draft PR
+            Draft {entityLabel}
           </span>
         )}
         {metadata.labels.length > 0 && (
@@ -364,19 +367,24 @@ function PlatformMetadataSection({
             ))}
           </div>
         )}
-        {metadata.requested_reviewers.length > 0 && (
+        {metadata.platform === "github" && metadata.requested_reviewers.length > 0 && (
           <div className="text-xs text-zinc-400">
             <span className="text-zinc-500">Requested reviewers:</span>{" "}
             {metadata.requested_reviewers.join(", ")}
           </div>
         )}
-        {metadata.requested_teams.length > 0 && (
+        {metadata.platform === "github" && metadata.requested_teams.length > 0 && (
           <div className="text-xs text-zinc-400">
             <span className="text-zinc-500">Requested teams:</span>{" "}
             {metadata.requested_teams.join(", ")}
           </div>
         )}
-        {metadata.review_state_summary.length > 0 && (
+        {metadata.platform === "gitlab" && metadata.reviewers.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Reviewers:</span> {metadata.reviewers.join(", ")}
+          </div>
+        )}
+        {metadata.platform === "github" && metadata.review_state_summary.length > 0 && (
           <div className="text-xs text-zinc-400">
             <span className="text-zinc-500">Reviews:</span>{" "}
             {metadata.review_state_summary.map((r) => (
@@ -397,10 +405,35 @@ function PlatformMetadataSection({
             ))}
           </div>
         )}
-        {metadata.linked_issue_numbers.length > 0 && (
+        {metadata.platform === "gitlab" && metadata.approval_status && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Approval:</span>{" "}
+            <span
+              className={metadata.approval_status.approved ? "text-emerald-400" : "text-zinc-400"}
+            >
+              {metadata.approval_status.approved ? "Approved" : "Pending"}
+            </span>
+            {metadata.approval_status.approved_by.length > 0 && (
+              <span> by {metadata.approval_status.approved_by.join(", ")}</span>
+            )}
+            {metadata.approval_status.approvals_left !== null &&
+              metadata.approval_status.approvals_left > 0 && (
+                <span className="text-zinc-500 ml-1">
+                  ({metadata.approval_status.approvals_left} more needed)
+                </span>
+              )}
+          </div>
+        )}
+        {metadata.platform === "github" && metadata.linked_issue_numbers.length > 0 && (
           <div className="text-xs text-zinc-400">
             <span className="text-zinc-500">Linked issues:</span>{" "}
             {metadata.linked_issue_numbers.map((n) => `#${n}`).join(", ")}
+          </div>
+        )}
+        {metadata.platform === "gitlab" && metadata.closes_issues.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Closes issues:</span>{" "}
+            {metadata.closes_issues.map((n) => `#${n}`).join(", ")}
           </div>
         )}
       </div>

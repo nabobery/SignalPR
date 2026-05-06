@@ -12,6 +12,9 @@ pub enum AppError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
+
     #[error("Provider error: {0}")]
     Provider(#[from] ProviderError),
 
@@ -38,6 +41,7 @@ impl AppError {
             AppError::Database(_) => "database_error",
             AppError::Io(_) => "io_error",
             AppError::Json(_) => "json_error",
+            AppError::Http(_) => "http_error",
             AppError::Provider(_) => "provider_error",
             AppError::InvalidInput(_) => "invalid_input",
             AppError::NotFound(_) => "not_found",
@@ -52,6 +56,7 @@ impl AppError {
         match self {
             AppError::Transient(_) => true,
             AppError::Io(e) => io_is_transient(e),
+            AppError::Http(e) => e.is_timeout() || e.is_connect(),
             AppError::Provider(e) => e.is_transient(),
             AppError::Channel(msg) => {
                 let msg = msg.to_lowercase();

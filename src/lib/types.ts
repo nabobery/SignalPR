@@ -221,8 +221,11 @@ export interface ReviewSnapshot {
   platform_metadata_fetched_at: string | null;
 }
 
-// Phase 5: GitHub platform metadata snapshot
-export interface PlatformMetadata {
+// Platform metadata: discriminated union (Phase 6)
+export type PlatformMetadata = GitHubMetadata | GitLabMetadata;
+
+export interface GitHubMetadata {
+  platform: "github";
   pr_body: string | null;
   head_sha: string;
   base_sha: string;
@@ -237,10 +240,55 @@ export interface PlatformMetadata {
   text_issue_refs: string[];
 }
 
+export interface GitLabMetadata {
+  platform: "gitlab";
+  mr_body: string | null;
+  head_sha: string;
+  base_sha: string;
+  base_ref: string;
+  head_ref: string;
+  draft: boolean;
+  labels: string[];
+  reviewers: string[];
+  approval_status: ApprovalInfo | null;
+  closes_issues: number[];
+}
+
+export interface ApprovalInfo {
+  approved: boolean;
+  approved_by: string[];
+  approvals_required: number | null;
+  approvals_left: number | null;
+}
+
 export interface ReviewStateSummary {
   login: string;
   state: string;
   submitted_at: string | null;
+}
+
+/** Type guard for GitHub metadata */
+export function isGitHubMetadata(meta: unknown): meta is GitHubMetadata {
+  if (!meta || typeof meta !== "object") return false;
+  const candidate = meta as Partial<GitHubMetadata>;
+  return (
+    candidate.platform === "github" &&
+    typeof candidate.head_sha === "string" &&
+    typeof candidate.base_sha === "string" &&
+    Array.isArray(candidate.requested_reviewers)
+  );
+}
+
+/** Type guard for GitLab metadata */
+export function isGitLabMetadata(meta: unknown): meta is GitLabMetadata {
+  if (!meta || typeof meta !== "object") return false;
+  const candidate = meta as Partial<GitLabMetadata>;
+  return (
+    candidate.platform === "gitlab" &&
+    typeof candidate.head_sha === "string" &&
+    typeof candidate.base_sha === "string" &&
+    Array.isArray(candidate.reviewers)
+  );
 }
 
 export interface RefreshMetadataResult {

@@ -11,6 +11,7 @@ mod local_checks;
 mod metrics;
 mod notifications;
 mod orchestration;
+mod platform;
 mod preferences;
 mod providers;
 mod review_delta;

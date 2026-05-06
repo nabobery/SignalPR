@@ -469,6 +469,27 @@ impl GitHubApi {
         Ok(Some(resp.text().await?))
     }
 
+    pub async fn get_pull_diff(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: i32,
+    ) -> Result<String, GitHubApiError> {
+        let url = format!(
+            "{}/repos/{}/{}/pulls/{}",
+            GITHUB_API_BASE, owner, repo, number
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .headers(self.headers())
+            .header(ACCEPT, "application/vnd.github.diff")
+            .send()
+            .await?;
+        let resp = self.check_response(resp).await?;
+        Ok(resp.text().await?)
+    }
+
     // --- GraphQL ---
 
     pub async fn get_linked_issues(

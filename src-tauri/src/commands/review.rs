@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 use rusqlite::Connection;
 
 use crate::agents::definition::AgentDefinition;
-use crate::commands::intake::parse_pr_url;
 use crate::config;
 use crate::context_pack::ContextPackBuilder;
 use crate::local_checks::{self, LocalChecksRunner};
@@ -202,54 +201,13 @@ pub async fn start_review(
             })
         };
 
-        // Phase 5: Resolve issue refs + CODEOWNERS from GitHub metadata/base branch.
-        let (issue_refs, base_branch_codeowners) = {
-            let (pr_url, metadata): (
-                Option<String>,
-                Option<crate::providers::github::PlatformMetadataSnapshot>,
-            ) = {
-                let conn = db.0.lock().ok();
-                conn.and_then(|c| {
-                    let pr = queries::get_pull_request(&c, &pr_id).ok()??;
-                    Some((
-                        Some(pr.url),
-                        pr.platform_metadata_json
-                            .as_deref()
-                            .and_then(|j| serde_json::from_str(j).ok()),
-                    ))
-                })
-                .unwrap_or((None, None))
-            };
-
-            let parsed = pr_url.as_deref().and_then(|u| parse_pr_url(u).ok());
-            let issue_refs = if let Some(parsed) = parsed.as_ref() {
-                let refs =
-                    build_issue_refs_from_metadata(metadata.as_ref(), &parsed.owner, &parsed.repo);
-                hydrate_issue_refs_from_github(&app_clone, refs).await
-            } else {
-                Vec::new()
-            };
-
-            let base_branch_codeowners = if let Some(parsed) = parsed.as_ref() {
-                let base_ref = metadata
-                    .as_ref()
-                    .map(|m| m.base_ref.as_str())
-                    .unwrap_or("main");
-                fetch_base_branch_codeowners(&app_clone, &parsed.owner, &parsed.repo, base_ref)
-                    .await
-            } else {
-                None
-            };
-
-            (issue_refs, base_branch_codeowners)
-        };
+        // Phase 5/6: Resolve issue refs + base-branch CODEOWNERS through platform adapter.
+        let (issue_refs, base_branch_codeowners, codeowners_source) =
+            resolve_issue_refs_and_codeowners(&app_clone, &db, &pr_id).await;
 
         let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
             .with_preferences(preference_text)
-            .with_codeowners_content(
-                base_branch_codeowners.clone(),
-                Some("github:base-branch:CODEOWNERS".to_string()),
-            )
+            .with_codeowners_content(base_branch_codeowners.clone(), codeowners_source)
             .with_issues(issue_refs)
             .build();
 
@@ -704,6 +662,66 @@ fn build_issue_refs_from_metadata(
     refs
 }
 
+/// Build issue refs from the new platform-agnostic metadata (Phase 6).
+fn build_issue_refs_from_platform_metadata(
+    metadata: Option<&crate::platform::adapter::PlatformMetadata>,
+    default_owner: &str,
+    default_repo: &str,
+) -> Vec<crate::context_pack::IssueRef> {
+    let Some(meta) = metadata else {
+        return Vec::new();
+    };
+
+    let mut dedup = std::collections::HashSet::new();
+    let mut refs = Vec::new();
+
+    let linked_ids: &[i64] = match meta {
+        crate::platform::adapter::PlatformMetadata::GitHub(g) => &g.linked_issue_numbers,
+        crate::platform::adapter::PlatformMetadata::GitLab(g) => &g.closes_issues,
+    };
+
+    for num in linked_ids {
+        let number = num.to_string();
+        let key = format!("{}/{}#{}", default_owner, default_repo, number);
+        if dedup.insert(key) {
+            refs.push(crate::context_pack::IssueRef {
+                number,
+                title: format!("Linked issue #{}", num),
+                body_excerpt: String::new(),
+                owner: Some(default_owner.to_string()),
+                repo: Some(default_repo.to_string()),
+                labels: Vec::new(),
+                state: None,
+                omit_reason: None,
+            });
+        }
+    }
+
+    if let crate::platform::adapter::PlatformMetadata::GitHub(g) = meta {
+        for text_ref in &g.text_issue_refs {
+            if let Some((owner, repo, number)) =
+                parse_issue_ref(text_ref, default_owner, default_repo)
+            {
+                let key = format!("{}/{}#{}", owner, repo, number);
+                if dedup.insert(key) {
+                    refs.push(crate::context_pack::IssueRef {
+                        number: number.clone(),
+                        title: format!("Referenced issue #{}", number),
+                        body_excerpt: String::new(),
+                        owner: Some(owner),
+                        repo: Some(repo),
+                        labels: Vec::new(),
+                        state: None,
+                        omit_reason: None,
+                    });
+                }
+            }
+        }
+    }
+
+    refs
+}
+
 async fn hydrate_issue_refs_from_github(
     app: &AppHandle,
     refs: Vec<crate::context_pack::IssueRef>,
@@ -807,6 +825,217 @@ async fn fetch_base_branch_codeowners(
             tracing::warn!("Failed to fetch base-branch CODEOWNERS: {}", err);
             None
         }
+    }
+}
+
+/// Platform-aware CODEOWNERS fetch using the adapter trait.
+async fn fetch_codeowners_via_adapter(
+    adapter: &dyn crate::platform::adapter::PlatformAdapter,
+    base_ref: &str,
+    platform_name: &str,
+) -> Option<String> {
+    let locations = match platform_name {
+        "gitlab" => crate::context_pack::CODEOWNERS_LOCATIONS_GITLAB,
+        _ => crate::context_pack::CODEOWNERS_LOCATIONS_GITHUB,
+    };
+    for path in locations {
+        match adapter.fetch_file_content(path, base_ref).await {
+            Ok(Some(content)) => return Some(content),
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::warn!("Failed to fetch {} from base branch: {}", path, err);
+                continue;
+            }
+        }
+    }
+    None
+}
+
+async fn hydrate_issue_refs_via_adapter(
+    adapter: &dyn crate::platform::adapter::PlatformAdapter,
+    refs: Vec<crate::context_pack::IssueRef>,
+) -> Vec<crate::context_pack::IssueRef> {
+    if refs.is_empty() {
+        return refs;
+    }
+
+    let issue_ids: Vec<i64> = refs
+        .iter()
+        .filter_map(|r| r.number.parse::<i64>().ok())
+        .collect();
+    let contexts = match adapter.fetch_issue_context(&issue_ids, MAX_ISSUES).await {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to fetch issue context via platform adapter: {}",
+                err
+            );
+            return refs
+                .into_iter()
+                .map(|mut issue_ref| {
+                    issue_ref.omit_reason = Some("fetch_failed".to_string());
+                    issue_ref
+                })
+                .collect();
+        }
+    };
+
+    let mut by_number: HashMap<String, crate::platform::adapter::IssueContext> = contexts
+        .into_iter()
+        .map(|c| (c.number.to_string(), c))
+        .collect();
+    let mut hydrated = Vec::new();
+    let mut total_issue_bytes = 0usize;
+
+    for (index, issue_ref) in refs.into_iter().enumerate() {
+        if index >= MAX_ISSUES {
+            hydrated.push(crate::context_pack::IssueRef {
+                omit_reason: Some("budget_exceeded".to_string()),
+                ..issue_ref
+            });
+            continue;
+        }
+
+        if let Some(context) = by_number.remove(&issue_ref.number) {
+            let body_excerpt = context
+                .body_excerpt
+                .as_deref()
+                .map(|b| truncate_to_bytes(b, MAX_ISSUE_BODY_EXCERPT_BYTES))
+                .unwrap_or_default();
+            let estimated_bytes = context.title.len()
+                + body_excerpt.len()
+                + context.labels.iter().map(String::len).sum::<usize>()
+                + 64;
+            if total_issue_bytes + estimated_bytes > MAX_ISSUE_CONTEXT_BYTES_TOTAL {
+                hydrated.push(crate::context_pack::IssueRef {
+                    omit_reason: Some("budget_exceeded".to_string()),
+                    ..issue_ref
+                });
+                continue;
+            }
+            total_issue_bytes += estimated_bytes;
+            hydrated.push(crate::context_pack::IssueRef {
+                title: context.title,
+                body_excerpt,
+                labels: context.labels,
+                state: None,
+                omit_reason: None,
+                ..issue_ref
+            });
+        } else {
+            hydrated.push(crate::context_pack::IssueRef {
+                omit_reason: Some("fetch_failed".to_string()),
+                ..issue_ref
+            });
+        }
+    }
+
+    hydrated
+}
+
+async fn resolve_issue_refs_and_codeowners(
+    app: &AppHandle,
+    db: &AppDb,
+    pr_id: &str,
+) -> (
+    Vec<crate::context_pack::IssueRef>,
+    Option<String>,
+    Option<String>,
+) {
+    let (pr_url, metadata_json) = {
+        let conn = db.0.lock().ok();
+        conn.and_then(|c| {
+            let pr = queries::get_pull_request(&c, pr_id).ok()??;
+            Some((pr.url, pr.platform_metadata_json))
+        })
+        .unwrap_or_default()
+    };
+    if pr_url.is_empty() {
+        return (Vec::new(), None, None);
+    }
+
+    let review_url = match crate::platform::parse_review_url(&pr_url) {
+        Ok(url) => url,
+        Err(err) => {
+            tracing::warn!("Unable to parse review URL for context hydration: {}", err);
+            return (Vec::new(), None, None);
+        }
+    };
+    let (default_owner, default_repo) = review_url.owner_and_repo();
+
+    let platform_metadata = metadata_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str::<crate::platform::adapter::PlatformMetadata>(j).ok());
+    let legacy_github_metadata = metadata_json.as_deref().and_then(|j| {
+        serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(j).ok()
+    });
+
+    let issue_refs_seed = if platform_metadata.is_some() {
+        build_issue_refs_from_platform_metadata(
+            platform_metadata.as_ref(),
+            &default_owner,
+            &default_repo,
+        )
+    } else {
+        build_issue_refs_from_metadata(
+            legacy_github_metadata.as_ref(),
+            &default_owner,
+            &default_repo,
+        )
+    };
+
+    let adapter = crate::commands::pr_metadata::build_adapter(app, &review_url)
+        .await
+        .ok();
+    let issue_refs = if let Some(adapter) = adapter.as_ref() {
+        if adapter.platform_name() == "gitlab" {
+            hydrate_issue_refs_via_adapter(adapter.as_ref(), issue_refs_seed).await
+        } else {
+            hydrate_issue_refs_from_github(app, issue_refs_seed).await
+        }
+    } else if matches!(review_url, crate::platform::ParsedReviewUrl::GitHub { .. }) {
+        hydrate_issue_refs_from_github(app, issue_refs_seed).await
+    } else {
+        issue_refs_seed
+            .into_iter()
+            .map(|mut issue_ref| {
+                issue_ref.omit_reason = Some("fetch_failed".to_string());
+                issue_ref
+            })
+            .collect()
+    };
+
+    let base_ref = if let Some(meta) = platform_metadata.as_ref() {
+        match meta {
+            crate::platform::adapter::PlatformMetadata::GitHub(g) => g.base_ref.as_str(),
+            crate::platform::adapter::PlatformMetadata::GitLab(g) => g.base_ref.as_str(),
+        }
+    } else {
+        legacy_github_metadata
+            .as_ref()
+            .map(|m| m.base_ref.as_str())
+            .unwrap_or("main")
+    };
+
+    if let Some(adapter) = adapter.as_ref() {
+        let platform_name = adapter.platform_name();
+        let codeowners =
+            fetch_codeowners_via_adapter(adapter.as_ref(), base_ref, platform_name).await;
+        (
+            issue_refs,
+            codeowners,
+            Some(format!("{platform_name}:base-branch:CODEOWNERS")),
+        )
+    } else if let crate::platform::ParsedReviewUrl::GitHub { .. } = review_url {
+        let codeowners =
+            fetch_base_branch_codeowners(app, &default_owner, &default_repo, base_ref).await;
+        (
+            issue_refs,
+            codeowners,
+            Some("github:base-branch:CODEOWNERS".to_string()),
+        )
+    } else {
+        (issue_refs, None, None)
     }
 }
 
@@ -1053,53 +1282,12 @@ pub async fn resume_review(
             })
         };
 
-        let (issue_refs, base_branch_codeowners) = {
-            let (pr_url, metadata): (
-                Option<String>,
-                Option<crate::providers::github::PlatformMetadataSnapshot>,
-            ) = {
-                let conn = db.0.lock().ok();
-                conn.and_then(|c| {
-                    let pr = queries::get_pull_request(&c, &pr_id).ok()??;
-                    Some((
-                        Some(pr.url),
-                        pr.platform_metadata_json
-                            .as_deref()
-                            .and_then(|j| serde_json::from_str(j).ok()),
-                    ))
-                })
-                .unwrap_or((None, None))
-            };
-
-            let parsed = pr_url.as_deref().and_then(|u| parse_pr_url(u).ok());
-            let issue_refs = if let Some(parsed) = parsed.as_ref() {
-                let refs =
-                    build_issue_refs_from_metadata(metadata.as_ref(), &parsed.owner, &parsed.repo);
-                hydrate_issue_refs_from_github(&app_clone, refs).await
-            } else {
-                Vec::new()
-            };
-
-            let base_branch_codeowners = if let Some(parsed) = parsed.as_ref() {
-                let base_ref = metadata
-                    .as_ref()
-                    .map(|m| m.base_ref.as_str())
-                    .unwrap_or("main");
-                fetch_base_branch_codeowners(&app_clone, &parsed.owner, &parsed.repo, base_ref)
-                    .await
-            } else {
-                None
-            };
-
-            (issue_refs, base_branch_codeowners)
-        };
+        let (issue_refs, base_branch_codeowners, codeowners_source) =
+            resolve_issue_refs_and_codeowners(&app_clone, &db, &pr_id).await;
 
         let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
             .with_preferences(preference_text)
-            .with_codeowners_content(
-                base_branch_codeowners.clone(),
-                Some("github:base-branch:CODEOWNERS".to_string()),
-            )
+            .with_codeowners_content(base_branch_codeowners.clone(), codeowners_source)
             .with_issues(issue_refs)
             .build();
 
@@ -1337,6 +1525,7 @@ mod tests {
             remote_owner: "o".into(),
             remote_repo: "r".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
+            remote_host: "github.com".into(),
         };
         queries::insert_workspace(&conn, &workspace).unwrap();
 

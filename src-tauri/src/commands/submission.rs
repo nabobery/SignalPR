@@ -5,7 +5,6 @@ use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 
 use crate::cleaner::{remap, verify};
-use crate::commands::intake::parse_pr_url;
 use crate::preferences::{decisions, scoring};
 use crate::storage::db::AppDb;
 use crate::storage::event_log::EventLog;
@@ -25,6 +24,12 @@ struct SubmissionContext<'a> {
     body: &'a str,
     active_findings: &'a [&'a Finding],
     anchors_verified: bool,
+}
+
+#[derive(Clone, Copy)]
+enum SuggestionPlatform {
+    GitHub,
+    GitLab,
 }
 
 #[tauri::command]
@@ -61,7 +66,7 @@ pub async fn submit_review(
     }
 
     // Get run + PR + findings
-    let (pr_id, owner, repo, pr_number, mut findings, reviewer_decisions, old_diff, old_diff_hash) = {
+    let (pr_id, pr_url, pr_number, mut findings, reviewer_decisions, old_diff, old_diff_hash) = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
@@ -72,10 +77,6 @@ pub async fn submit_review(
         let findings = queries::get_findings_for_run(&conn, &run_id)?;
         let reviewer_decisions = queries::get_decisions_for_run(&conn, &run_id)?;
 
-        let parsed = parse_pr_url(&pr.url)?;
-        let owner = parsed.owner;
-        let repo = parsed.repo;
-
         let old_diff = pr.diff_text.clone().unwrap_or_default();
         let old_hash = pr
             .diff_hash
@@ -84,8 +85,7 @@ pub async fn submit_review(
 
         (
             run.pr_id,
-            owner,
-            repo,
+            pr.url,
             pr.pr_number,
             findings,
             reviewer_decisions,
@@ -93,6 +93,8 @@ pub async fn submit_review(
             old_hash,
         )
     };
+    let review_url = crate::platform::parse_review_url(&pr_url)?;
+    let adapter = crate::commands::pr_metadata::build_adapter(&app, &review_url).await?;
 
     // Best-effort: fetch latest diff and reconcile anchors for safe inline comments.
     let mut anchors_verified_for_submission = false;
@@ -102,7 +104,7 @@ pub async fn submit_review(
         .map(|f| f.id.clone())
         .collect();
 
-    if let Ok(latest_diff) = fetch_latest_diff(&app, &owner, &repo, pr_number).await {
+    if let Ok(latest_diff) = adapter.fetch_diff().await {
         let new_hash = sha256_hex(&latest_diff);
         let (updated, suppressed_ids) =
             reconcile_findings_for_latest_diff(findings, &old_diff, &latest_diff);
@@ -203,49 +205,120 @@ pub async fn submit_review(
     );
 
     // Resolve head SHA from metadata for coherent review submission
-    let head_sha = {
+    let (head_sha, is_gitlab) = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
         let pr = queries::get_pull_request(&conn, &pr_id)?
             .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
-        pr.platform_metadata_json
-            .as_deref()
-            .and_then(|j| {
-                serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(j).ok()
+
+        let meta_json = pr.platform_metadata_json.as_deref();
+        let sha = meta_json.and_then(|j| {
+            if let Ok(pm) = serde_json::from_str::<crate::platform::adapter::PlatformMetadata>(j) {
+                match &pm {
+                    crate::platform::adapter::PlatformMetadata::GitHub(g) => {
+                        Some(g.head_sha.clone())
+                    }
+                    crate::platform::adapter::PlatformMetadata::GitLab(g) => {
+                        Some(g.head_sha.clone())
+                    }
+                }
+            } else {
+                serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(j)
+                    .ok()
+                    .map(|m| m.head_sha)
+            }
+        });
+
+        let is_gl = matches!(review_url, crate::platform::ParsedReviewUrl::GitLab { .. });
+        (sha, is_gl)
+    };
+
+    // Route submission by platform
+    let (gh_review_id, used_native) = if is_gitlab {
+        let inline_comments: Vec<crate::platform::adapter::InlineComment> = active_findings
+            .iter()
+            .filter(|f| f.is_anchored && anchors_verified_for_submission)
+            .filter_map(|f| {
+                let path = f.file_path.as_ref()?;
+                let line = f.diff_new_line.or(f.line_start);
+                let sev_label = f
+                    .user_severity_override
+                    .as_deref()
+                    .unwrap_or(&f.severity)
+                    .to_uppercase();
+                let fingerprint = f.fingerprint.as_deref().unwrap_or(&f.id).to_string();
+                let comment_body = build_inline_comment_body(
+                    f,
+                    &sev_label,
+                    &fingerprint,
+                    SuggestionPlatform::GitLab,
+                );
+                Some(crate::platform::adapter::InlineComment {
+                    path: path.clone(),
+                    body: comment_body,
+                    line,
+                    side: f.diff_side.clone(),
+                    start_line: None,
+                })
             })
-            .map(|m| m.head_sha)
-    };
+            .collect();
 
-    // Try native API coherent review first, fall back to gh CLI
-    let submission_ctx = SubmissionContext {
-        app: &app,
-        owner: &owner,
-        repo: &repo,
-        pr_number,
-        action: &action,
-        body: &body,
-        active_findings: &active_findings,
-        anchors_verified: anchors_verified_for_submission,
-    };
+        let gl_event = match action.as_str() {
+            "approve" => "approve",
+            "request-changes" => "request_changes",
+            _ => "comment",
+        };
 
-    let submission_result = if let Some(ref sha) = head_sha {
-        submit_via_native_api(&submission_ctx, sha).await
+        let payload = crate::platform::adapter::SubmissionPayload {
+            body: body.clone(),
+            event: gl_event.to_string(),
+            inline_comments,
+            commit_id: head_sha.clone().unwrap_or_default(),
+        };
+
+        adapter.submit_review(payload).await?;
+        (None, true)
     } else {
-        Err(AppError::InvalidInput(
-            "No head SHA available; falling back to gh CLI".into(),
-        ))
-    };
+        let (owner, repo) = match &review_url {
+            crate::platform::ParsedReviewUrl::GitHub { owner, repo, .. } => {
+                (owner.clone(), repo.clone())
+            }
+            _ => {
+                return Err(AppError::InvalidInput(
+                    "Expected GitHub review URL for native GitHub submission".into(),
+                ));
+            }
+        };
+        let submission_ctx = SubmissionContext {
+            app: &app,
+            owner: &owner,
+            repo: &repo,
+            pr_number,
+            action: &action,
+            body: &body,
+            active_findings: &active_findings,
+            anchors_verified: anchors_verified_for_submission,
+        };
 
-    let (gh_review_id, used_native) = match submission_result {
-        Ok(review_id) => (Some(review_id), true),
-        Err(native_err) => {
-            tracing::info!(
-                "Native API submission unavailable ({}); falling back to gh CLI",
-                native_err
-            );
-            submit_via_gh_cli(&submission_ctx).await?;
-            (None, false)
+        let submission_result = if let Some(ref sha) = head_sha {
+            submit_via_native_api(&submission_ctx, sha).await
+        } else {
+            Err(AppError::InvalidInput(
+                "No head SHA available; falling back to gh CLI".into(),
+            ))
+        };
+
+        match submission_result {
+            Ok(review_id) => (Some(review_id), true),
+            Err(native_err) => {
+                tracing::info!(
+                    "Native API submission unavailable ({}); falling back to gh CLI",
+                    native_err
+                );
+                submit_via_gh_cli(&submission_ctx).await?;
+                (None, false)
+            }
         }
     };
 
@@ -365,7 +438,12 @@ async fn submit_via_native_api(
             if !seen_fingerprints.insert(fingerprint.clone()) {
                 continue;
             }
-            let comment_body = build_inline_comment_body(finding, &severity_label, &fingerprint);
+            let comment_body = build_inline_comment_body(
+                finding,
+                &severity_label,
+                &fingerprint,
+                SuggestionPlatform::GitHub,
+            );
 
             let (start_line, start_side) = if let Some(ls) = finding.line_start {
                 if ls < line {
@@ -527,7 +605,12 @@ async fn post_inline_comments(
         if !existing_fingerprints.insert(fingerprint.clone()) {
             continue;
         }
-        let comment_body = build_inline_comment_body(finding, &severity_label, &fingerprint);
+        let comment_body = build_inline_comment_body(
+            finding,
+            &severity_label,
+            &fingerprint,
+            SuggestionPlatform::GitHub,
+        );
 
         tracing::info!(
             "Posting inline comment on {}:{} — {}",
@@ -631,17 +714,33 @@ fn inline_comment_fingerprint(finding: &Finding) -> String {
     })
 }
 
-fn render_suggestion_block(replacement: &str) -> String {
+fn render_suggestion_block(
+    replacement: &str,
+    platform: SuggestionPlatform,
+    old_line_span: usize,
+) -> String {
+    let header = match platform {
+        SuggestionPlatform::GitHub => "suggestion".to_string(),
+        SuggestionPlatform::GitLab => {
+            let bounded_span = old_line_span.clamp(1, 101);
+            format!("suggestion:-0+{}", bounded_span.saturating_sub(1))
+        }
+    };
     if !replacement.contains("```") {
-        return format!("```suggestion\n{}\n```", replacement);
+        return format!("```{}\n{}\n```", header, replacement);
     }
     if !replacement.contains("~~~") {
-        return format!("~~~suggestion\n{}\n~~~", replacement);
+        return format!("~~~{}\n{}\n~~~", header, replacement);
     }
-    format!("````suggestion\n{}\n````", replacement)
+    format!("````{}\n{}\n````", header, replacement)
 }
 
-fn build_inline_comment_body(finding: &Finding, severity_label: &str, fingerprint: &str) -> String {
+fn build_inline_comment_body(
+    finding: &Finding,
+    severity_label: &str,
+    fingerprint: &str,
+    platform: SuggestionPlatform,
+) -> String {
     let display_body = finding.user_edited_body.as_deref().unwrap_or(&finding.body);
     let mut comment_body = format!(
         "**[{}]** {}\n\n{}",
@@ -650,8 +749,9 @@ fn build_inline_comment_body(finding: &Finding, severity_label: &str, fingerprin
 
     if let (Some(search), Some(replace)) = (&finding.fix_search, &finding.fix_replace) {
         if !search.trim().is_empty() {
+            let old_line_span = search.lines().count().max(1);
             comment_body.push_str("\n\n");
-            comment_body.push_str(&render_suggestion_block(replace));
+            comment_body.push_str(&render_suggestion_block(replace, platform, old_line_span));
         }
     }
 
@@ -660,40 +760,6 @@ fn build_inline_comment_body(finding: &Finding, severity_label: &str, fingerprin
     comment_body.push_str(fingerprint);
     comment_body.push_str(INLINE_FINGERPRINT_SUFFIX);
     comment_body
-}
-
-async fn fetch_latest_diff(
-    app: &AppHandle,
-    owner: &str,
-    repo: &str,
-    pr_number: i32,
-) -> Result<String, crate::errors::AppError> {
-    use crate::errors::AppError;
-    let shell = app.shell();
-    let output = shell
-        .command("gh")
-        .args([
-            "pr",
-            "diff",
-            &pr_number.to_string(),
-            "--repo",
-            &format!("{}/{}", owner, repo),
-        ])
-        .output()
-        .await
-        .map_err(|e| AppError::Transient(format!("Failed to fetch latest diff: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() {
-            "gh pr diff failed".to_string()
-        } else {
-            format!("gh pr diff failed: {}", stderr)
-        };
-        return Err(AppError::Transient(msg));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn reconcile_findings_for_latest_diff(
@@ -1007,5 +1073,70 @@ mod tests {
         decisions.insert("f1".to_string(), "skip".to_string());
         let included_with_skip = should_include_in_submission(&f, &decisions);
         assert!(!included_with_skip);
+    }
+
+    #[test]
+    fn test_render_suggestion_block_plain() {
+        let result = render_suggestion_block("let x = 1;", SuggestionPlatform::GitHub, 1);
+        assert_eq!(result, "```suggestion\nlet x = 1;\n```");
+    }
+
+    #[test]
+    fn test_render_suggestion_block_with_backticks() {
+        let result = render_suggestion_block(
+            "use `foo::bar`;\nlet x = ```nested```;",
+            SuggestionPlatform::GitHub,
+            1,
+        );
+        assert_eq!(
+            result,
+            "~~~suggestion\nuse `foo::bar`;\nlet x = ```nested```;\n~~~"
+        );
+    }
+
+    #[test]
+    fn test_render_suggestion_block_with_both_fences() {
+        let code = "triple ``` and tilde ~~~ in same code";
+        let result = render_suggestion_block(code, SuggestionPlatform::GitHub, 1);
+        assert!(result.starts_with("````suggestion\n"));
+        assert!(result.ends_with("\n````"));
+    }
+
+    #[test]
+    fn test_render_suggestion_block_gitlab_multiline() {
+        let result = render_suggestion_block("line one\nline two", SuggestionPlatform::GitLab, 2);
+        assert_eq!(result, "```suggestion:-0+1\nline one\nline two\n```");
+    }
+
+    #[test]
+    fn test_build_inline_comment_body_includes_fingerprint() {
+        let f = make_finding(
+            "warning",
+            "Unused var",
+            "Variable not used",
+            Some("src/a.rs"),
+        );
+        let body = build_inline_comment_body(&f, "WARNING", "fp123", SuggestionPlatform::GitHub);
+        assert!(body.contains("**[WARNING]** Unused var"));
+        assert!(body.contains("Variable not used"));
+        assert!(body.contains("fp123"));
+    }
+
+    #[test]
+    fn test_build_inline_comment_body_with_fix_suggestion() {
+        let mut f = make_finding("warning", "Fix me", "Body", Some("src/a.rs"));
+        f.fix_search = Some("old_code".into());
+        f.fix_replace = Some("new_code".into());
+        let body = build_inline_comment_body(&f, "WARNING", "fp", SuggestionPlatform::GitHub);
+        assert!(body.contains("```suggestion\nnew_code\n```"));
+    }
+
+    #[test]
+    fn test_build_inline_comment_body_with_gitlab_fix_suggestion() {
+        let mut f = make_finding("warning", "Fix me", "Body", Some("src/a.rs"));
+        f.fix_search = Some("old_a\nold_b".into());
+        f.fix_replace = Some("new_a\nnew_b".into());
+        let body = build_inline_comment_body(&f, "WARNING", "fp", SuggestionPlatform::GitLab);
+        assert!(body.contains("```suggestion:-0+1\nnew_a\nnew_b\n```"));
     }
 }

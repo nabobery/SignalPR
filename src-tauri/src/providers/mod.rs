@@ -7,6 +7,7 @@ pub mod copilot;
 pub mod cursor;
 pub mod gemini;
 pub mod github;
+pub mod gitlab;
 pub mod governance;
 pub mod jsonrpc;
 #[cfg(test)]

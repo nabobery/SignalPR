@@ -7,8 +7,8 @@ use super::models::*;
 
 pub fn insert_workspace(conn: &Connection, ws: &Workspace) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![ws.id, ws.local_path, ws.remote_owner, ws.remote_repo, ws.created_at],
+        "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo, created_at, remote_host) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![ws.id, ws.local_path, ws.remote_owner, ws.remote_repo, ws.created_at, ws.remote_host],
     )?;
     Ok(())
 }
@@ -18,16 +18,26 @@ pub fn get_workspace_by_remote(
     owner: &str,
     repo: &str,
 ) -> Result<Option<Workspace>, rusqlite::Error> {
+    get_workspace_by_remote_and_host(conn, "github.com", owner, repo)
+}
+
+pub fn get_workspace_by_remote_and_host(
+    conn: &Connection,
+    host: &str,
+    owner: &str,
+    repo: &str,
+) -> Result<Option<Workspace>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, local_path, remote_owner, remote_repo, created_at FROM workspaces WHERE remote_owner = ?1 AND remote_repo = ?2 LIMIT 1",
+        "SELECT id, local_path, remote_owner, remote_repo, created_at, remote_host FROM workspaces WHERE remote_host = ?1 AND remote_owner = ?2 AND remote_repo = ?3 LIMIT 1",
     )?;
-    let mut rows = stmt.query_map(params![owner, repo], |row| {
+    let mut rows = stmt.query_map(params![host, owner, repo], |row| {
         Ok(Workspace {
             id: row.get(0)?,
             local_path: row.get(1)?,
             remote_owner: row.get(2)?,
             remote_repo: row.get(3)?,
             created_at: row.get(4)?,
+            remote_host: row.get(5)?,
         })
     })?;
     match rows.next() {
@@ -840,7 +850,7 @@ pub fn get_workspace_by_id(
     workspace_id: &str,
 ) -> Result<Option<Workspace>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, local_path, remote_owner, remote_repo, created_at FROM workspaces WHERE id = ?1 LIMIT 1",
+        "SELECT id, local_path, remote_owner, remote_repo, created_at, remote_host FROM workspaces WHERE id = ?1 LIMIT 1",
     )?;
     let mut rows = stmt.query_map(params![workspace_id], |row| {
         Ok(Workspace {
@@ -849,6 +859,7 @@ pub fn get_workspace_by_id(
             remote_owner: row.get(2)?,
             remote_repo: row.get(3)?,
             created_at: row.get(4)?,
+            remote_host: row.get(5)?,
         })
     })?;
     match rows.next() {
@@ -955,6 +966,7 @@ mod tests {
             remote_owner: "octocat".into(),
             remote_repo: "hello-world".into(),
             created_at: "2026-03-27T00:00:00".into(),
+            remote_host: "github.com".into(),
         };
         insert_workspace(&conn, &ws).unwrap();
         let found = get_workspace_by_remote(&conn, "octocat", "hello-world")
@@ -980,6 +992,7 @@ mod tests {
             remote_owner: "o".into(),
             remote_repo: "r".into(),
             created_at: "2026-01-01T00:00:00".into(),
+            remote_host: "github.com".into(),
         };
         insert_workspace(&conn, &ws).unwrap();
 
@@ -1018,6 +1031,7 @@ mod tests {
                 remote_owner: "o".into(),
                 remote_repo: "r".into(),
                 created_at: "2026-01-01T00:00:00Z".into(),
+                remote_host: "github.com".into(),
             },
         )
         .unwrap();
@@ -1083,6 +1097,7 @@ mod tests {
                 remote_owner: "o".into(),
                 remote_repo: "r".into(),
                 created_at: "2026-01-01T00:00:00".into(),
+                remote_host: "github.com".into(),
             },
         )
         .unwrap();
@@ -1136,7 +1151,7 @@ mod tests {
     #[test]
     fn test_findings_crud() {
         let conn = test_db();
-        // Setup chain: workspace → PR → review run
+        // Setup chain: workspace -> PR -> review run
         insert_workspace(
             &conn,
             &Workspace {
@@ -1145,6 +1160,7 @@ mod tests {
                 remote_owner: "o".into(),
                 remote_repo: "r".into(),
                 created_at: "2026-01-01T00:00:00".into(),
+                remote_host: "github.com".into(),
             },
         )
         .unwrap();
@@ -1253,6 +1269,7 @@ mod tests {
                 remote_owner: "o".into(),
                 remote_repo: "r".into(),
                 created_at: "2026-01-01T00:00:00".into(),
+                remote_host: "github.com".into(),
             },
         )
         .unwrap();
@@ -1385,6 +1402,7 @@ mod tests {
                 remote_owner: "o".into(),
                 remote_repo: "r".into(),
                 created_at: "2026-01-01T00:00:00Z".into(),
+                remote_host: "github.com".into(),
             },
         )
         .unwrap();
@@ -1486,6 +1504,7 @@ mod tests {
                 remote_owner: "o".into(),
                 remote_repo: "r".into(),
                 created_at: "2026-01-01T00:00:00".into(),
+                remote_host: "github.com".into(),
             },
         )
         .unwrap();
@@ -1631,6 +1650,7 @@ mod tests {
                 remote_owner: "o".into(),
                 remote_repo: "r".into(),
                 created_at: "2026-01-01T00:00:00".into(),
+                remote_host: "github.com".into(),
             },
         )
         .unwrap();

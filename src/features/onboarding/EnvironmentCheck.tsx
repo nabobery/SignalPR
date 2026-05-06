@@ -19,8 +19,10 @@ export function EnvironmentCheck({ onReady }: { onReady: (ready: boolean) => voi
     inspectEnvironment()
       .then((result) => {
         setTools(result);
-        const ghReady = result.some((t) => t.tool_name === "gh" && t.status === "ready");
-        onReady(ghReady);
+        const hasSubmitPath = result.some(
+          (t) => (t.tool_name === "gh" || t.tool_name === "gitlab_token") && t.status === "ready",
+        );
+        onReady(hasSubmitPath);
       })
       .catch((err) => setError(parseError(err).message))
       .finally(() => setLoading(false));

@@ -234,6 +234,11 @@ ALTER TABLE pull_requests ADD COLUMN platform_metadata_json TEXT;
 ALTER TABLE pull_requests ADD COLUMN platform_metadata_fetched_at TEXT;
 "#;
 
+const MIGRATION_V10: &str = r#"
+-- Phase 6: Multi-platform support (GitLab adapter)
+ALTER TABLE workspaces ADD COLUMN remote_host TEXT NOT NULL DEFAULT 'github.com';
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -311,6 +316,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V9)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (9)",
+            [],
+        )?;
+    }
+
+    if current_version < 10 {
+        conn.execute_batch(MIGRATION_V10)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (10)",
             [],
         )?;
     }

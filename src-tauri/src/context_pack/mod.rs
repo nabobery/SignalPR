@@ -14,10 +14,15 @@ const STANDARD_DOC_NAMES: &[&str] = &[
 ];
 
 /// GitHub searches in this order: .github/, root, docs/
-const CODEOWNERS_LOCATIONS: &[&str] = &[".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+pub const CODEOWNERS_LOCATIONS_GITHUB: &[&str] =
+    &[".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+
+/// GitLab searches in this order: root, docs, then .gitlab.
+pub const CODEOWNERS_LOCATIONS_GITLAB: &[&str] =
+    &["CODEOWNERS", "docs/CODEOWNERS", ".gitlab/CODEOWNERS"];
 
 /// Truncate a UTF-8 string to at most `max_bytes` bytes on a valid char boundary.
-fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
@@ -308,7 +313,7 @@ impl<'a> ContextPackBuilder<'a> {
             } else {
                 let mut owners_content: Option<String> = None;
                 let mut found_path = String::new();
-                for location in CODEOWNERS_LOCATIONS {
+                for location in CODEOWNERS_LOCATIONS_GITHUB {
                     let full_path = self.workspace_path.join(location);
                     if let Ok(content) = std::fs::read_to_string(&full_path) {
                         found_path = full_path.display().to_string();
@@ -478,7 +483,7 @@ impl<'a> ContextPackBuilder<'a> {
 /// Read CODEOWNERS content from a local workspace directory.
 /// Checks `.github/CODEOWNERS`, `CODEOWNERS`, and `docs/CODEOWNERS` in order.
 pub fn read_local_codeowners(workspace_path: &Path) -> Option<String> {
-    for location in CODEOWNERS_LOCATIONS {
+    for location in CODEOWNERS_LOCATIONS_GITHUB {
         let full_path = workspace_path.join(location);
         if let Ok(content) = std::fs::read_to_string(&full_path) {
             return Some(content);
@@ -1362,5 +1367,37 @@ mod tests {
         let dir = tempdir().unwrap();
         let content = read_local_codeowners(dir.path());
         assert!(content.is_none());
+    }
+
+    #[test]
+    fn test_codeowners_location_order_github() {
+        assert_eq!(
+            CODEOWNERS_LOCATIONS_GITHUB,
+            &[".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
+        );
+    }
+
+    #[test]
+    fn test_codeowners_location_order_gitlab() {
+        assert_eq!(
+            CODEOWNERS_LOCATIONS_GITLAB,
+            &["CODEOWNERS", "docs/CODEOWNERS", ".gitlab/CODEOWNERS"]
+        );
+        assert_eq!(
+            CODEOWNERS_LOCATIONS_GITLAB[0], "CODEOWNERS",
+            "GitLab checks repository root first"
+        );
+    }
+
+    #[test]
+    fn test_codeowners_github_vs_gitlab_first_location_differs() {
+        assert_ne!(
+            CODEOWNERS_LOCATIONS_GITHUB[0], CODEOWNERS_LOCATIONS_GITLAB[0],
+            "GitHub and GitLab should have different first search location"
+        );
+        assert_eq!(
+            CODEOWNERS_LOCATIONS_GITHUB[1], CODEOWNERS_LOCATIONS_GITLAB[0],
+            "Both platforms include root CODEOWNERS in early lookup order"
+        );
     }
 }

@@ -23,6 +23,7 @@ pub async fn inspect_environment(
     let mut results = vec![];
 
     results.push(check_gh(&app, &now).await);
+    results.push(check_gitlab_token(&now));
     results.push(check_codex(&app, &now).await);
     results.push(check_copilot(&app, &now).await);
     results.push(check_opencode(&app, &now).await);
@@ -37,6 +38,7 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
     let mut tools = vec![];
 
     tools.push(check_gh(app, &now).await);
+    tools.push(check_gitlab_token(&now));
     tools.push(check_codex(app, &now).await);
     tools.push(check_claude(&now));
     tools.push(check_copilot(app, &now).await);
@@ -46,7 +48,7 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
 
     let can_submit = tools
         .iter()
-        .any(|t| t.tool_name == "gh" && t.status == "ready");
+        .any(|t| (t.tool_name == "gh" || t.tool_name == "gitlab_token") && t.status == "ready");
     let available_providers: Vec<String> = tools
         .iter()
         .filter(|t| {
@@ -67,7 +69,7 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
         warnings.push("No AI providers available".into());
     }
     if !can_submit {
-        warnings.push("GitHub CLI not ready".into());
+        warnings.push("No submit path ready (need GitHub CLI or GITLAB_TOKEN)".into());
     }
 
     EnvironmentSummary {
@@ -134,6 +136,25 @@ async fn check_gh(app: &AppHandle, now: &str) -> ToolStatus {
         version,
         message: None,
         checked_at: now.into(),
+    }
+}
+
+fn check_gitlab_token(now: &str) -> ToolStatus {
+    match std::env::var("GITLAB_TOKEN") {
+        Ok(val) if !val.is_empty() => ToolStatus {
+            tool_name: "gitlab_token".into(),
+            status: "ready".into(),
+            version: None,
+            message: Some("GITLAB_TOKEN set".into()),
+            checked_at: now.into(),
+        },
+        _ => ToolStatus {
+            tool_name: "gitlab_token".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some("Optional: Set GITLAB_TOKEN for GitLab MR submission".into()),
+            checked_at: now.into(),
+        },
     }
 }
 
@@ -381,7 +402,7 @@ mod tests {
     fn build_summary(tools: &[crate::storage::models::ToolStatus]) -> EnvironmentSummary {
         let can_submit = tools
             .iter()
-            .any(|t| t.tool_name == "gh" && t.status == "ready");
+            .any(|t| (t.tool_name == "gh" || t.tool_name == "gitlab_token") && t.status == "ready");
         let available_providers: Vec<String> = tools
             .iter()
             .filter(|t| {
@@ -401,7 +422,7 @@ mod tests {
             warnings.push("No AI providers available".into());
         }
         if !can_submit {
-            warnings.push("GitHub CLI not ready".into());
+            warnings.push("No submit path ready (need GitHub CLI or GITLAB_TOKEN)".into());
         }
         EnvironmentSummary {
             can_review,
@@ -471,5 +492,36 @@ mod tests {
         let summary = build_summary(&[tool("gh", "ready"), tool("claude_code", "ready")]);
         assert!(summary.can_review);
         assert_eq!(summary.available_providers, vec!["claude_code"]);
+    }
+
+    #[test]
+    fn test_gitlab_token_ready_enables_can_submit() {
+        let summary = build_summary(&[
+            tool("gh", "missing"),
+            tool("gitlab_token", "ready"),
+            tool("codex", "ready"),
+        ]);
+        assert!(summary.can_submit);
+        assert!(summary.can_review);
+    }
+
+    #[test]
+    fn test_gitlab_token_missing_gh_missing_no_submit() {
+        let summary = build_summary(&[
+            tool("gh", "missing"),
+            tool("gitlab_token", "missing"),
+            tool("codex", "ready"),
+        ]);
+        assert!(!summary.can_submit);
+    }
+
+    #[test]
+    fn test_either_submit_path_enables_can_submit() {
+        let summary = build_summary(&[
+            tool("gh", "ready"),
+            tool("gitlab_token", "ready"),
+            tool("codex", "ready"),
+        ]);
+        assert!(summary.can_submit);
     }
 }

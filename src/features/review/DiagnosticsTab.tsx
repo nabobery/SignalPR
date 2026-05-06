@@ -253,12 +253,18 @@ function PlatformMetadataSection({
           className="min-w-0 flex items-center gap-2 text-left hover:text-zinc-100 transition-colors"
         >
           <GitBranch className="w-4 h-4 text-zinc-400" />
-          <span className="text-sm font-medium text-zinc-200">GitHub Metadata</span>
+          <span className="text-sm font-medium text-zinc-200">
+            {data.platform === "gitlab" ? "GitLab" : "GitHub"} Metadata
+          </span>
           <span className="text-xs text-zinc-500">
             {data.head_sha.slice(0, 7)} &middot; {data.labels.length} label
             {data.labels.length !== 1 ? "s" : ""}
-            {data.linked_issue_numbers.length > 0 &&
+            {data.platform === "github" &&
+              data.linked_issue_numbers.length > 0 &&
               ` \u00b7 ${data.linked_issue_numbers.length} issue${data.linked_issue_numbers.length !== 1 ? "s" : ""}`}
+            {data.platform === "gitlab" &&
+              data.closes_issues.length > 0 &&
+              ` \u00b7 ${data.closes_issues.length} issue${data.closes_issues.length !== 1 ? "s" : ""}`}
             {fetchedTimeLabel && ` \u00b7 ${fetchedTimeLabel}`}
           </span>
         </button>
@@ -286,36 +292,57 @@ function PlatformMetadataSection({
             <span className="text-zinc-500">Base:</span> {data.base_ref} (
             {data.base_sha.slice(0, 12)})
           </div>
-          {data.draft && <div className="text-yellow-400">Draft PR</div>}
+          {data.draft && (
+            <div className="text-yellow-400">Draft {data.platform === "gitlab" ? "MR" : "PR"}</div>
+          )}
           {data.labels.length > 0 && (
             <div>
               <span className="text-zinc-500">Labels:</span> {data.labels.join(", ")}
             </div>
           )}
-          {data.requested_reviewers.length > 0 && (
+          {data.platform === "github" && data.requested_reviewers.length > 0 && (
             <div>
               <span className="text-zinc-500">Reviewers:</span>{" "}
               {data.requested_reviewers.join(", ")}
             </div>
           )}
-          {data.requested_teams.length > 0 && (
+          {data.platform === "github" && data.requested_teams.length > 0 && (
             <div>
               <span className="text-zinc-500">Teams:</span> {data.requested_teams.join(", ")}
             </div>
           )}
-          {data.review_state_summary.length > 0 && (
+          {data.platform === "gitlab" && data.reviewers.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Reviewers:</span> {data.reviewers.join(", ")}
+            </div>
+          )}
+          {data.platform === "github" && data.review_state_summary.length > 0 && (
             <div>
               <span className="text-zinc-500">Reviews:</span>{" "}
               {data.review_state_summary.map((r) => `${r.login}: ${r.state}`).join(", ")}
             </div>
           )}
-          {data.linked_issue_numbers.length > 0 && (
+          {data.platform === "gitlab" && data.approval_status && (
+            <div>
+              <span className="text-zinc-500">Approval:</span>{" "}
+              {data.approval_status.approved ? "Approved" : "Pending"}
+              {data.approval_status.approved_by.length > 0 &&
+                ` by ${data.approval_status.approved_by.join(", ")}`}
+            </div>
+          )}
+          {data.platform === "github" && data.linked_issue_numbers.length > 0 && (
             <div>
               <span className="text-zinc-500">Linked issues:</span>{" "}
               {data.linked_issue_numbers.map((n) => `#${n}`).join(", ")}
             </div>
           )}
-          {data.text_issue_refs.length > 0 && (
+          {data.platform === "gitlab" && data.closes_issues.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Closes issues:</span>{" "}
+              {data.closes_issues.map((n) => `#${n}`).join(", ")}
+            </div>
+          )}
+          {data.platform === "github" && data.text_issue_refs.length > 0 && (
             <div>
               <span className="text-zinc-500">Text refs:</span> {data.text_issue_refs.join(", ")}
             </div>

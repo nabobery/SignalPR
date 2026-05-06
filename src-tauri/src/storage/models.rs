@@ -7,6 +7,12 @@ pub struct Workspace {
     pub remote_owner: String,
     pub remote_repo: String,
     pub created_at: String,
+    #[serde(default = "default_remote_host")]
+    pub remote_host: String,
+}
+
+fn default_remote_host() -> String {
+    "github.com".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
