@@ -104,5 +104,29 @@ pub async fn build_adapter(
                 ),
             ))
         }
+        ParsedReviewUrl::Bitbucket {
+            workspace,
+            repo_slug,
+            pull_request_id,
+            ..
+        } => {
+            let credentials =
+                crate::providers::bitbucket::resolve_bitbucket_credentials_from_env()
+                    .ok_or_else(|| {
+                        AppError::InvalidInput(
+                            "Bitbucket credentials not set. Set BITBUCKET_EMAIL and BITBUCKET_TOKEN environment variables (API token, not app password).".into(),
+                        )
+                    })?;
+            let api = crate::providers::bitbucket::BitbucketApi::try_new(credentials)
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+            Ok(Box::new(
+                crate::platform::bitbucket_adapter::BitbucketAdapter::new(
+                    api,
+                    workspace.clone(),
+                    repo_slug.clone(),
+                    *pull_request_id,
+                ),
+            ))
+        }
     }
 }

@@ -64,6 +64,16 @@ pub fn parse_pr_url(url: &str) -> Result<ParsedPrUrl, AppError> {
                 number: iid,
             })
         }
+        ParsedReviewUrl::Bitbucket {
+            workspace,
+            repo_slug,
+            pull_request_id,
+            ..
+        } => Ok(ParsedPrUrl {
+            owner: workspace,
+            repo: repo_slug,
+            number: pull_request_id,
+        }),
     }
 }
 
@@ -101,6 +111,12 @@ async fn do_open_from_url(
             iid,
             host: gl_host,
         } => do_open_gitlab_mr(app, url, db, gl_host, project_path, *iid, &owner, &repo).await,
+        ParsedReviewUrl::Bitbucket {
+            workspace,
+            repo_slug,
+            pull_request_id,
+            ..
+        } => do_open_bitbucket_pr(url, db, &host, workspace, repo_slug, *pull_request_id).await,
     }
 }
 
@@ -225,6 +241,57 @@ async fn do_open_gitlab_mr(
         owner,
         repo,
         iid,
+        &title,
+        author.as_deref(),
+        base_branch.as_deref(),
+        head_branch.as_deref(),
+        Some(&diff_text),
+        &changed_files,
+        Some(&diff_hash),
+    )
+}
+
+async fn do_open_bitbucket_pr(
+    url: &str,
+    db: &AppDb,
+    host: &str,
+    workspace: &str,
+    repo_slug: &str,
+    pr_id: i32,
+) -> Result<PrIntakeResult, AppError> {
+    let credentials =
+        crate::providers::bitbucket::resolve_bitbucket_credentials_from_env().ok_or_else(|| {
+            AppError::InvalidInput(
+                "Bitbucket credentials not set. Set BITBUCKET_EMAIL and BITBUCKET_TOKEN environment variables (API token, not app password).".into(),
+            )
+        })?;
+    let api = crate::providers::bitbucket::BitbucketApi::try_new(credentials).map_err(|e| {
+        AppError::InvalidInput(format!("Failed to initialize Bitbucket client: {e}"))
+    })?;
+
+    let pr = api
+        .get_pull_request(workspace, repo_slug, pr_id)
+        .await
+        .map_err(|e| AppError::Transient(format!("Bitbucket PR fetch failed: {}", e)))?;
+    let diff_text = api
+        .get_pull_request_diff(workspace, repo_slug, pr_id)
+        .await
+        .map_err(|e| AppError::Transient(format!("Bitbucket diff fetch failed: {}", e)))?;
+    let diff_hash = sha256_hex(&diff_text);
+    let changed_files = derive_changed_files_from_diff(&diff_text);
+
+    let title = pr.title;
+    let author = pr.author.map(|a| a.best_name());
+    let base_branch = Some(pr.destination.branch.name);
+    let head_branch = Some(pr.source.branch.name);
+
+    persist_intake(
+        db,
+        url,
+        host,
+        workspace,
+        repo_slug,
+        pr_id,
         &title,
         author.as_deref(),
         base_branch.as_deref(),

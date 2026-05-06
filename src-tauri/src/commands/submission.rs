@@ -30,6 +30,7 @@ struct SubmissionContext<'a> {
 enum SuggestionPlatform {
     GitHub,
     GitLab,
+    Bitbucket,
 }
 
 #[tauri::command]
@@ -205,7 +206,7 @@ pub async fn submit_review(
     );
 
     // Resolve head SHA from metadata for coherent review submission
-    let (head_sha, is_gitlab) = {
+    let (head_sha, is_gitlab, is_bitbucket) = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
@@ -222,6 +223,9 @@ pub async fn submit_review(
                     crate::platform::adapter::PlatformMetadata::GitLab(g) => {
                         Some(g.head_sha.clone())
                     }
+                    crate::platform::adapter::PlatformMetadata::Bitbucket(b) => {
+                        Some(b.head_sha.clone())
+                    }
                 }
             } else {
                 serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(j)
@@ -231,11 +235,21 @@ pub async fn submit_review(
         });
 
         let is_gl = matches!(review_url, crate::platform::ParsedReviewUrl::GitLab { .. });
-        (sha, is_gl)
+        let is_bb = matches!(
+            review_url,
+            crate::platform::ParsedReviewUrl::Bitbucket { .. }
+        );
+        (sha, is_gl, is_bb)
     };
 
     // Route submission by platform
-    let (gh_review_id, used_native) = if is_gitlab {
+    let (gh_review_id, used_native) = if is_gitlab || is_bitbucket {
+        let suggestion_platform = if is_bitbucket {
+            SuggestionPlatform::Bitbucket
+        } else {
+            SuggestionPlatform::GitLab
+        };
+
         let inline_comments: Vec<crate::platform::adapter::InlineComment> = active_findings
             .iter()
             .filter(|f| f.is_anchored && anchors_verified_for_submission)
@@ -248,12 +262,8 @@ pub async fn submit_review(
                     .unwrap_or(&f.severity)
                     .to_uppercase();
                 let fingerprint = f.fingerprint.as_deref().unwrap_or(&f.id).to_string();
-                let comment_body = build_inline_comment_body(
-                    f,
-                    &sev_label,
-                    &fingerprint,
-                    SuggestionPlatform::GitLab,
-                );
+                let comment_body =
+                    build_inline_comment_body(f, &sev_label, &fingerprint, suggestion_platform);
                 Some(crate::platform::adapter::InlineComment {
                     path: path.clone(),
                     body: comment_body,
@@ -264,7 +274,7 @@ pub async fn submit_review(
             })
             .collect();
 
-        let gl_event = match action.as_str() {
+        let adapter_event = match action.as_str() {
             "approve" => "approve",
             "request-changes" => "request_changes",
             _ => "comment",
@@ -272,7 +282,7 @@ pub async fn submit_review(
 
         let payload = crate::platform::adapter::SubmissionPayload {
             body: body.clone(),
-            event: gl_event.to_string(),
+            event: adapter_event.to_string(),
             inline_comments,
             commit_id: head_sha.clone().unwrap_or_default(),
         };
@@ -724,6 +734,10 @@ fn render_suggestion_block(
         SuggestionPlatform::GitLab => {
             let bounded_span = old_line_span.clamp(1, 101);
             format!("suggestion:-0+{}", bounded_span.saturating_sub(1))
+        }
+        SuggestionPlatform::Bitbucket => {
+            // Bitbucket has no first-class suggestion semantics; render as a plain code block.
+            "diff".to_string()
         }
     };
     if !replacement.contains("```") {

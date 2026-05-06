@@ -675,45 +675,67 @@ fn build_issue_refs_from_platform_metadata(
     let mut dedup = std::collections::HashSet::new();
     let mut refs = Vec::new();
 
-    let linked_ids: &[i64] = match meta {
-        crate::platform::adapter::PlatformMetadata::GitHub(g) => &g.linked_issue_numbers,
-        crate::platform::adapter::PlatformMetadata::GitLab(g) => &g.closes_issues,
-    };
-
-    for num in linked_ids {
-        let number = num.to_string();
-        let key = format!("{}/{}#{}", default_owner, default_repo, number);
-        if dedup.insert(key) {
-            refs.push(crate::context_pack::IssueRef {
-                number,
-                title: format!("Linked issue #{}", num),
-                body_excerpt: String::new(),
-                owner: Some(default_owner.to_string()),
-                repo: Some(default_repo.to_string()),
-                labels: Vec::new(),
-                state: None,
-                omit_reason: None,
-            });
+    match meta {
+        crate::platform::adapter::PlatformMetadata::Bitbucket(b) => {
+            // For Bitbucket, build issue refs from extracted Jira keys
+            for key in &b.jira_issue_keys {
+                if dedup.insert(key.clone()) {
+                    refs.push(crate::context_pack::IssueRef {
+                        number: key.clone(),
+                        title: format!("Jira issue {}", key),
+                        body_excerpt: String::new(),
+                        owner: None,
+                        repo: None,
+                        labels: Vec::new(),
+                        state: None,
+                        omit_reason: Some("missing_jira_credentials".to_string()),
+                    });
+                }
+            }
         }
-    }
+        _ => {
+            let linked_ids: &[i64] = match meta {
+                crate::platform::adapter::PlatformMetadata::GitHub(g) => &g.linked_issue_numbers,
+                crate::platform::adapter::PlatformMetadata::GitLab(g) => &g.closes_issues,
+                crate::platform::adapter::PlatformMetadata::Bitbucket(_) => unreachable!(),
+            };
 
-    if let crate::platform::adapter::PlatformMetadata::GitHub(g) = meta {
-        for text_ref in &g.text_issue_refs {
-            if let Some((owner, repo, number)) =
-                parse_issue_ref(text_ref, default_owner, default_repo)
-            {
-                let key = format!("{}/{}#{}", owner, repo, number);
+            for num in linked_ids {
+                let number = num.to_string();
+                let key = format!("{}/{}#{}", default_owner, default_repo, number);
                 if dedup.insert(key) {
                     refs.push(crate::context_pack::IssueRef {
-                        number: number.clone(),
-                        title: format!("Referenced issue #{}", number),
+                        number,
+                        title: format!("Linked issue #{}", num),
                         body_excerpt: String::new(),
-                        owner: Some(owner),
-                        repo: Some(repo),
+                        owner: Some(default_owner.to_string()),
+                        repo: Some(default_repo.to_string()),
                         labels: Vec::new(),
                         state: None,
                         omit_reason: None,
                     });
+                }
+            }
+
+            if let crate::platform::adapter::PlatformMetadata::GitHub(g) = meta {
+                for text_ref in &g.text_issue_refs {
+                    if let Some((owner, repo, number)) =
+                        parse_issue_ref(text_ref, default_owner, default_repo)
+                    {
+                        let key = format!("{}/{}#{}", owner, repo, number);
+                        if dedup.insert(key) {
+                            refs.push(crate::context_pack::IssueRef {
+                                number: number.clone(),
+                                title: format!("Referenced issue #{}", number),
+                                body_excerpt: String::new(),
+                                owner: Some(owner),
+                                repo: Some(repo),
+                                labels: Vec::new(),
+                                state: None,
+                                omit_reason: None,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -933,6 +955,117 @@ async fn hydrate_issue_refs_via_adapter(
     hydrated
 }
 
+async fn hydrate_jira_issue_refs(
+    refs: Vec<crate::context_pack::IssueRef>,
+) -> Vec<crate::context_pack::IssueRef> {
+    if refs.is_empty() {
+        return refs;
+    }
+
+    let credentials = match crate::integrations::jira::resolve_jira_credentials_from_env() {
+        Some(c) => c,
+        None => {
+            tracing::debug!("Jira credentials not configured; keeping refs with omit_reason");
+            return refs;
+        }
+    };
+
+    let client = match crate::integrations::jira::JiraClient::try_new(credentials) {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::warn!("Failed to initialize Jira client: {}", err);
+            return refs
+                .into_iter()
+                .map(|mut issue_ref| {
+                    if issue_ref.omit_reason.is_none() {
+                        issue_ref.omit_reason = Some("fetch_failed".to_string());
+                    }
+                    issue_ref
+                })
+                .collect();
+        }
+    };
+    let mut hydrated = Vec::new();
+    let mut total_bytes = 0usize;
+
+    for (index, issue_ref) in refs.into_iter().enumerate() {
+        if index >= MAX_ISSUES {
+            hydrated.push(crate::context_pack::IssueRef {
+                omit_reason: Some("budget_exceeded".to_string()),
+                ..issue_ref
+            });
+            continue;
+        }
+
+        match client.get_issue(&issue_ref.number).await {
+            Ok(info) => {
+                let body_excerpt = info
+                    .body_excerpt
+                    .as_deref()
+                    .map(|b| truncate_to_bytes(b, MAX_ISSUE_BODY_EXCERPT_BYTES))
+                    .unwrap_or_default();
+                let estimated_bytes = info.title.len()
+                    + body_excerpt.len()
+                    + info.labels.iter().map(String::len).sum::<usize>()
+                    + 64;
+                if total_bytes + estimated_bytes > MAX_ISSUE_CONTEXT_BYTES_TOTAL {
+                    hydrated.push(crate::context_pack::IssueRef {
+                        omit_reason: Some("budget_exceeded".to_string()),
+                        ..issue_ref
+                    });
+                    continue;
+                }
+                total_bytes += estimated_bytes;
+                hydrated.push(crate::context_pack::IssueRef {
+                    number: info.key,
+                    title: info.title,
+                    body_excerpt,
+                    labels: info.labels,
+                    state: Some(info.state),
+                    omit_reason: None,
+                    ..issue_ref
+                });
+            }
+            Err(err) => {
+                tracing::warn!("Failed to hydrate Jira issue {}: {}", issue_ref.number, err);
+                hydrated.push(crate::context_pack::IssueRef {
+                    omit_reason: Some("fetch_failed".to_string()),
+                    ..issue_ref
+                });
+            }
+        }
+    }
+
+    hydrated
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IssueHydrationStrategy {
+    GithubApi,
+    GitlabAdapter,
+    Jira,
+}
+
+fn select_issue_hydration_strategy(
+    review_url: &crate::platform::ParsedReviewUrl,
+    adapter_platform_name: Option<&str>,
+) -> Option<IssueHydrationStrategy> {
+    if matches!(
+        review_url,
+        crate::platform::ParsedReviewUrl::Bitbucket { .. }
+    ) {
+        return Some(IssueHydrationStrategy::Jira);
+    }
+    match adapter_platform_name {
+        Some("gitlab") => Some(IssueHydrationStrategy::GitlabAdapter),
+        Some(_) => Some(IssueHydrationStrategy::GithubApi),
+        None if matches!(review_url, crate::platform::ParsedReviewUrl::GitHub { .. }) => {
+            Some(IssueHydrationStrategy::GithubApi)
+        }
+        None => None,
+    }
+}
+
 async fn resolve_issue_refs_and_codeowners(
     app: &AppHandle,
     db: &AppDb,
@@ -987,28 +1120,35 @@ async fn resolve_issue_refs_and_codeowners(
     let adapter = crate::commands::pr_metadata::build_adapter(app, &review_url)
         .await
         .ok();
-    let issue_refs = if let Some(adapter) = adapter.as_ref() {
-        if adapter.platform_name() == "gitlab" {
-            hydrate_issue_refs_via_adapter(adapter.as_ref(), issue_refs_seed).await
-        } else {
+    let issue_refs = match select_issue_hydration_strategy(
+        &review_url,
+        adapter.as_ref().map(|a| a.platform_name()),
+    ) {
+        Some(IssueHydrationStrategy::GitlabAdapter) => {
+            if let Some(adapter) = adapter.as_ref() {
+                hydrate_issue_refs_via_adapter(adapter.as_ref(), issue_refs_seed).await
+            } else {
+                issue_refs_seed
+            }
+        }
+        Some(IssueHydrationStrategy::Jira) => hydrate_jira_issue_refs(issue_refs_seed).await,
+        Some(IssueHydrationStrategy::GithubApi) => {
             hydrate_issue_refs_from_github(app, issue_refs_seed).await
         }
-    } else if matches!(review_url, crate::platform::ParsedReviewUrl::GitHub { .. }) {
-        hydrate_issue_refs_from_github(app, issue_refs_seed).await
-    } else {
-        issue_refs_seed
+        None => issue_refs_seed
             .into_iter()
             .map(|mut issue_ref| {
                 issue_ref.omit_reason = Some("fetch_failed".to_string());
                 issue_ref
             })
-            .collect()
+            .collect(),
     };
 
     let base_ref = if let Some(meta) = platform_metadata.as_ref() {
         match meta {
             crate::platform::adapter::PlatformMetadata::GitHub(g) => g.base_ref.as_str(),
             crate::platform::adapter::PlatformMetadata::GitLab(g) => g.base_ref.as_str(),
+            crate::platform::adapter::PlatformMetadata::Bitbucket(b) => b.base_ref.as_str(),
         }
     } else {
         legacy_github_metadata
@@ -1376,6 +1516,31 @@ mod tests {
     use crate::storage::db::init_db_in_memory;
     use crate::storage::models::{Finding, PullRequest, ReviewRun, Workspace};
     use crate::storage::queries;
+
+    #[test]
+    fn select_issue_hydration_prefers_jira_for_bitbucket_even_without_adapter() {
+        let url =
+            crate::platform::parse_review_url("https://bitbucket.org/acme/repo/pull-requests/12")
+                .unwrap();
+        let strategy = select_issue_hydration_strategy(&url, None);
+        assert_eq!(strategy, Some(IssueHydrationStrategy::Jira));
+    }
+
+    #[test]
+    fn select_issue_hydration_uses_gitlab_adapter_when_available() {
+        let url =
+            crate::platform::parse_review_url("https://gitlab.com/acme/repo/-/merge_requests/3")
+                .unwrap();
+        let strategy = select_issue_hydration_strategy(&url, Some("gitlab"));
+        assert_eq!(strategy, Some(IssueHydrationStrategy::GitlabAdapter));
+    }
+
+    #[test]
+    fn select_issue_hydration_uses_github_api_for_github_without_adapter() {
+        let url = crate::platform::parse_review_url("https://github.com/acme/repo/pull/5").unwrap();
+        let strategy = select_issue_hydration_strategy(&url, None);
+        assert_eq!(strategy, Some(IssueHydrationStrategy::GithubApi));
+    }
 
     #[test]
     fn require_non_empty_diff_rejects_none() {

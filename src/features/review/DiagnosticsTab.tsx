@@ -254,7 +254,12 @@ function PlatformMetadataSection({
         >
           <GitBranch className="w-4 h-4 text-zinc-400" />
           <span className="text-sm font-medium text-zinc-200">
-            {data.platform === "gitlab" ? "GitLab" : "GitHub"} Metadata
+            {data.platform === "gitlab"
+              ? "GitLab"
+              : data.platform === "bitbucket"
+                ? "Bitbucket"
+                : "GitHub"}{" "}
+            Metadata
           </span>
           <span className="text-xs text-zinc-500">
             {data.head_sha.slice(0, 7)} &middot; {data.labels.length} label
@@ -265,6 +270,9 @@ function PlatformMetadataSection({
             {data.platform === "gitlab" &&
               data.closes_issues.length > 0 &&
               ` \u00b7 ${data.closes_issues.length} issue${data.closes_issues.length !== 1 ? "s" : ""}`}
+            {data.platform === "bitbucket" &&
+              data.jira_issue_keys.length > 0 &&
+              ` \u00b7 ${data.jira_issue_keys.length} Jira key${data.jira_issue_keys.length !== 1 ? "s" : ""}`}
             {fetchedTimeLabel && ` \u00b7 ${fetchedTimeLabel}`}
           </span>
         </button>
@@ -345,6 +353,30 @@ function PlatformMetadataSection({
           {data.platform === "github" && data.text_issue_refs.length > 0 && (
             <div>
               <span className="text-zinc-500">Text refs:</span> {data.text_issue_refs.join(", ")}
+            </div>
+          )}
+          {data.platform === "bitbucket" && data.reviewers.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Reviewers:</span> {data.reviewers.join(", ")}
+            </div>
+          )}
+          {data.platform === "bitbucket" && data.default_reviewers.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Default reviewers:</span>{" "}
+              {data.default_reviewers.join(", ")}
+            </div>
+          )}
+          {data.platform === "bitbucket" && data.approval_status && (
+            <div>
+              <span className="text-zinc-500">Approval:</span>{" "}
+              {data.approval_status.approved ? "Approved" : "Pending"}
+              {data.approval_status.approved_by.length > 0 &&
+                ` by ${data.approval_status.approved_by.join(", ")}`}
+            </div>
+          )}
+          {data.platform === "bitbucket" && data.jira_issue_keys.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Jira issues:</span> {data.jira_issue_keys.join(", ")}
             </div>
           )}
         </div>

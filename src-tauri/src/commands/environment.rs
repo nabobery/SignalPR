@@ -24,6 +24,8 @@ pub async fn inspect_environment(
 
     results.push(check_gh(&app, &now).await);
     results.push(check_gitlab_token(&now));
+    results.push(check_bitbucket_token(&now));
+    results.push(check_jira_token(&now));
     results.push(check_codex(&app, &now).await);
     results.push(check_copilot(&app, &now).await);
     results.push(check_opencode(&app, &now).await);
@@ -39,6 +41,8 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
 
     tools.push(check_gh(app, &now).await);
     tools.push(check_gitlab_token(&now));
+    tools.push(check_bitbucket_token(&now));
+    tools.push(check_jira_token(&now));
     tools.push(check_codex(app, &now).await);
     tools.push(check_claude(&now));
     tools.push(check_copilot(app, &now).await);
@@ -46,9 +50,10 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
     tools.push(check_gemini(app, &now).await);
     tools.push(check_claude_code(app, &now));
 
-    let can_submit = tools
-        .iter()
-        .any(|t| (t.tool_name == "gh" || t.tool_name == "gitlab_token") && t.status == "ready");
+    let can_submit = tools.iter().any(|t| {
+        (t.tool_name == "gh" || t.tool_name == "gitlab_token" || t.tool_name == "bitbucket_token")
+            && t.status == "ready"
+    });
     let available_providers: Vec<String> = tools
         .iter()
         .filter(|t| {
@@ -69,7 +74,10 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
         warnings.push("No AI providers available".into());
     }
     if !can_submit {
-        warnings.push("No submit path ready (need GitHub CLI or GITLAB_TOKEN)".into());
+        warnings.push(
+            "No submit path ready (need GitHub CLI, GITLAB_TOKEN, or Bitbucket token env vars)"
+                .into(),
+        );
     }
 
     EnvironmentSummary {
@@ -155,6 +163,87 @@ fn check_gitlab_token(now: &str) -> ToolStatus {
             message: Some("Optional: Set GITLAB_TOKEN for GitLab MR submission".into()),
             checked_at: now.into(),
         },
+    }
+}
+
+fn check_bitbucket_token(now: &str) -> ToolStatus {
+    let has_email = std::env::var("BITBUCKET_EMAIL")
+        .ok()
+        .is_some_and(|v| !v.is_empty());
+    let has_token = std::env::var("BITBUCKET_TOKEN")
+        .ok()
+        .is_some_and(|v| !v.is_empty());
+
+    if has_email && has_token {
+        ToolStatus {
+            tool_name: "bitbucket_token".into(),
+            status: "ready".into(),
+            version: None,
+            message: Some("BITBUCKET_EMAIL + BITBUCKET_TOKEN set".into()),
+            checked_at: now.into(),
+        }
+    } else if has_email || has_token {
+        ToolStatus {
+            tool_name: "bitbucket_token".into(),
+            status: "incomplete".into(),
+            version: None,
+            message: Some(
+                "Bitbucket requires both BITBUCKET_EMAIL and BITBUCKET_TOKEN (API token)".into(),
+            ),
+            checked_at: now.into(),
+        }
+    } else {
+        ToolStatus {
+            tool_name: "bitbucket_token".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some(
+                "Optional: Set BITBUCKET_EMAIL + BITBUCKET_TOKEN for Bitbucket PR submission"
+                    .into(),
+            ),
+            checked_at: now.into(),
+        }
+    }
+}
+
+fn check_jira_token(now: &str) -> ToolStatus {
+    let has_base = std::env::var("JIRA_BASE_URL")
+        .ok()
+        .is_some_and(|v| !v.is_empty());
+    let has_email = std::env::var("JIRA_EMAIL")
+        .ok()
+        .is_some_and(|v| !v.is_empty());
+    let has_token = std::env::var("JIRA_API_TOKEN")
+        .ok()
+        .is_some_and(|v| !v.is_empty());
+
+    if has_base && has_email && has_token {
+        ToolStatus {
+            tool_name: "jira_token".into(),
+            status: "ready".into(),
+            version: None,
+            message: Some("Jira credentials configured".into()),
+            checked_at: now.into(),
+        }
+    } else if has_base || has_email || has_token {
+        ToolStatus {
+            tool_name: "jira_token".into(),
+            status: "incomplete".into(),
+            version: None,
+            message: Some("Jira requires JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN".into()),
+            checked_at: now.into(),
+        }
+    } else {
+        ToolStatus {
+            tool_name: "jira_token".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some(
+                "Optional: Set JIRA_BASE_URL + JIRA_EMAIL + JIRA_API_TOKEN for Jira issue context"
+                    .into(),
+            ),
+            checked_at: now.into(),
+        }
     }
 }
 

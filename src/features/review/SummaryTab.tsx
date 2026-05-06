@@ -325,9 +325,13 @@ function PlatformMetadataSection({
   refreshError: string | null;
 }) {
   const fetchedLabel = formatMaybeDate(fetchedAt);
-  const isGitLab = metadata.platform === "gitlab";
-  const platformLabel = isGitLab ? "GitLab" : "GitHub";
-  const entityLabel = isGitLab ? "MR" : "PR";
+  const platformLabel =
+    metadata.platform === "gitlab"
+      ? "GitLab"
+      : metadata.platform === "bitbucket"
+        ? "Bitbucket"
+        : "GitHub";
+  const entityLabel = metadata.platform === "gitlab" ? "MR" : "PR";
   return (
     <section>
       <div className="flex items-center gap-2 mb-2">
@@ -434,6 +438,41 @@ function PlatformMetadataSection({
           <div className="text-xs text-zinc-400">
             <span className="text-zinc-500">Closes issues:</span>{" "}
             {metadata.closes_issues.map((n) => `#${n}`).join(", ")}
+          </div>
+        )}
+        {metadata.platform === "bitbucket" && metadata.reviewers.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Reviewers:</span> {metadata.reviewers.join(", ")}
+          </div>
+        )}
+        {metadata.platform === "bitbucket" && metadata.default_reviewers.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Default reviewers:</span>{" "}
+            {metadata.default_reviewers.join(", ")}
+          </div>
+        )}
+        {metadata.platform === "bitbucket" && metadata.approval_status && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Approval:</span>{" "}
+            <span
+              className={metadata.approval_status.approved ? "text-emerald-400" : "text-zinc-400"}
+            >
+              {metadata.approval_status.approved ? "Approved" : "Pending"}
+            </span>
+            {metadata.approval_status.approved_by.length > 0 && (
+              <span> by {metadata.approval_status.approved_by.join(", ")}</span>
+            )}
+          </div>
+        )}
+        {metadata.platform === "bitbucket" && metadata.jira_issue_keys.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Jira issues:</span>{" "}
+            {metadata.jira_issue_keys.join(", ")}
+          </div>
+        )}
+        {metadata.platform === "bitbucket" && (
+          <div className="text-[10px] text-zinc-600 mt-1 italic">
+            Bitbucket does not support pending review groups or first-class suggestions.
           </div>
         )}
       </div>

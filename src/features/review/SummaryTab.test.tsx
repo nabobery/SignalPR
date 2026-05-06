@@ -434,9 +434,42 @@ describe("SummaryTab", () => {
     expect(screen.getByText("Approved")).toBeInTheDocument();
   });
 
+  it("renders Bitbucket metadata with reviewers, approvals, and Jira keys", () => {
+    renderWithContext({
+      platformMetadata: {
+        platform: "bitbucket",
+        pr_body: "Fix login flow",
+        head_sha: "abc123",
+        base_sha: "def456",
+        head_ref: "feature/JIRA-42-login",
+        base_ref: "main",
+        draft: false,
+        labels: [],
+        reviewers: ["alice", "bob"],
+        approval_status: {
+          approved: true,
+          approved_by: ["alice"],
+          approvals_required: null,
+          approvals_left: null,
+        },
+        default_reviewers: ["teamlead"],
+        jira_issue_keys: ["JIRA-42", "AUTH-7"],
+      },
+    });
+    expect(screen.getByText("Bitbucket metadata")).toBeInTheDocument();
+    expect(screen.getByText(/alice, bob/)).toBeInTheDocument();
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+    expect(screen.getByText(/JIRA-42, AUTH-7/)).toBeInTheDocument();
+    expect(screen.getByText(/teamlead/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Bitbucket does not support pending review groups/),
+    ).toBeInTheDocument();
+  });
+
   it("does not render metadata section when null", () => {
     renderWithContext({ platformMetadata: null });
     expect(screen.queryByText("GitHub metadata")).not.toBeInTheDocument();
     expect(screen.queryByText("GitLab metadata")).not.toBeInTheDocument();
+    expect(screen.queryByText("Bitbucket metadata")).not.toBeInTheDocument();
   });
 });

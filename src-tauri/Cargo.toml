@@ -39,3 +39,4 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
 url = "2"
 urlencoding = "2"
+base64 = "0.22"

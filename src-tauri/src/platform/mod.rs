@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod bitbucket_adapter;
 pub mod github_adapter;
 pub mod gitlab_adapter;
 
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum PlatformKind {
     GitHub,
     GitLab,
+    Bitbucket,
 }
 
 impl std::fmt::Display for PlatformKind {
@@ -17,6 +19,7 @@ impl std::fmt::Display for PlatformKind {
         match self {
             PlatformKind::GitHub => write!(f, "github"),
             PlatformKind::GitLab => write!(f, "gitlab"),
+            PlatformKind::Bitbucket => write!(f, "bitbucket"),
         }
     }
 }
@@ -34,6 +37,12 @@ pub enum ParsedReviewUrl {
         project_path: String,
         iid: i32,
     },
+    Bitbucket {
+        host: String,
+        workspace: String,
+        repo_slug: String,
+        pull_request_id: i32,
+    },
 }
 
 impl ParsedReviewUrl {
@@ -42,6 +51,7 @@ impl ParsedReviewUrl {
         match self {
             ParsedReviewUrl::GitHub { .. } => PlatformKind::GitHub,
             ParsedReviewUrl::GitLab { .. } => PlatformKind::GitLab,
+            ParsedReviewUrl::Bitbucket { .. } => PlatformKind::Bitbucket,
         }
     }
 
@@ -49,6 +59,7 @@ impl ParsedReviewUrl {
         match self {
             ParsedReviewUrl::GitHub { host, .. } => host,
             ParsedReviewUrl::GitLab { host, .. } => host,
+            ParsedReviewUrl::Bitbucket { host, .. } => host,
         }
     }
 
@@ -56,10 +67,14 @@ impl ParsedReviewUrl {
         match self {
             ParsedReviewUrl::GitHub { number, .. } => *number,
             ParsedReviewUrl::GitLab { iid, .. } => *iid,
+            ParsedReviewUrl::Bitbucket {
+                pull_request_id, ..
+            } => *pull_request_id,
         }
     }
 
-    /// Returns `(owner, repo)` for GitHub or `(group_path, project_name)` for GitLab.
+    /// Returns `(owner, repo)` for GitHub, `(group_path, project_name)` for GitLab,
+    /// or `(workspace, repo_slug)` for Bitbucket.
     pub fn owner_and_repo(&self) -> (String, String) {
         match self {
             ParsedReviewUrl::GitHub { owner, repo, .. } => (owner.clone(), repo.clone()),
@@ -73,6 +88,11 @@ impl ParsedReviewUrl {
                     (String::new(), project_path.clone())
                 }
             }
+            ParsedReviewUrl::Bitbucket {
+                workspace,
+                repo_slug,
+                ..
+            } => (workspace.clone(), repo_slug.clone()),
         }
     }
 }
@@ -84,6 +104,7 @@ use crate::errors::AppError;
 
 static GH_PR_REGEX: OnceLock<Regex> = OnceLock::new();
 static GL_MR_REGEX: OnceLock<Regex> = OnceLock::new();
+static BB_PR_REGEX: OnceLock<Regex> = OnceLock::new();
 
 pub fn parse_review_url(url: &str) -> Result<ParsedReviewUrl, AppError> {
     let gh_re = GH_PR_REGEX.get_or_init(|| {
@@ -102,6 +123,27 @@ pub fn parse_review_url(url: &str) -> Result<ParsedReviewUrl, AppError> {
             owner: caps["owner"].to_string(),
             repo: caps["repo"].to_string(),
             number,
+        });
+    }
+
+    // Bitbucket Cloud: https://bitbucket.org/{workspace}/{repo_slug}/pull-requests/{id}
+    // Allow trailing segments like /diff, /activity, query strings, fragments
+    let bb_re = BB_PR_REGEX.get_or_init(|| {
+        Regex::new(
+            r"^https?://(?P<host>bitbucket\.org)/(?P<workspace>[^/]+)/(?P<repo_slug>[^/]+)/pull-requests/(?P<pr_id>\d+)(?:[/?#].*)?$",
+        )
+        .expect("BB PR URL regex should be valid")
+    });
+
+    if let Some(caps) = bb_re.captures(url) {
+        let pull_request_id = caps["pr_id"]
+            .parse::<i32>()
+            .map_err(|_| AppError::InvalidInput("PR id is not a valid integer".into()))?;
+        return Ok(ParsedReviewUrl::Bitbucket {
+            host: caps["host"].to_lowercase(),
+            workspace: caps["workspace"].to_string(),
+            repo_slug: caps["repo_slug"].to_string(),
+            pull_request_id,
         });
     }
 
@@ -126,7 +168,7 @@ pub fn parse_review_url(url: &str) -> Result<ParsedReviewUrl, AppError> {
     }
 
     Err(AppError::InvalidInput(
-        "Invalid PR/MR URL. Supported: GitHub pull request or GitLab merge request URLs.".into(),
+        "Invalid PR/MR URL. Supported: GitHub pull request, GitLab merge request, or Bitbucket Cloud pull request URLs.".into(),
     ))
 }
 
@@ -305,10 +347,79 @@ mod tests {
         assert!(parse_review_url("https://gitlab.com/group/repo/-/merge_requests/99abc").is_err());
     }
 
+    // --- Bitbucket URL parsing tests ---
+
+    #[test]
+    fn test_parse_bitbucket_pr_url() {
+        let result =
+            parse_review_url("https://bitbucket.org/myworkspace/my-repo/pull-requests/7").unwrap();
+        match result {
+            ParsedReviewUrl::Bitbucket {
+                host,
+                workspace,
+                repo_slug,
+                pull_request_id,
+            } => {
+                assert_eq!(host, "bitbucket.org");
+                assert_eq!(workspace, "myworkspace");
+                assert_eq!(repo_slug, "my-repo");
+                assert_eq!(pull_request_id, 7);
+            }
+            _ => panic!("Expected Bitbucket variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_bitbucket_pr_url_with_trailing_diff() {
+        let result =
+            parse_review_url("https://bitbucket.org/acme/backend/pull-requests/42/diff").unwrap();
+        assert_eq!(result.number_or_iid(), 42);
+        assert_eq!(result.platform_kind(), PlatformKind::Bitbucket);
+    }
+
+    #[test]
+    fn test_parse_bitbucket_pr_url_with_query_and_fragment() {
+        let result = parse_review_url(
+            "https://bitbucket.org/acme/backend/pull-requests/99?tab=activity#comment-123",
+        )
+        .unwrap();
+        assert_eq!(result.number_or_iid(), 99);
+        assert_eq!(result.platform_kind(), PlatformKind::Bitbucket);
+    }
+
+    #[test]
+    fn test_parse_bitbucket_owner_and_repo() {
+        let parsed = parse_review_url("https://bitbucket.org/ws/repo/pull-requests/1").unwrap();
+        let (owner, repo) = parsed.owner_and_repo();
+        assert_eq!(owner, "ws");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_parse_bitbucket_rejects_non_cloud_host() {
+        let result = parse_review_url(
+            "https://bitbucket.mycompany.com/projects/PROJ/repos/my-repo/pull-requests/1",
+        );
+        assert!(
+            result.is_err() || {
+                if let Ok(parsed) = &result {
+                    parsed.platform_kind() != PlatformKind::Bitbucket
+                } else {
+                    true
+                }
+            }
+        );
+    }
+
     #[test]
     fn test_parse_invalid_url() {
         assert!(parse_review_url("https://example.com/not-a-pr").is_err());
         assert!(parse_review_url("not a url").is_err());
+    }
+
+    #[test]
+    fn test_parse_bitbucket_rejects_number_suffix() {
+        assert!(parse_review_url("https://bitbucket.org/ws/repo/pull-requests/42abc").is_err());
     }
 
     #[test]

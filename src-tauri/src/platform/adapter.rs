@@ -12,6 +12,8 @@ pub enum PlatformMetadata {
     GitHub(GitHubMeta),
     #[serde(rename = "gitlab")]
     GitLab(GitLabMeta),
+    #[serde(rename = "bitbucket")]
+    Bitbucket(BitbucketMeta),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +44,21 @@ pub struct GitLabMeta {
     pub reviewers: Vec<String>,
     pub approval_status: Option<ApprovalInfo>,
     pub closes_issues: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BitbucketMeta {
+    pub pr_body: Option<String>,
+    pub head_sha: String,
+    pub base_sha: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub draft: bool,
+    pub labels: Vec<String>,
+    pub reviewers: Vec<String>,
+    pub approval_status: Option<ApprovalInfo>,
+    pub default_reviewers: Vec<String>,
+    pub jira_issue_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +164,41 @@ mod tests {
         match deser {
             PlatformMetadata::GitHub(g) => assert_eq!(g.head_sha, "abc"),
             _ => panic!("Expected GitHub variant"),
+        }
+    }
+
+    #[test]
+    fn test_platform_metadata_bitbucket_serialization() {
+        let meta = PlatformMetadata::Bitbucket(BitbucketMeta {
+            pr_body: Some("Fix login".into()),
+            head_sha: "aaa".into(),
+            base_sha: "bbb".into(),
+            head_ref: "feature/login".into(),
+            base_ref: "main".into(),
+            draft: false,
+            labels: vec![],
+            reviewers: vec!["alice".into()],
+            approval_status: Some(ApprovalInfo {
+                approved: true,
+                approved_by: vec!["bob".into()],
+                approvals_required: None,
+                approvals_left: None,
+            }),
+            default_reviewers: vec!["charlie".into()],
+            jira_issue_keys: vec!["AUTH-42".into()],
+        });
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"platform\":\"bitbucket\""));
+        assert!(json.contains("AUTH-42"));
+        let deser: PlatformMetadata = serde_json::from_str(&json).unwrap();
+        match deser {
+            PlatformMetadata::Bitbucket(b) => {
+                assert_eq!(b.head_sha, "aaa");
+                assert_eq!(b.jira_issue_keys, vec!["AUTH-42"]);
+                assert_eq!(b.reviewers, vec!["alice"]);
+                assert!(b.approval_status.unwrap().approved);
+            }
+            _ => panic!("Expected Bitbucket variant"),
         }
     }
 

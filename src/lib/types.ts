@@ -1,6 +1,6 @@
 export interface ToolStatus {
   tool_name: string;
-  status: "ready" | "degraded" | "missing" | "unauthenticated";
+  status: "ready" | "degraded" | "missing" | "unauthenticated" | "incomplete";
   version: string | null;
   message: string | null;
   checked_at: string;
@@ -221,8 +221,8 @@ export interface ReviewSnapshot {
   platform_metadata_fetched_at: string | null;
 }
 
-// Platform metadata: discriminated union (Phase 6)
-export type PlatformMetadata = GitHubMetadata | GitLabMetadata;
+// Platform metadata: discriminated union (Phase 6, extended Phase 7)
+export type PlatformMetadata = GitHubMetadata | GitLabMetadata | BitbucketMetadata;
 
 export interface GitHubMetadata {
   platform: "github";
@@ -252,6 +252,21 @@ export interface GitLabMetadata {
   reviewers: string[];
   approval_status: ApprovalInfo | null;
   closes_issues: number[];
+}
+
+export interface BitbucketMetadata {
+  platform: "bitbucket";
+  pr_body: string | null;
+  head_sha: string;
+  base_sha: string;
+  head_ref: string;
+  base_ref: string;
+  draft: boolean;
+  labels: string[];
+  reviewers: string[];
+  approval_status: ApprovalInfo | null;
+  default_reviewers: string[];
+  jira_issue_keys: string[];
 }
 
 export interface ApprovalInfo {
@@ -285,6 +300,18 @@ export function isGitLabMetadata(meta: unknown): meta is GitLabMetadata {
   const candidate = meta as Partial<GitLabMetadata>;
   return (
     candidate.platform === "gitlab" &&
+    typeof candidate.head_sha === "string" &&
+    typeof candidate.base_sha === "string" &&
+    Array.isArray(candidate.reviewers)
+  );
+}
+
+/** Type guard for Bitbucket metadata */
+export function isBitbucketMetadata(meta: unknown): meta is BitbucketMetadata {
+  if (!meta || typeof meta !== "object") return false;
+  const candidate = meta as Partial<BitbucketMetadata>;
+  return (
+    candidate.platform === "bitbucket" &&
     typeof candidate.head_sha === "string" &&
     typeof candidate.base_sha === "string" &&
     Array.isArray(candidate.reviewers)

@@ -1,3 +1,4 @@
+pub mod bitbucket;
 pub mod capabilities;
 pub mod claude;
 pub mod claude_code;

@@ -6,6 +6,7 @@ import type { ToolStatus } from "../../lib/types";
 const statusConfig = {
   ready: { icon: CheckCircle, color: "text-green-400", label: "Ready" },
   degraded: { icon: AlertTriangle, color: "text-yellow-400", label: "Degraded" },
+  incomplete: { icon: AlertTriangle, color: "text-yellow-400", label: "Incomplete" },
   missing: { icon: XCircle, color: "text-red-400", label: "Missing" },
   unauthenticated: { icon: AlertTriangle, color: "text-yellow-400", label: "Not authenticated" },
 } as const;
@@ -20,7 +21,11 @@ export function EnvironmentCheck({ onReady }: { onReady: (ready: boolean) => voi
       .then((result) => {
         setTools(result);
         const hasSubmitPath = result.some(
-          (t) => (t.tool_name === "gh" || t.tool_name === "gitlab_token") && t.status === "ready",
+          (t) =>
+            (t.tool_name === "gh" ||
+              t.tool_name === "gitlab_token" ||
+              t.tool_name === "bitbucket_token") &&
+            t.status === "ready",
         );
         onReady(hasSubmitPath);
       })

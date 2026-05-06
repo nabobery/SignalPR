@@ -7,6 +7,7 @@ mod config;
 mod context_pack;
 mod errors;
 mod explainability;
+mod integrations;
 mod local_checks;
 mod metrics;
 mod notifications;
