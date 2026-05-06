@@ -51,6 +51,7 @@ export function ReviewWorkspace() {
       const snap = await getReviewSnapshot(runId);
       setState((prev) => ({
         runId: snap.run_id,
+        prId: snap.pr_id,
         status: snap.status,
         prTitle: snap.pr_title,
         prNumber: snap.pr_number,
@@ -66,6 +67,8 @@ export function ReviewWorkspace() {
         delta: snap.delta ?? null,
         contextPackSummary: snap.context_pack_summary ?? null,
         localChecksSummary: snap.local_checks_summary ?? null,
+        platformMetadata: snap.platform_metadata ?? null,
+        platformMetadataFetchedAt: snap.platform_metadata_fetched_at ?? null,
         selectedFile:
           prev?.selectedFile && snap.changed_files.includes(prev.selectedFile)
             ? prev.selectedFile
@@ -314,8 +317,12 @@ export function ReviewWorkspace() {
             {activeTab === "diagnostics" && runId && (
               <DiagnosticsTab
                 runId={runId}
+                prId={state.prId}
+                onMetadataRefreshed={refreshSnapshot}
                 contextPackSummary={state?.contextPackSummary ?? null}
                 localChecksSummary={state?.localChecksSummary ?? null}
+                platformMetadata={state?.platformMetadata ?? null}
+                platformMetadataFetchedAt={state?.platformMetadataFetchedAt ?? null}
               />
             )}
           </main>

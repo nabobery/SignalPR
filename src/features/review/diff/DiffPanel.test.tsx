@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 function makeState(overrides: Partial<ReviewState> = {}): ReviewState {
   return {
     runId: "run-1",
+    prId: "pr-1",
     status: "ready",
     prTitle: "Test PR",
     prNumber: 1,
@@ -45,6 +46,8 @@ index abc..def 100644
     delta: null,
     contextPackSummary: null,
     localChecksSummary: null,
+    platformMetadata: null,
+    platformMetadataFetchedAt: null,
     ...overrides,
   };
 }

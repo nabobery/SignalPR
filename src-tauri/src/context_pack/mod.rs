@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 const DEFAULT_MAX_BYTES_TOTAL: usize = 16_384; // 16KB
@@ -109,16 +110,27 @@ pub struct ContextPackBuilder<'a> {
     workspace_path: &'a Path,
     changed_files: &'a [String],
     preference_text: Option<String>,
+    codeowners_override: Option<(String, String)>,
     issue_refs: Vec<IssueRef>,
     items: Vec<ContextItem>,
     used_bytes: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueRef {
     pub number: String,
     pub title: String,
     pub body_excerpt: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub omit_reason: Option<String>,
 }
 
 impl<'a> ContextPackBuilder<'a> {
@@ -132,6 +144,7 @@ impl<'a> ContextPackBuilder<'a> {
             workspace_path,
             changed_files,
             preference_text: None,
+            codeowners_override: None,
             issue_refs: Vec::new(),
             items: Vec::new(),
             used_bytes: 0,
@@ -143,13 +156,30 @@ impl<'a> ContextPackBuilder<'a> {
         self
     }
 
-    #[allow(dead_code)]
+    pub fn with_codeowners_content(
+        mut self,
+        content: Option<String>,
+        source: Option<String>,
+    ) -> Self {
+        if let Some(content) = content {
+            self.codeowners_override = Some((
+                source.unwrap_or_else(|| "codeowners:override".to_string()),
+                content,
+            ));
+        }
+        self
+    }
+
     pub fn with_issues(mut self, issues: Vec<IssueRef>) -> Self {
         self.issue_refs = issues;
         self
     }
 
     pub fn build(mut self) -> ContextPack {
+        let include_issues = self.config.include_issue_context || !self.issue_refs.is_empty();
+        if include_issues {
+            self.add_issues();
+        }
         if self.config.include_docs {
             self.add_docs();
         }
@@ -158,9 +188,6 @@ impl<'a> ContextPackBuilder<'a> {
         }
         if self.config.include_preferences {
             self.add_preferences();
-        }
-        if self.config.include_issue_context {
-            self.add_issues();
         }
 
         let prompt_suffix = self.build_prompt_suffix();
@@ -275,17 +302,22 @@ impl<'a> ContextPackBuilder<'a> {
     }
 
     fn add_codeowners(&mut self) {
-        let mut owners_content: Option<String> = None;
-        let mut found_path = String::new();
-
-        for location in CODEOWNERS_LOCATIONS {
-            let full_path = self.workspace_path.join(location);
-            if let Ok(content) = std::fs::read_to_string(&full_path) {
-                found_path = full_path.display().to_string();
-                owners_content = Some(content);
-                break;
-            }
-        }
+        let (owners_content, found_path) =
+            if let Some((source, content)) = &self.codeowners_override {
+                (Some(content.clone()), source.clone())
+            } else {
+                let mut owners_content: Option<String> = None;
+                let mut found_path = String::new();
+                for location in CODEOWNERS_LOCATIONS {
+                    let full_path = self.workspace_path.join(location);
+                    if let Ok(content) = std::fs::read_to_string(&full_path) {
+                        found_path = full_path.display().to_string();
+                        owners_content = Some(content);
+                        break;
+                    }
+                }
+                (owners_content, found_path)
+            };
 
         let Some(raw) = owners_content else {
             self.items.push(ContextItem {
@@ -316,7 +348,11 @@ impl<'a> ContextPackBuilder<'a> {
 
         let mut summary = String::from("File ownership (changed files):\n");
         for (file, owners) in &ownership {
-            summary.push_str(&format!("  {} → {}\n", file, owners.join(", ")));
+            if owners.is_empty() {
+                summary.push_str(&format!("  {} → (no owners)\n", file));
+            } else {
+                summary.push_str(&format!("  {} → {}\n", file, owners.join(", ")));
+            }
         }
 
         self.try_add_item("codeowners", "CODEOWNERS", &found_path, &summary);
@@ -337,13 +373,81 @@ impl<'a> ContextPackBuilder<'a> {
     }
 
     fn add_issues(&mut self) {
+        use crate::providers::github::{
+            MAX_ISSUES, MAX_ISSUE_BODY_EXCERPT_BYTES, MAX_ISSUE_CONTEXT_BYTES_TOTAL,
+        };
+
         let issues: Vec<IssueRef> = self.issue_refs.clone();
-        for issue in &issues {
-            let content = format!("#{}: {}\n{}", issue.number, issue.title, issue.body_excerpt);
+        let mut total_issue_bytes: usize = 0;
+
+        for (i, issue) in issues.iter().enumerate() {
+            let source = issue_source(issue);
+            if i >= MAX_ISSUES {
+                self.items.push(ContextItem {
+                    kind: "issue".into(),
+                    label: format!("Issue #{}", issue.number),
+                    source,
+                    bytes: 0,
+                    included: false,
+                    omit_reason: Some("budget_exceeded".into()),
+                    content: None,
+                });
+                continue;
+            }
+
+            if let Some(reason) = issue.omit_reason.clone() {
+                self.items.push(ContextItem {
+                    kind: "issue".into(),
+                    label: format!("Issue #{}", issue.number),
+                    source,
+                    bytes: 0,
+                    included: false,
+                    omit_reason: Some(reason),
+                    content: None,
+                });
+                continue;
+            }
+
+            let excerpt = truncate_utf8(&issue.body_excerpt, MAX_ISSUE_BODY_EXCERPT_BYTES);
+            let labels_str = if issue.labels.is_empty() {
+                String::new()
+            } else {
+                format!("\nLabels: {}", issue.labels.join(", "))
+            };
+            let state_str = issue
+                .state
+                .as_deref()
+                .map(|s| format!(" [{}]", s))
+                .unwrap_or_default();
+
+            let content = format!(
+                "#{}{}: {}{}{}{}",
+                issue.number,
+                state_str,
+                issue.title,
+                labels_str,
+                if excerpt.is_empty() { "" } else { "\n" },
+                excerpt
+            );
+
+            if total_issue_bytes + content.len() > MAX_ISSUE_CONTEXT_BYTES_TOTAL {
+                self.items.push(ContextItem {
+                    kind: "issue".into(),
+                    label: format!("Issue #{}", issue.number),
+                    source,
+                    bytes: 0,
+                    included: false,
+                    omit_reason: Some("budget_exceeded".into()),
+                    content: None,
+                });
+                continue;
+            }
+
+            total_issue_bytes += content.len();
             self.try_add_item(
                 "issue",
                 &format!("Issue #{}", issue.number),
-                &format!("github:issue:{}", issue.number),
+                &source,
                 &content,
             );
         }
@@ -371,21 +475,42 @@ impl<'a> ContextPackBuilder<'a> {
     }
 }
 
+/// Read CODEOWNERS content from a local workspace directory.
+/// Checks `.github/CODEOWNERS`, `CODEOWNERS`, and `docs/CODEOWNERS` in order.
+pub fn read_local_codeowners(workspace_path: &Path) -> Option<String> {
+    for location in CODEOWNERS_LOCATIONS {
+        let full_path = workspace_path.join(location);
+        if let Ok(content) = std::fs::read_to_string(&full_path) {
+            return Some(content);
+        }
+    }
+    None
+}
+
+pub fn normalize_repo_path(path: &str) -> String {
+    let unified = path.replace('\\', "/");
+    let without_dot = unified.strip_prefix("./").unwrap_or(&unified);
+    let without_side = without_dot
+        .strip_prefix("a/")
+        .or_else(|| without_dot.strip_prefix("b/"))
+        .unwrap_or(without_dot);
+    without_side.trim().to_string()
+}
+
 /// Simple CODEOWNERS pattern matching (last-match-wins per GitHub spec).
 /// Patterns are glob-like: `*.rs` matches all .rs files, `/src/` matches the src directory.
 pub fn resolve_codeowners(raw: &str, changed_files: &[String]) -> Vec<(String, Vec<String>)> {
     let rules = parse_codeowners(raw);
-    let mut result = Vec::new();
+    let mut result = BTreeMap::new();
 
     for file in changed_files {
-        if let Some(owners) = match_file(&rules, file) {
-            if !owners.is_empty() {
-                result.push((file.clone(), owners));
-            }
+        let normalized = normalize_repo_path(file);
+        if let Some(owners) = match_file(&rules, &normalized) {
+            result.insert(normalized, owners);
         }
     }
 
-    result
+    result.into_iter().collect()
 }
 
 #[derive(Debug)]
@@ -401,16 +526,18 @@ fn parse_codeowners(raw: &str) -> Vec<CodeownersRule> {
             !trimmed.is_empty() && !trimmed.starts_with('#')
         })
         .filter_map(|line| {
-            // Strip inline comments: `pattern @owner # comment`
             let effective = if let Some(idx) = line.find(" #") {
                 &line[..idx]
             } else {
                 line
             };
             let parts: Vec<&str> = effective.split_whitespace().collect();
-            if parts.len() < 2 {
+            if parts.is_empty() {
                 return None;
             }
+            // Per GitHub spec: a pattern with no owners clears ownership for
+            // matched files. We emit a rule with an empty `owners` vec so
+            // `match_file` can propagate the "no owner" result.
             Some(CodeownersRule {
                 pattern: parts[0].to_string(),
                 owners: parts[1..].iter().map(|s| s.to_string()).collect(),
@@ -486,7 +613,6 @@ fn pattern_matches(pattern: &str, file: &str) -> bool {
 
 /// Extract issue references (`#123`, `owner/repo#456`) from a PR body.
 /// Returns strings like `"123"` or `"owner/repo#456"`.
-#[allow(dead_code)]
 pub fn extract_issue_refs(body: &str) -> Vec<String> {
     let mut refs = Vec::new();
     let mut chars = body.chars().peekable();
@@ -521,7 +647,6 @@ pub fn extract_issue_refs(body: &str) -> Vec<String> {
 }
 
 /// Try to expand a bare `#num` into `owner/repo#num` by looking at the preceding text.
-#[allow(dead_code)]
 fn build_issue_ref(body: &str, hash_pos: usize, num: &str) -> String {
     let preceding = &body[..hash_pos];
     if let Some(slash_pos) = preceding.rfind('/') {
@@ -548,6 +673,13 @@ fn build_issue_ref(body: &str, hash_pos: usize, num: &str) -> String {
         }
     }
     num.to_string()
+}
+
+fn issue_source(issue: &IssueRef) -> String {
+    match (&issue.owner, &issue.repo) {
+        (Some(owner), Some(repo)) => format!("github:issue:{}/{}#{}", owner, repo, issue.number),
+        _ => format!("github:issue:{}", issue.number),
+    }
 }
 
 #[cfg(test)]
@@ -734,6 +866,11 @@ mod tests {
             number: "42".into(),
             title: "Fix auth bypass".into(),
             body_excerpt: "Users can bypass login".into(),
+            owner: None,
+            repo: None,
+            labels: vec!["bug".into()],
+            state: Some("open".into()),
+            omit_reason: None,
         }];
         let pack = ContextPackBuilder::new(&config, dir.path(), &[])
             .with_issues(issues)
@@ -939,5 +1076,291 @@ mod tests {
         assert!(readme.included);
         // 10 bytes => 2 full 🎉 (8 bytes)
         assert_eq!(readme.bytes, 8);
+    }
+
+    // ---- Phase 5: CODEOWNERS golden tests ----
+
+    #[test]
+    fn test_codeowners_empty_owner_clears_ownership() {
+        let raw = "* @default-team\nsrc/vendored/   \n";
+        let rules = parse_codeowners(raw);
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[1].pattern, "src/vendored/");
+        assert!(
+            rules[1].owners.is_empty(),
+            "empty-owner line should produce empty owners vec"
+        );
+
+        let files = vec!["src/vendored/lib.js".to_string()];
+        let result = resolve_codeowners(raw, &files);
+        assert_eq!(result.len(), 1);
+        assert!(
+            result[0].1.is_empty(),
+            "file under cleared ownership should have no owners"
+        );
+    }
+
+    #[test]
+    fn test_codeowners_last_match_wins_complex() {
+        let raw = "* @fallback\n*.rs @rust-team\nsrc/auth/ @security\nsrc/ @src-general\n";
+        let files = vec!["src/auth/login.rs".to_string()];
+        let result = resolve_codeowners(raw, &files);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, vec!["@src-general"], "last matching rule wins");
+    }
+
+    #[test]
+    fn test_codeowners_root_anchored_pattern() {
+        // Known limitation: current parser strips leading `/` so root-anchored
+        // patterns match nested dirs too. This test documents current behavior.
+        let raw = "/docs/ @docs-team\n";
+        let files = vec![
+            "docs/guide.md".to_string(),
+            "src/docs/internal.md".to_string(),
+        ];
+        let result = resolve_codeowners(raw, &files);
+        assert_eq!(
+            result.len(),
+            2,
+            "current parser matches both (known limitation)"
+        );
+    }
+
+    #[test]
+    fn test_codeowners_double_star_glob_literal_suffix() {
+        // `**` matching with a literal suffix (no wildcards in suffix)
+        let raw = "src/**/config.json @infra-team\n";
+        let files = vec![
+            "src/features/auth/config.json".to_string(),
+            "src/config.json".to_string(),
+            "config.json".to_string(),
+        ];
+        let result = resolve_codeowners(raw, &files);
+        assert_eq!(result.len(), 2);
+        let matched: Vec<&str> = result.iter().map(|(f, _)| f.as_str()).collect();
+        assert!(matched.contains(&"src/features/auth/config.json"));
+        assert!(matched.contains(&"src/config.json"));
+        assert!(!matched.contains(&"config.json"));
+    }
+
+    #[test]
+    fn test_codeowners_double_star_no_suffix() {
+        let raw = "vendor/** @vendor-team\n";
+        let files = vec![
+            "vendor/lib.js".to_string(),
+            "vendor/deep/nested/file.ts".to_string(),
+            "src/vendor/other.js".to_string(),
+        ];
+        let result = resolve_codeowners(raw, &files);
+        let matched: Vec<&str> = result.iter().map(|(f, _)| f.as_str()).collect();
+        assert!(matched.contains(&"vendor/lib.js"));
+        assert!(matched.contains(&"vendor/deep/nested/file.ts"));
+    }
+
+    #[test]
+    fn test_codeowners_multiple_owners() {
+        let raw = "*.rs @rust-team @security-team @lead\n";
+        let rules = parse_codeowners(raw);
+        assert_eq!(
+            rules[0].owners,
+            vec!["@rust-team", "@security-team", "@lead"]
+        );
+    }
+
+    #[test]
+    fn test_codeowners_empty_owner_then_reassigned() {
+        let raw = "* @default\nvendor/  \nvendor/critical.js @security\n";
+        let files = vec![
+            "vendor/lib.js".to_string(),
+            "vendor/critical.js".to_string(),
+        ];
+        let result = resolve_codeowners(raw, &files);
+        let lib = result.iter().find(|(f, _)| f == "vendor/lib.js").unwrap();
+        assert!(
+            lib.1.is_empty(),
+            "vendor/lib.js cleared by empty-owner rule"
+        );
+        let critical = result
+            .iter()
+            .find(|(f, _)| f == "vendor/critical.js")
+            .unwrap();
+        assert_eq!(
+            critical.1,
+            vec!["@security"],
+            "vendor/critical.js reassigned"
+        );
+    }
+
+    // ---- Phase 5: Issue context budget tests ----
+
+    #[test]
+    fn test_issue_budget_max_issues_enforced() {
+        use crate::providers::github::MAX_ISSUES;
+
+        let dir = tempdir().unwrap();
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_codeowners: false,
+            include_preferences: false,
+            include_issue_context: true,
+            ..Default::default()
+        };
+        let issues: Vec<IssueRef> = (0..(MAX_ISSUES + 2))
+            .map(|i| IssueRef {
+                number: format!("{}", i + 1),
+                title: format!("Issue {}", i + 1),
+                body_excerpt: "Short body".into(),
+                owner: None,
+                repo: None,
+                labels: vec![],
+                state: Some("open".into()),
+                omit_reason: None,
+            })
+            .collect();
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[])
+            .with_issues(issues)
+            .build();
+
+        let included = pack
+            .items
+            .iter()
+            .filter(|i| i.kind == "issue" && i.included)
+            .count();
+        let omitted = pack
+            .items
+            .iter()
+            .filter(|i| i.kind == "issue" && i.omit_reason.as_deref() == Some("budget_exceeded"))
+            .count();
+        assert_eq!(included, MAX_ISSUES);
+        assert_eq!(omitted, 2);
+    }
+
+    #[test]
+    fn test_issue_body_excerpt_truncated() {
+        use crate::providers::github::MAX_ISSUE_BODY_EXCERPT_BYTES;
+
+        let dir = tempdir().unwrap();
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_codeowners: false,
+            include_preferences: false,
+            include_issue_context: true,
+            ..Default::default()
+        };
+        let big_body = "x".repeat(MAX_ISSUE_BODY_EXCERPT_BYTES + 500);
+        let issues = vec![IssueRef {
+            number: "1".into(),
+            title: "Big".into(),
+            body_excerpt: big_body,
+            owner: None,
+            repo: None,
+            labels: vec![],
+            state: None,
+            omit_reason: None,
+        }];
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[])
+            .with_issues(issues)
+            .build();
+
+        let item = pack
+            .items
+            .iter()
+            .find(|i| i.kind == "issue" && i.included)
+            .unwrap();
+        assert!(
+            item.bytes <= MAX_ISSUE_BODY_EXCERPT_BYTES + 200,
+            "content should be bounded by excerpt truncation"
+        );
+    }
+
+    #[test]
+    fn test_issue_auto_enabled_when_refs_exist() {
+        let dir = tempdir().unwrap();
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_codeowners: false,
+            include_preferences: false,
+            include_issue_context: false,
+            ..Default::default()
+        };
+        let issues = vec![IssueRef {
+            number: "99".into(),
+            title: "Auto-included issue".into(),
+            body_excerpt: "Should appear even when include_issue_context is false".into(),
+            owner: None,
+            repo: None,
+            labels: vec!["enhancement".into()],
+            state: Some("open".into()),
+            omit_reason: None,
+        }];
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[])
+            .with_issues(issues)
+            .build();
+
+        let item = pack.items.iter().find(|i| i.kind == "issue").unwrap();
+        assert!(item.included, "issues should auto-include when refs exist");
+        assert!(pack.prompt_suffix.contains("Auto-included issue"));
+    }
+
+    #[test]
+    fn test_issue_labels_and_state_in_content() {
+        let dir = tempdir().unwrap();
+        let config = ContextPackConfig {
+            include_docs: false,
+            include_codeowners: false,
+            include_preferences: false,
+            include_issue_context: true,
+            ..Default::default()
+        };
+        let issues = vec![IssueRef {
+            number: "7".into(),
+            title: "Security hole".into(),
+            body_excerpt: "Details here".into(),
+            owner: None,
+            repo: None,
+            labels: vec!["security".into(), "critical".into()],
+            state: Some("open".into()),
+            omit_reason: None,
+        }];
+        let pack = ContextPackBuilder::new(&config, dir.path(), &[])
+            .with_issues(issues)
+            .build();
+
+        let content = &pack.prompt_suffix;
+        assert!(content.contains("[open]"), "state should appear in content");
+        assert!(
+            content.contains("security, critical"),
+            "labels should appear in content"
+        );
+    }
+
+    // ---- Phase 5: read_local_codeowners helper ----
+
+    #[test]
+    fn test_read_local_codeowners_from_github_dir() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".github")).unwrap();
+        std::fs::write(dir.path().join(".github/CODEOWNERS"), "*.rs @team\n").unwrap();
+
+        let content = read_local_codeowners(dir.path());
+        assert!(content.is_some());
+        assert!(content.unwrap().contains("@team"));
+    }
+
+    #[test]
+    fn test_read_local_codeowners_fallback_to_root() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("CODEOWNERS"), "*.py @py-team\n").unwrap();
+
+        let content = read_local_codeowners(dir.path());
+        assert!(content.is_some());
+        assert!(content.unwrap().contains("@py-team"));
+    }
+
+    #[test]
+    fn test_read_local_codeowners_none_when_missing() {
+        let dir = tempdir().unwrap();
+        let content = read_local_codeowners(dir.path());
+        assert!(content.is_none());
     }
 }

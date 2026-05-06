@@ -13,6 +13,7 @@ pub mod gemini;
 pub mod inbox;
 pub mod intake;
 pub mod opencode;
+pub mod pr_metadata;
 pub mod preferences;
 pub mod providers;
 pub mod rerun;

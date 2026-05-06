@@ -55,6 +55,7 @@ function SignalBoardHarness() {
   const state: ReviewState = useMemo(
     () => ({
       runId: "run-1",
+      prId: "pr-1",
       status: "ready",
       prTitle: "Test PR",
       prNumber: 42,
@@ -73,6 +74,8 @@ function SignalBoardHarness() {
       delta: null,
       contextPackSummary: null,
       localChecksSummary: null,
+      platformMetadata: null,
+      platformMetadataFetchedAt: null,
     }),
     [findings],
   );

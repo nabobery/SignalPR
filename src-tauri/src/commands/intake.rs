@@ -240,6 +240,8 @@ async fn do_open_from_url(
                 changed_files: Some(serde_json::to_string(&changed_files)?),
                 fetched_at: chrono::Utc::now().to_rfc3339(),
                 diff_hash: Some(diff_hash),
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )?;
     }

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use tauri::AppHandle;
@@ -11,6 +12,20 @@ use crate::storage::event_log::EventLog;
 use crate::storage::hashing::sha256_hex;
 use crate::storage::models::{Finding, ReviewerDecision, SubmissionRecord};
 use crate::storage::queries;
+
+const INLINE_FINGERPRINT_PREFIX: &str = "<!-- signalpr:fingerprint=";
+const INLINE_FINGERPRINT_SUFFIX: &str = " -->";
+
+struct SubmissionContext<'a> {
+    app: &'a AppHandle,
+    owner: &'a str,
+    repo: &'a str,
+    pr_number: i32,
+    action: &'a str,
+    body: &'a str,
+    active_findings: &'a [&'a Finding],
+    anchors_verified: bool,
+}
 
 #[tauri::command]
 pub async fn submit_review(
@@ -187,77 +202,55 @@ pub async fn submit_review(
         }),
     );
 
-    // Submit via gh
-    let shell = app.shell();
-    let gh_action = match action.as_str() {
-        "approve" => "--approve",
-        "request-changes" => "--request-changes",
-        _ => "--comment",
-    };
-
-    let output = shell
-        .command("gh")
-        .args([
-            "pr",
-            "review",
-            &pr_number.to_string(),
-            "--repo",
-            &format!("{}/{}", owner, repo),
-            gh_action,
-            "--body",
-            &body,
-        ])
-        .output()
-        .await
-        .map_err(|e| AppError::Transient(format!("Failed to run gh: {}", e)))?;
-
-    if output.status.success() {
-        // Phase B (best-effort): attempt to post inline comments for anchored findings
-        if anchors_verified_for_submission {
-            let inline_findings: Vec<&Finding> = active_findings
-                .iter()
-                .filter(|f| f.diff_new_line.is_some() && f.file_path.is_some())
-                .copied()
-                .collect();
-            if !inline_findings.is_empty() {
-                if let Err(e) =
-                    post_inline_comments(&app, &owner, &repo, pr_number, &inline_findings).await
-                {
-                    tracing::warn!("Inline comments (best-effort) failed: {}", e);
-                }
-            }
-        }
-
+    // Resolve head SHA from metadata for coherent review submission
+    let head_sha = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        let now_rfc3339 = chrono::Utc::now().to_rfc3339();
-        queries::update_submission_status(&conn, &sub_id, "submitted", None, None, &now_rfc3339)?;
-        queries::update_review_run_status(&conn, &run_id, "submitted", None)?;
+        let pr = queries::get_pull_request(&conn, &pr_id)?
+            .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        pr.platform_metadata_json
+            .as_deref()
+            .and_then(|j| {
+                serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(j).ok()
+            })
+            .map(|m| m.head_sha)
+    };
 
-        // Best-effort: record reviewer decisions from the final submitted set.
-        if let Err(e) = record_decisions_for_submission(&conn, &active_findings) {
-            tracing::warn!("Failed to record reviewer decisions: {}", e);
-        }
+    // Try native API coherent review first, fall back to gh CLI
+    let submission_ctx = SubmissionContext {
+        app: &app,
+        owner: &owner,
+        repo: &repo,
+        pr_number,
+        action: &action,
+        body: &body,
+        active_findings: &active_findings,
+        anchors_verified: anchors_verified_for_submission,
+    };
 
-        // Recompute and persist run scorecard after submission
-        if let Ok(scorecard) = crate::metrics::compute_run_scorecard(&conn, &run_id) {
-            let _ = crate::metrics::store_run_scorecard_cache(&conn, &run_id, &scorecard);
-        }
-
-        // Log submission completed event
-        let _ = event_log.append(
-            &run_id,
-            "submission_completed",
-            serde_json::json!({
-                "action": action,
-                "finding_count": active_findings.len(),
-            }),
-        );
-
-        Ok(())
+    let submission_result = if let Some(ref sha) = head_sha {
+        submit_via_native_api(&submission_ctx, sha).await
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(AppError::InvalidInput(
+            "No head SHA available; falling back to gh CLI".into(),
+        ))
+    };
+
+    let (gh_review_id, used_native) = match submission_result {
+        Ok(review_id) => (Some(review_id), true),
+        Err(native_err) => {
+            tracing::info!(
+                "Native API submission unavailable ({}); falling back to gh CLI",
+                native_err
+            );
+            submit_via_gh_cli(&submission_ctx).await?;
+            (None, false)
+        }
+    };
+
+    // Record success
+    {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
@@ -265,16 +258,34 @@ pub async fn submit_review(
         queries::update_submission_status(
             &conn,
             &sub_id,
-            "failed",
+            "submitted",
+            gh_review_id.as_deref(),
             None,
-            Some(&stderr),
             &now_rfc3339,
         )?;
-        Err(AppError::Transient(format!(
-            "gh pr review failed: {}",
-            stderr
-        )))
+        queries::update_review_run_status(&conn, &run_id, "submitted", None)?;
+
+        if let Err(e) = record_decisions_for_submission(&conn, &active_findings) {
+            tracing::warn!("Failed to record reviewer decisions: {}", e);
+        }
+
+        if let Ok(scorecard) = crate::metrics::compute_run_scorecard(&conn, &run_id) {
+            let _ = crate::metrics::store_run_scorecard_cache(&conn, &run_id, &scorecard);
+        }
     }
+
+    let _ = event_log.append(
+        &run_id,
+        "submission_completed",
+        serde_json::json!({
+            "action": action,
+            "finding_count": active_findings.len(),
+            "used_native_api": used_native,
+            "gh_review_id": gh_review_id,
+        }),
+    );
+
+    Ok(())
 }
 
 fn record_decisions_for_submission(
@@ -314,6 +325,139 @@ pub async fn get_submission_history(
     Ok(queries::get_submission_history(&conn, &run_id)?)
 }
 
+/// Submit a single coherent GitHub review via `POST /pulls/{n}/reviews`.
+/// Returns the review ID string on success.
+async fn submit_via_native_api(
+    ctx: &SubmissionContext<'_>,
+    head_sha: &str,
+) -> Result<String, crate::errors::AppError> {
+    use crate::errors::AppError;
+    use crate::providers::github::{
+        resolve_api_from_app, CreateReviewPayload, ReviewCommentPayload,
+    };
+
+    let (api, _) = resolve_api_from_app(ctx.app).await?;
+    let existing_fingerprints = fetch_existing_inline_fingerprints(&api, ctx).await;
+
+    let event = match ctx.action {
+        "approve" => "APPROVE",
+        "request-changes" => "REQUEST_CHANGES",
+        _ => "COMMENT",
+    };
+
+    let comments: Vec<ReviewCommentPayload> = if ctx.anchors_verified {
+        let mut comments = Vec::new();
+        let mut seen_fingerprints = existing_fingerprints;
+        for finding in ctx.active_findings.iter().copied() {
+            let Some(path) = finding.file_path.as_ref() else {
+                continue;
+            };
+            let Some(line) = finding.diff_new_line else {
+                continue;
+            };
+
+            let severity_label = finding
+                .user_severity_override
+                .as_deref()
+                .unwrap_or(&finding.severity)
+                .to_uppercase();
+            let fingerprint = inline_comment_fingerprint(finding);
+            if !seen_fingerprints.insert(fingerprint.clone()) {
+                continue;
+            }
+            let comment_body = build_inline_comment_body(finding, &severity_label, &fingerprint);
+
+            let (start_line, start_side) = if let Some(ls) = finding.line_start {
+                if ls < line {
+                    (Some(ls), finding.diff_side.clone())
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+            comments.push(ReviewCommentPayload {
+                path: path.clone(),
+                body: comment_body,
+                line: Some(line),
+                side: finding.diff_side.clone().or_else(|| Some("RIGHT".into())),
+                start_line,
+                start_side,
+            });
+        }
+        comments
+    } else {
+        vec![]
+    };
+
+    let payload = CreateReviewPayload {
+        commit_id: head_sha.to_string(),
+        body: ctx.body.to_string(),
+        event: event.to_string(),
+        comments,
+    };
+
+    let result = api
+        .create_review(ctx.owner, ctx.repo, ctx.pr_number, &payload)
+        .await
+        .map_err(|e| AppError::Transient(format!("Native review submission failed: {}", e)))?;
+
+    Ok(result.id.to_string())
+}
+
+/// Fallback: submit via `gh pr review` CLI + separate inline comments.
+async fn submit_via_gh_cli(ctx: &SubmissionContext<'_>) -> Result<(), crate::errors::AppError> {
+    use crate::errors::AppError;
+
+    let shell = ctx.app.shell();
+    let gh_action = match ctx.action {
+        "approve" => "--approve",
+        "request-changes" => "--request-changes",
+        _ => "--comment",
+    };
+
+    let output = shell
+        .command("gh")
+        .args([
+            "pr",
+            "review",
+            &ctx.pr_number.to_string(),
+            "--repo",
+            &format!("{}/{}", ctx.owner, ctx.repo),
+            gh_action,
+            "--body",
+            ctx.body,
+        ])
+        .output()
+        .await
+        .map_err(|e| AppError::Transient(format!("Failed to run gh: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(AppError::Transient(format!(
+            "gh pr review failed: {}",
+            stderr
+        )));
+    }
+
+    if ctx.anchors_verified {
+        let inline_findings: Vec<&Finding> = ctx
+            .active_findings
+            .iter()
+            .filter(|f| f.diff_new_line.is_some() && f.file_path.is_some())
+            .copied()
+            .collect();
+        if !inline_findings.is_empty() {
+            if let Err(e) = post_inline_comments(ctx, &inline_findings).await {
+                tracing::warn!("Inline comments (best-effort) failed: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Phase B: Post inline review comments for findings with valid diff anchors.
 ///
 /// Uses the GitHub REST API endpoint:
@@ -322,13 +466,15 @@ pub async fn get_submission_history(
 /// This is best-effort — failures are logged but never bubble up to the caller,
 /// keeping the main `gh pr review` submission (Phase A) reliable.
 async fn post_inline_comments(
-    app: &AppHandle,
-    owner: &str,
-    repo: &str,
-    pr_number: i32,
+    ctx: &SubmissionContext<'_>,
     findings: &[&Finding],
 ) -> Result<(), String> {
-    let shell = app.shell();
+    let shell = ctx.app.shell();
+    let mut existing_fingerprints =
+        match crate::providers::github::resolve_api_from_app(ctx.app).await {
+            Ok((api, _)) => fetch_existing_inline_fingerprints(&api, ctx).await,
+            Err(_) => HashSet::new(),
+        };
 
     // Get HEAD commit SHA (needed for the inline comment API)
     let sha_output = shell
@@ -336,9 +482,9 @@ async fn post_inline_comments(
         .args([
             "pr",
             "view",
-            &pr_number.to_string(),
+            &ctx.pr_number.to_string(),
             "--repo",
-            &format!("{}/{}", owner, repo),
+            &format!("{}/{}", ctx.owner, ctx.repo),
             "--json",
             "headRefOid",
             "--jq",
@@ -377,11 +523,11 @@ async fn post_inline_comments(
             .as_deref()
             .unwrap_or(&finding.severity)
             .to_uppercase();
-        let display_body = finding.user_edited_body.as_deref().unwrap_or(&finding.body);
-        let comment_body = format!(
-            "**[{}]** {}\n\n{}",
-            severity_label, finding.title, display_body
-        );
+        let fingerprint = inline_comment_fingerprint(finding);
+        if !existing_fingerprints.insert(fingerprint.clone()) {
+            continue;
+        }
+        let comment_body = build_inline_comment_body(finding, &severity_label, &fingerprint);
 
         tracing::info!(
             "Posting inline comment on {}:{} — {}",
@@ -391,7 +537,10 @@ async fn post_inline_comments(
         );
 
         let line_str = line.to_string();
-        let endpoint = format!("repos/{}/{}/pulls/{}/comments", owner, repo, pr_number);
+        let endpoint = format!(
+            "repos/{}/{}/pulls/{}/comments",
+            ctx.owner, ctx.repo, ctx.pr_number
+        );
 
         let result = shell
             .command("gh")
@@ -432,6 +581,85 @@ async fn post_inline_comments(
     }
 
     Ok(())
+}
+
+async fn fetch_existing_inline_fingerprints(
+    api: &crate::providers::github::GitHubApi,
+    ctx: &SubmissionContext<'_>,
+) -> HashSet<String> {
+    match api
+        .list_review_comments(ctx.owner, ctx.repo, ctx.pr_number)
+        .await
+    {
+        Ok(comments) => comments
+            .into_iter()
+            .filter_map(|comment| extract_inline_fingerprint(&comment.body))
+            .collect(),
+        Err(err) => {
+            tracing::warn!(
+                "Unable to list existing inline comments for dedupe: {}",
+                err
+            );
+            HashSet::new()
+        }
+    }
+}
+
+fn extract_inline_fingerprint(body: &str) -> Option<String> {
+    let start = body.find(INLINE_FINGERPRINT_PREFIX)?;
+    let marker_start = start + INLINE_FINGERPRINT_PREFIX.len();
+    let remainder = &body[marker_start..];
+    let end_offset = remainder.find(INLINE_FINGERPRINT_SUFFIX)?;
+    let raw = remainder[..end_offset].trim();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw.to_string())
+    }
+}
+
+fn inline_comment_fingerprint(finding: &Finding) -> String {
+    finding.fingerprint.clone().unwrap_or_else(|| {
+        sha256_hex(&format!(
+            "{}|{}|{}|{}|{}",
+            finding.file_path.as_deref().unwrap_or_default(),
+            finding.diff_new_line.unwrap_or_default(),
+            finding.title,
+            finding.severity,
+            finding.body
+        ))
+    })
+}
+
+fn render_suggestion_block(replacement: &str) -> String {
+    if !replacement.contains("```") {
+        return format!("```suggestion\n{}\n```", replacement);
+    }
+    if !replacement.contains("~~~") {
+        return format!("~~~suggestion\n{}\n~~~", replacement);
+    }
+    format!("````suggestion\n{}\n````", replacement)
+}
+
+fn build_inline_comment_body(finding: &Finding, severity_label: &str, fingerprint: &str) -> String {
+    let display_body = finding.user_edited_body.as_deref().unwrap_or(&finding.body);
+    let mut comment_body = format!(
+        "**[{}]** {}\n\n{}",
+        severity_label, finding.title, display_body
+    );
+
+    if let (Some(search), Some(replace)) = (&finding.fix_search, &finding.fix_replace) {
+        if !search.trim().is_empty() {
+            comment_body.push_str("\n\n");
+            comment_body.push_str(&render_suggestion_block(replace));
+        }
+    }
+
+    comment_body.push_str("\n\n");
+    comment_body.push_str(INLINE_FINGERPRINT_PREFIX);
+    comment_body.push_str(fingerprint);
+    comment_body.push_str(INLINE_FINGERPRINT_SUFFIX);
+    comment_body
 }
 
 async fn fetch_latest_diff(

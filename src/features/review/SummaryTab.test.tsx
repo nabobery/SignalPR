@@ -8,6 +8,7 @@ import type { Finding, LaneSnapshot, RunScorecard } from "../../lib/types";
 
 vi.mock("../../lib/ipc", () => ({
   rerunReview: vi.fn(),
+  refreshPrMetadata: vi.fn(),
   parseError: (err: unknown) => ({ code: "unknown", message: String(err) }),
 }));
 
@@ -60,6 +61,7 @@ function makeLane(overrides: Partial<LaneSnapshot> = {}): LaneSnapshot {
 function renderWithContext(state: Partial<ReviewState>) {
   const fullState: ReviewState = {
     runId: "run-1",
+    prId: "pr-1",
     status: "ready",
     prTitle: "Test PR",
     prNumber: 42,
@@ -78,6 +80,8 @@ function renderWithContext(state: Partial<ReviewState>) {
     delta: null,
     contextPackSummary: null,
     localChecksSummary: null,
+    platformMetadata: null,
+    platformMetadataFetchedAt: null,
     ...state,
   };
 
@@ -172,6 +176,7 @@ describe("SummaryTab", () => {
     const ctx: ReviewContextType = {
       state: {
         runId: "run-1",
+        prId: "pr-1",
         status: "ready",
         prTitle: "Test PR",
         prNumber: 42,
@@ -194,6 +199,8 @@ describe("SummaryTab", () => {
         delta: null,
         contextPackSummary: null,
         localChecksSummary: null,
+        platformMetadata: null,
+        platformMetadataFetchedAt: null,
       },
       setSelectedFile,
       setSessionDecision: vi.fn(),
@@ -308,5 +315,97 @@ describe("SummaryTab", () => {
   it("does not show scorecard when metrics is null", () => {
     renderWithContext({ metrics: null });
     expect(screen.queryByText("Provider scorecard")).not.toBeInTheDocument();
+  });
+
+  // ---- Phase 5: Platform metadata tests ----
+
+  it("renders GitHub metadata section with requested reviewers", () => {
+    renderWithContext({
+      platformMetadata: {
+        pr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: false,
+        labels: [],
+        requested_reviewers: ["alice", "bob"],
+        requested_teams: [],
+        review_state_summary: [],
+        linked_issue_numbers: [],
+        text_issue_refs: [],
+      },
+      platformMetadataFetchedAt: "2026-05-06T00:00:00Z",
+    });
+    expect(screen.getByText("GitHub metadata")).toBeInTheDocument();
+    expect(screen.getByText(/Requested reviewers/)).toBeInTheDocument();
+    expect(screen.getByText(/alice, bob/)).toBeInTheDocument();
+  });
+
+  it("renders draft badge when PR is draft", () => {
+    renderWithContext({
+      platformMetadata: {
+        pr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: true,
+        labels: [],
+        requested_reviewers: [],
+        requested_teams: [],
+        review_state_summary: [],
+        linked_issue_numbers: [],
+        text_issue_refs: [],
+      },
+    });
+    expect(screen.getByText("Draft PR")).toBeInTheDocument();
+  });
+
+  it("renders labels from platform metadata", () => {
+    renderWithContext({
+      platformMetadata: {
+        pr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: false,
+        labels: ["bug", "security"],
+        requested_reviewers: [],
+        requested_teams: [],
+        review_state_summary: [],
+        linked_issue_numbers: [],
+        text_issue_refs: [],
+      },
+    });
+    expect(screen.getByText("bug")).toBeInTheDocument();
+    expect(screen.getByText("security")).toBeInTheDocument();
+  });
+
+  it("renders requested teams from platform metadata", () => {
+    renderWithContext({
+      platformMetadata: {
+        pr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: false,
+        labels: [],
+        requested_reviewers: [],
+        requested_teams: ["security-team", "docs-team"],
+        review_state_summary: [],
+        linked_issue_numbers: [],
+        text_issue_refs: [],
+      },
+    });
+    expect(screen.getByText(/Requested teams/)).toBeInTheDocument();
+    expect(screen.getByText(/security-team, docs-team/)).toBeInTheDocument();
+  });
+
+  it("does not render GitHub metadata section when null", () => {
+    renderWithContext({ platformMetadata: null });
+    expect(screen.queryByText("GitHub metadata")).not.toBeInTheDocument();
   });
 });

@@ -174,6 +174,16 @@ pub async fn rerun_review(
             }
         }
 
+        let owners_by_path = {
+            let raw = crate::context_pack::read_local_codeowners(&cwd_path);
+            match raw {
+                Some(content) => crate::context_pack::resolve_codeowners(&content, &changed_files)
+                    .into_iter()
+                    .collect::<std::collections::HashMap<_, _>>(),
+                None => std::collections::HashMap::new(),
+            }
+        };
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -192,6 +202,7 @@ pub async fn rerun_review(
                 event_log,
                 context_suffix,
                 extra_raw_findings,
+                owners_by_path,
             },
         )
         .await;
@@ -287,6 +298,8 @@ fn create_rerun_records(
             changed_files: Some(input.changed_files_json.to_string()),
             fetched_at: input.now.to_string(),
             diff_hash: Some(input.diff_hash.to_string()),
+            platform_metadata_json: input.baseline_pr.platform_metadata_json.clone(),
+            platform_metadata_fetched_at: input.baseline_pr.platform_metadata_fetched_at.clone(),
         },
     )?;
 
@@ -340,6 +353,8 @@ mod tests {
             changed_files: Some("[\"src/a.rs\"]".into()),
             fetched_at: "2026-01-01T00:00:00Z".into(),
             diff_hash: Some("basehash".into()),
+            platform_metadata_json: None,
+            platform_metadata_fetched_at: None,
         };
         queries::insert_pull_request(conn, &baseline_pr).unwrap();
 

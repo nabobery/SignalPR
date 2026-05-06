@@ -90,6 +90,8 @@ mod tests {
             changed_files: None,
             fetched_at: "2026-01-01T00:00:00Z".into(),
             diff_hash: None,
+            platform_metadata_json: None,
+            platform_metadata_fetched_at: None,
         };
         queries::insert_pull_request(conn, &pr).unwrap();
 

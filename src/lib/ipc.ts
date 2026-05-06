@@ -14,6 +14,7 @@ import type {
   InboxOverview,
   EnvironmentSummary,
   ReviewDraft,
+  RefreshMetadataResult,
 } from "./types";
 
 export function parseError(err: unknown): AppError {
@@ -222,6 +223,12 @@ export async function saveReviewDraft(
   reviewAction: string,
 ): Promise<void> {
   return invoke("save_review_draft", { runId, summaryMarkdown, reviewAction });
+}
+
+// --- Platform Metadata ---
+
+export async function refreshPrMetadata(prId: string): Promise<RefreshMetadataResult> {
+  return invoke("refresh_pr_metadata", { prId });
 }
 
 // --- Provider Credential Platform ---

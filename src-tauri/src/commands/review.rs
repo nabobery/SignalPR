@@ -10,12 +10,17 @@ use tokio_util::sync::CancellationToken;
 use rusqlite::Connection;
 
 use crate::agents::definition::AgentDefinition;
+use crate::commands::intake::parse_pr_url;
 use crate::config;
 use crate::context_pack::ContextPackBuilder;
 use crate::local_checks::{self, LocalChecksRunner};
 use crate::orchestration::engine;
 use crate::orchestration::lane::{AgentLaneConfig, LaneSnapshot};
 use crate::preferences::scoring;
+use crate::providers::github::{
+    resolve_api_from_app, GitHubApiError, MAX_ISSUES, MAX_ISSUE_BODY_EXCERPT_BYTES,
+    MAX_ISSUE_CONTEXT_BYTES_TOTAL,
+};
 use crate::providers::prompts::{self, AgentFocus};
 use crate::providers::traits::{RawFinding, ReviewProvider};
 use crate::review_delta::{self, ReviewDeltaCounts, ReviewDeltaSnapshot};
@@ -35,6 +40,7 @@ pub struct FindingSnapshot {
 #[derive(Debug, Serialize)]
 pub struct ReviewSnapshot {
     pub run_id: String,
+    pub pr_id: String,
     pub status: String,
     pub pr_title: String,
     pub pr_number: i32,
@@ -51,6 +57,8 @@ pub struct ReviewSnapshot {
     pub decisions_by_finding_id: Option<HashMap<String, String>>,
     pub context_pack_summary: Option<serde_json::Value>,
     pub local_checks_summary: Option<serde_json::Value>,
+    pub platform_metadata: Option<serde_json::Value>,
+    pub platform_metadata_fetched_at: Option<String>,
 }
 
 pub struct ActiveReviews(pub Mutex<HashMap<String, CancellationToken>>);
@@ -194,8 +202,55 @@ pub async fn start_review(
             })
         };
 
+        // Phase 5: Resolve issue refs + CODEOWNERS from GitHub metadata/base branch.
+        let (issue_refs, base_branch_codeowners) = {
+            let (pr_url, metadata): (
+                Option<String>,
+                Option<crate::providers::github::PlatformMetadataSnapshot>,
+            ) = {
+                let conn = db.0.lock().ok();
+                conn.and_then(|c| {
+                    let pr = queries::get_pull_request(&c, &pr_id).ok()??;
+                    Some((
+                        Some(pr.url),
+                        pr.platform_metadata_json
+                            .as_deref()
+                            .and_then(|j| serde_json::from_str(j).ok()),
+                    ))
+                })
+                .unwrap_or((None, None))
+            };
+
+            let parsed = pr_url.as_deref().and_then(|u| parse_pr_url(u).ok());
+            let issue_refs = if let Some(parsed) = parsed.as_ref() {
+                let refs =
+                    build_issue_refs_from_metadata(metadata.as_ref(), &parsed.owner, &parsed.repo);
+                hydrate_issue_refs_from_github(&app_clone, refs).await
+            } else {
+                Vec::new()
+            };
+
+            let base_branch_codeowners = if let Some(parsed) = parsed.as_ref() {
+                let base_ref = metadata
+                    .as_ref()
+                    .map(|m| m.base_ref.as_str())
+                    .unwrap_or("main");
+                fetch_base_branch_codeowners(&app_clone, &parsed.owner, &parsed.repo, base_ref)
+                    .await
+            } else {
+                None
+            };
+
+            (issue_refs, base_branch_codeowners)
+        };
+
         let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
             .with_preferences(preference_text)
+            .with_codeowners_content(
+                base_branch_codeowners.clone(),
+                Some("github:base-branch:CODEOWNERS".to_string()),
+            )
+            .with_issues(issue_refs)
             .build();
 
         let context_suffix = if context_pack.prompt_suffix.is_empty() {
@@ -230,6 +285,18 @@ pub async fn start_review(
             }
         }
 
+        // Resolve CODEOWNERS from base branch (fallback to local workspace)
+        let owners_by_path = {
+            let raw = base_branch_codeowners
+                .or_else(|| crate::context_pack::read_local_codeowners(&cwd_path));
+            raw.map(|content| {
+                crate::context_pack::resolve_codeowners(&content, &changed_files)
+                    .into_iter()
+                    .collect::<std::collections::HashMap<_, _>>()
+            })
+            .unwrap_or_default()
+        };
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -248,6 +315,7 @@ pub async fn start_review(
                 event_log,
                 context_suffix,
                 extra_raw_findings,
+                owners_by_path,
             },
         )
         .await;
@@ -450,6 +518,7 @@ pub async fn get_review_snapshot(
 
     Ok(ReviewSnapshot {
         run_id: run.id,
+        pr_id: run.pr_id,
         status: run.status,
         pr_title: pr.title,
         pr_number: pr.pr_number,
@@ -472,6 +541,11 @@ pub async fn get_review_snapshot(
             .local_checks_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
+        platform_metadata: pr
+            .platform_metadata_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
+        platform_metadata_fetched_at: pr.platform_metadata_fetched_at,
     })
 }
 
@@ -577,6 +651,226 @@ fn compute_delta_for_snapshot(
         },
         resolved: classification.resolved.into_iter().take(50).collect(),
     }))
+}
+
+fn build_issue_refs_from_metadata(
+    metadata: Option<&crate::providers::github::PlatformMetadataSnapshot>,
+    default_owner: &str,
+    default_repo: &str,
+) -> Vec<crate::context_pack::IssueRef> {
+    let Some(meta) = metadata else {
+        return Vec::new();
+    };
+
+    let mut dedup = std::collections::HashSet::new();
+    let mut refs = Vec::new();
+
+    for num in &meta.linked_issue_numbers {
+        let number = num.to_string();
+        let key = format!("{}/{}#{}", default_owner, default_repo, number);
+        if dedup.insert(key) {
+            refs.push(crate::context_pack::IssueRef {
+                number,
+                title: format!("Linked issue #{}", num),
+                body_excerpt: String::new(),
+                owner: Some(default_owner.to_string()),
+                repo: Some(default_repo.to_string()),
+                labels: Vec::new(),
+                state: None,
+                omit_reason: None,
+            });
+        }
+    }
+
+    for text_ref in &meta.text_issue_refs {
+        if let Some((owner, repo, number)) = parse_issue_ref(text_ref, default_owner, default_repo)
+        {
+            let key = format!("{}/{}#{}", owner, repo, number);
+            if dedup.insert(key) {
+                refs.push(crate::context_pack::IssueRef {
+                    number: number.clone(),
+                    title: format!("Referenced issue #{}", number),
+                    body_excerpt: String::new(),
+                    owner: Some(owner),
+                    repo: Some(repo),
+                    labels: Vec::new(),
+                    state: None,
+                    omit_reason: None,
+                });
+            }
+        }
+    }
+
+    refs
+}
+
+async fn hydrate_issue_refs_from_github(
+    app: &AppHandle,
+    refs: Vec<crate::context_pack::IssueRef>,
+) -> Vec<crate::context_pack::IssueRef> {
+    if refs.is_empty() {
+        return refs;
+    }
+
+    let (api, _) = match resolve_api_from_app(app).await {
+        Ok(api) => api,
+        Err(_) => {
+            return refs
+                .into_iter()
+                .map(|mut issue_ref| {
+                    issue_ref.omit_reason = Some("fetch_failed".to_string());
+                    issue_ref
+                })
+                .collect();
+        }
+    };
+
+    let mut hydrated = Vec::new();
+    let mut total_issue_bytes = 0usize;
+
+    for (index, issue_ref) in refs.into_iter().enumerate() {
+        if index >= MAX_ISSUES {
+            hydrated.push(crate::context_pack::IssueRef {
+                omit_reason: Some("budget_exceeded".to_string()),
+                ..issue_ref
+            });
+            continue;
+        }
+
+        let owner = issue_ref.owner.clone().unwrap_or_default();
+        let repo = issue_ref.repo.clone().unwrap_or_default();
+        let issue_number = issue_ref.number.parse::<i64>().ok();
+        if owner.is_empty() || repo.is_empty() || issue_number.is_none() {
+            hydrated.push(crate::context_pack::IssueRef {
+                omit_reason: Some("fetch_failed".to_string()),
+                ..issue_ref
+            });
+            continue;
+        }
+        let issue_number = issue_number.unwrap_or_default();
+
+        match api.get_issue(&owner, &repo, issue_number).await {
+            Ok(issue) => {
+                let body_excerpt = truncate_to_bytes(
+                    issue.body.as_deref().unwrap_or_default(),
+                    MAX_ISSUE_BODY_EXCERPT_BYTES,
+                );
+                let labels: Vec<String> = issue
+                    .labels
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|label| label.name)
+                    .collect();
+                let estimated_bytes = issue.title.len()
+                    + body_excerpt.len()
+                    + labels.iter().map(String::len).sum::<usize>()
+                    + 64;
+                if total_issue_bytes + estimated_bytes > MAX_ISSUE_CONTEXT_BYTES_TOTAL {
+                    hydrated.push(crate::context_pack::IssueRef {
+                        omit_reason: Some("budget_exceeded".to_string()),
+                        ..issue_ref
+                    });
+                    continue;
+                }
+                total_issue_bytes += estimated_bytes;
+                hydrated.push(crate::context_pack::IssueRef {
+                    title: issue.title,
+                    body_excerpt,
+                    labels,
+                    state: Some(issue.state),
+                    omit_reason: None,
+                    ..issue_ref
+                });
+            }
+            Err(err) => {
+                hydrated.push(crate::context_pack::IssueRef {
+                    omit_reason: Some(issue_fetch_omit_reason(&err).to_string()),
+                    ..issue_ref
+                });
+            }
+        }
+    }
+
+    hydrated
+}
+
+async fn fetch_base_branch_codeowners(
+    app: &AppHandle,
+    owner: &str,
+    repo: &str,
+    base_ref: &str,
+) -> Option<String> {
+    let (api, _) = resolve_api_from_app(app).await.ok()?;
+    match api.get_codeowners(owner, repo, base_ref).await {
+        Ok(content) => content,
+        Err(err) => {
+            tracing::warn!("Failed to fetch base-branch CODEOWNERS: {}", err);
+            None
+        }
+    }
+}
+
+fn parse_issue_ref(
+    text_ref: &str,
+    default_owner: &str,
+    default_repo: &str,
+) -> Option<(String, String, String)> {
+    let trimmed = text_ref
+        .trim()
+        .trim_end_matches(|c: char| ",.;)]".contains(c));
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some((repo_ref, num)) = trimmed.rsplit_once('#') {
+        let number = num.trim();
+        if !number.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        if repo_ref.contains('/') {
+            let (owner, repo) = repo_ref.split_once('/')?;
+            if owner.is_empty() || repo.is_empty() {
+                return None;
+            }
+            return Some((owner.to_string(), repo.to_string(), number.to_string()));
+        }
+        return Some((
+            default_owner.to_string(),
+            default_repo.to_string(),
+            number.to_string(),
+        ));
+    }
+
+    let bare = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if bare.chars().all(|c| c.is_ascii_digit()) {
+        return Some((
+            default_owner.to_string(),
+            default_repo.to_string(),
+            bare.to_string(),
+        ));
+    }
+
+    None
+}
+
+fn issue_fetch_omit_reason(error: &GitHubApiError) -> &'static str {
+    match error {
+        GitHubApiError::HttpError { status: 404, .. } => "no_access_404",
+        GitHubApiError::HttpError { status: 301, .. } => "transferred_301",
+        GitHubApiError::HttpError { status: 410, .. } => "gone_410",
+        _ => "fetch_failed",
+    }
+}
+
+fn truncate_to_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 fn latest_decisions_by_finding(decisions: &[ReviewerDecision]) -> Option<HashMap<String, String>> {
@@ -759,8 +1053,54 @@ pub async fn resume_review(
             })
         };
 
+        let (issue_refs, base_branch_codeowners) = {
+            let (pr_url, metadata): (
+                Option<String>,
+                Option<crate::providers::github::PlatformMetadataSnapshot>,
+            ) = {
+                let conn = db.0.lock().ok();
+                conn.and_then(|c| {
+                    let pr = queries::get_pull_request(&c, &pr_id).ok()??;
+                    Some((
+                        Some(pr.url),
+                        pr.platform_metadata_json
+                            .as_deref()
+                            .and_then(|j| serde_json::from_str(j).ok()),
+                    ))
+                })
+                .unwrap_or((None, None))
+            };
+
+            let parsed = pr_url.as_deref().and_then(|u| parse_pr_url(u).ok());
+            let issue_refs = if let Some(parsed) = parsed.as_ref() {
+                let refs =
+                    build_issue_refs_from_metadata(metadata.as_ref(), &parsed.owner, &parsed.repo);
+                hydrate_issue_refs_from_github(&app_clone, refs).await
+            } else {
+                Vec::new()
+            };
+
+            let base_branch_codeowners = if let Some(parsed) = parsed.as_ref() {
+                let base_ref = metadata
+                    .as_ref()
+                    .map(|m| m.base_ref.as_str())
+                    .unwrap_or("main");
+                fetch_base_branch_codeowners(&app_clone, &parsed.owner, &parsed.repo, base_ref)
+                    .await
+            } else {
+                None
+            };
+
+            (issue_refs, base_branch_codeowners)
+        };
+
         let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
             .with_preferences(preference_text)
+            .with_codeowners_content(
+                base_branch_codeowners.clone(),
+                Some("github:base-branch:CODEOWNERS".to_string()),
+            )
+            .with_issues(issue_refs)
             .build();
 
         let context_suffix = if context_pack.prompt_suffix.is_empty() {
@@ -793,6 +1133,17 @@ pub async fn resume_review(
             }
         }
 
+        let owners_by_path = {
+            let raw = base_branch_codeowners
+                .or_else(|| crate::context_pack::read_local_codeowners(&cwd_path));
+            raw.map(|content| {
+                crate::context_pack::resolve_codeowners(&content, &changed_files)
+                    .into_iter()
+                    .collect::<std::collections::HashMap<_, _>>()
+            })
+            .unwrap_or_default()
+        };
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -811,6 +1162,7 @@ pub async fn resume_review(
                 event_log,
                 context_suffix,
                 extra_raw_findings,
+                owners_by_path,
             },
         )
         .await;
@@ -1003,6 +1355,8 @@ mod tests {
             changed_files: Some("[\"src/lib.rs\"]".into()),
             fetched_at: "2026-01-01T00:00:00Z".into(),
             diff_hash: None,
+            platform_metadata_json: None,
+            platform_metadata_fetched_at: None,
         };
         queries::insert_pull_request(&conn, &baseline_pr).unwrap();
 
@@ -1019,6 +1373,8 @@ mod tests {
             changed_files: Some("[\"src/lib.rs\"]".into()),
             fetched_at: "2026-01-02T00:00:00Z".into(),
             diff_hash: None,
+            platform_metadata_json: None,
+            platform_metadata_fetched_at: None,
         };
         queries::insert_pull_request(&conn, &current_pr).unwrap();
 
@@ -1210,5 +1566,94 @@ mod tests {
         assert_eq!(new_finding.delta_state.as_deref(), Some("new"));
         assert!(new_finding.baseline_finding_id.is_none());
         assert!(new_finding.baseline_decision.is_none());
+    }
+
+    // ---- Phase 5: build_issue_refs_from_metadata tests ----
+
+    #[test]
+    fn test_build_issue_refs_none_metadata() {
+        let refs = build_issue_refs_from_metadata(None, "octo", "repo");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_build_issue_refs_linked_only() {
+        let meta = crate::providers::github::PlatformMetadataSnapshot {
+            pr_body: None,
+            linked_issue_numbers: vec![10, 20],
+            text_issue_refs: vec![],
+            requested_reviewers: vec![],
+            requested_teams: vec![],
+            review_state_summary: vec![],
+            labels: vec![],
+            draft: false,
+            head_sha: "abc".into(),
+            base_sha: "def".into(),
+            base_ref: "main".into(),
+            head_ref: "feature".into(),
+        };
+        let refs = build_issue_refs_from_metadata(Some(&meta), "octo", "repo");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].number, "10");
+        assert_eq!(refs[1].number, "20");
+        assert_eq!(refs[0].owner.as_deref(), Some("octo"));
+        assert_eq!(refs[0].repo.as_deref(), Some("repo"));
+    }
+
+    #[test]
+    fn test_build_issue_refs_text_refs_deduped() {
+        let meta = crate::providers::github::PlatformMetadataSnapshot {
+            pr_body: None,
+            linked_issue_numbers: vec![5],
+            text_issue_refs: vec!["5".into(), "#5".into(), "#99".into()],
+            requested_reviewers: vec![],
+            requested_teams: vec![],
+            review_state_summary: vec![],
+            labels: vec![],
+            draft: false,
+            head_sha: "abc".into(),
+            base_sha: "def".into(),
+            base_ref: "main".into(),
+            head_ref: "feature".into(),
+        };
+        let refs = build_issue_refs_from_metadata(Some(&meta), "octo", "repo");
+        assert_eq!(refs.len(), 2, "linked #5 and text #99; text #5 deduped");
+        assert!(refs.iter().any(|r| r.number == "5"));
+        assert!(refs.iter().any(|r| r.number == "99"));
+    }
+
+    #[test]
+    fn test_build_issue_refs_cross_repo() {
+        let meta = crate::providers::github::PlatformMetadataSnapshot {
+            pr_body: None,
+            linked_issue_numbers: vec![],
+            text_issue_refs: vec!["owner/repo#42".into()],
+            requested_reviewers: vec![],
+            requested_teams: vec![],
+            review_state_summary: vec![],
+            labels: vec![],
+            draft: false,
+            head_sha: "abc".into(),
+            base_sha: "def".into(),
+            base_ref: "main".into(),
+            head_ref: "feature".into(),
+        };
+        let refs = build_issue_refs_from_metadata(Some(&meta), "octo", "repo");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].number, "42");
+        assert_eq!(refs[0].owner.as_deref(), Some("owner"));
+        assert_eq!(refs[0].repo.as_deref(), Some("repo"));
+    }
+
+    #[test]
+    fn test_parse_issue_ref_accepts_bare_and_hash() {
+        assert_eq!(
+            parse_issue_ref("123", "a", "b"),
+            Some(("a".into(), "b".into(), "123".into()))
+        );
+        assert_eq!(
+            parse_issue_ref("#456", "a", "b"),
+            Some(("a".into(), "b".into(), "456".into()))
+        );
     }
 }

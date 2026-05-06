@@ -198,6 +198,7 @@ export interface ReviewDeltaSnapshot {
 
 export interface ReviewSnapshot {
   run_id: string;
+  pr_id: string;
   status: string;
   pr_title: string;
   pr_number: number;
@@ -215,6 +216,37 @@ export interface ReviewSnapshot {
   // Phase 3: hybrid analysis artifacts
   context_pack_summary: ContextPackSummary | null;
   local_checks_summary: LocalChecksSummary | null;
+  // Phase 5: GitHub platform metadata
+  platform_metadata: PlatformMetadata | null;
+  platform_metadata_fetched_at: string | null;
+}
+
+// Phase 5: GitHub platform metadata snapshot
+export interface PlatformMetadata {
+  pr_body: string | null;
+  head_sha: string;
+  base_sha: string;
+  base_ref: string;
+  head_ref: string;
+  draft: boolean;
+  labels: string[];
+  requested_reviewers: string[];
+  requested_teams: string[];
+  review_state_summary: ReviewStateSummary[];
+  linked_issue_numbers: number[];
+  text_issue_refs: string[];
+}
+
+export interface ReviewStateSummary {
+  login: string;
+  state: string;
+  submitted_at: string | null;
+}
+
+export interface RefreshMetadataResult {
+  pr_id: string;
+  fetched_at: string;
+  metadata: PlatformMetadata;
 }
 
 export interface ReviewerDecision {

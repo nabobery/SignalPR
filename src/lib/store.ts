@@ -7,10 +7,12 @@ import type {
   ReviewDeltaSnapshot,
   ContextPackSummary,
   LocalChecksSummary,
+  PlatformMetadata,
 } from "./types";
 
 export interface ReviewState {
   runId: string;
+  prId: string;
   status: string;
   prTitle: string;
   prNumber: number;
@@ -29,6 +31,8 @@ export interface ReviewState {
   delta: ReviewDeltaSnapshot | null;
   contextPackSummary: ContextPackSummary | null;
   localChecksSummary: LocalChecksSummary | null;
+  platformMetadata: PlatformMetadata | null;
+  platformMetadataFetchedAt: string | null;
 }
 
 export interface ReviewContextType {

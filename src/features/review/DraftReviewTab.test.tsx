@@ -54,6 +54,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
 function renderDraft(stateOverrides: Partial<ReviewState> = {}, onSubmitted = vi.fn()) {
   const state: ReviewState = {
     runId: "run-1",
+    prId: "pr-1",
     status: "ready",
     prTitle: "Test PR",
     prNumber: 42,
@@ -83,6 +84,8 @@ function renderDraft(stateOverrides: Partial<ReviewState> = {}, onSubmitted = vi
     delta: null,
     contextPackSummary: null,
     localChecksSummary: null,
+    platformMetadata: null,
+    platformMetadataFetchedAt: null,
     ...stateOverrides,
   };
 

@@ -13,7 +13,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useReviewContext } from "../../lib/store";
-import { rerunReview, parseError } from "../../lib/ipc";
+import { rerunReview, refreshPrMetadata, parseError } from "../../lib/ipc";
 import type { RunScorecard } from "../../lib/types";
 
 const severityIcons: Record<string, typeof AlertTriangle> = {
@@ -33,10 +33,12 @@ const severityColors: Record<string, string> = {
 };
 
 export function SummaryTab() {
-  const { state, setSelectedFile } = useReviewContext();
+  const { state, setSelectedFile, refreshSnapshot } = useReviewContext();
   const navigate = useNavigate();
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [refreshingMetadata, setRefreshingMetadata] = useState(false);
+  const [metadataRefreshError, setMetadataRefreshError] = useState<string | null>(null);
   const activeFindings = state.findings.filter((f) => f.status === "active");
 
   const severityBreakdown = useMemo(() => {
@@ -80,6 +82,19 @@ export function SummaryTab() {
       setRerunError(parseError(err).message);
     } finally {
       setRerunning(false);
+    }
+  };
+
+  const handleRefreshMetadata = async () => {
+    setRefreshingMetadata(true);
+    setMetadataRefreshError(null);
+    try {
+      await refreshPrMetadata(state.prId);
+      await refreshSnapshot();
+    } catch (err) {
+      setMetadataRefreshError(parseError(err).message);
+    } finally {
+      setRefreshingMetadata(false);
     }
   };
 
@@ -279,10 +294,124 @@ export function SummaryTab() {
         </section>
       )}
 
+      {/* GitHub metadata */}
+      {state.platformMetadata && (
+        <PlatformMetadataSection
+          metadata={state.platformMetadata}
+          fetchedAt={state.platformMetadataFetchedAt}
+          isRefreshing={refreshingMetadata}
+          onRefresh={handleRefreshMetadata}
+          refreshError={metadataRefreshError}
+        />
+      )}
+
       {/* Provider scorecard */}
       {state.metrics && <ProviderScorecard scorecard={state.metrics} />}
     </div>
   );
+}
+
+function PlatformMetadataSection({
+  metadata,
+  fetchedAt,
+  isRefreshing,
+  onRefresh,
+  refreshError,
+}: {
+  metadata: import("../../lib/types").PlatformMetadata;
+  fetchedAt: string | null;
+  isRefreshing: boolean;
+  onRefresh: () => void;
+  refreshError: string | null;
+}) {
+  const fetchedLabel = formatMaybeDate(fetchedAt);
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-2">
+        <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+          GitHub metadata
+          {fetchedLabel && (
+            <span className="ml-2 font-normal normal-case text-zinc-600">{fetchedLabel}</span>
+          )}
+        </h3>
+        <button
+          onClick={onRefresh}
+          disabled={isRefreshing}
+          className="ml-auto flex items-center gap-1 text-[11px] text-zinc-300 bg-zinc-800 hover:bg-zinc-700 px-2 py-1 rounded transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
+          {isRefreshing ? "Refreshing..." : "Refresh GitHub metadata"}
+        </button>
+      </div>
+      {refreshError && (
+        <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded mb-2">{refreshError}</p>
+      )}
+      <div className="space-y-2">
+        {metadata.draft && (
+          <span className="inline-flex items-center text-xs text-yellow-400 bg-yellow-900/20 px-2 py-0.5 rounded">
+            Draft PR
+          </span>
+        )}
+        {metadata.labels.length > 0 && (
+          <div className="flex gap-1.5 flex-wrap">
+            {metadata.labels.map((label) => (
+              <span
+                key={label}
+                className="text-xs bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded-full"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
+        {metadata.requested_reviewers.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Requested reviewers:</span>{" "}
+            {metadata.requested_reviewers.join(", ")}
+          </div>
+        )}
+        {metadata.requested_teams.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Requested teams:</span>{" "}
+            {metadata.requested_teams.join(", ")}
+          </div>
+        )}
+        {metadata.review_state_summary.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Reviews:</span>{" "}
+            {metadata.review_state_summary.map((r) => (
+              <span key={r.login} className="mr-2">
+                {r.login}{" "}
+                <span
+                  className={
+                    r.state === "APPROVED"
+                      ? "text-emerald-400"
+                      : r.state === "CHANGES_REQUESTED"
+                        ? "text-red-400"
+                        : "text-zinc-500"
+                  }
+                >
+                  ({r.state.toLowerCase().replace(/_/g, " ")})
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
+        {metadata.linked_issue_numbers.length > 0 && (
+          <div className="text-xs text-zinc-400">
+            <span className="text-zinc-500">Linked issues:</span>{" "}
+            {metadata.linked_issue_numbers.map((n) => `#${n}`).join(", ")}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function formatMaybeDate(value: string | null): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
 function ProviderScorecard({ scorecard }: { scorecard: RunScorecard }) {

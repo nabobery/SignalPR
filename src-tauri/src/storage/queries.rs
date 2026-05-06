@@ -40,8 +40,8 @@ pub fn get_workspace_by_remote(
 
 pub fn insert_pull_request(conn: &Connection, pr: &PullRequest) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO pull_requests (id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![pr.id, pr.workspace_id, pr.pr_number, pr.title, pr.author, pr.base_branch, pr.head_branch, pr.url, pr.diff_text, pr.changed_files, pr.fetched_at, pr.diff_hash],
+        "INSERT INTO pull_requests (id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash, platform_metadata_json, platform_metadata_fetched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![pr.id, pr.workspace_id, pr.pr_number, pr.title, pr.author, pr.base_branch, pr.head_branch, pr.url, pr.diff_text, pr.changed_files, pr.fetched_at, pr.diff_hash, pr.platform_metadata_json, pr.platform_metadata_fetched_at],
     )?;
     Ok(())
 }
@@ -51,7 +51,7 @@ pub fn get_pull_request(
     pr_id: &str,
 ) -> Result<Option<PullRequest>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash FROM pull_requests WHERE id = ?1",
+        "SELECT id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash, platform_metadata_json, platform_metadata_fetched_at FROM pull_requests WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![pr_id], |row| {
         Ok(PullRequest {
@@ -67,6 +67,8 @@ pub fn get_pull_request(
             changed_files: row.get(9)?,
             fetched_at: row.get(10)?,
             diff_hash: row.get(11)?,
+            platform_metadata_json: row.get(12)?,
+            platform_metadata_fetched_at: row.get(13)?,
         })
     })?;
     match rows.next() {
@@ -84,6 +86,19 @@ pub fn update_pull_request_diff(
     conn.execute(
         "UPDATE pull_requests SET diff_text = ?1, diff_hash = ?2, fetched_at = datetime('now') WHERE id = ?3",
         params![diff_text, diff_hash, pr_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_pull_request_metadata(
+    conn: &Connection,
+    pr_id: &str,
+    metadata_json: &str,
+    fetched_at_rfc3339: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE pull_requests SET platform_metadata_json = ?1, platform_metadata_fetched_at = ?2 WHERE id = ?3",
+        params![metadata_json, fetched_at_rfc3339, pr_id],
     )?;
     Ok(())
 }
@@ -981,6 +996,8 @@ mod tests {
             changed_files: Some(r#"["src/auth.rs"]"#.into()),
             fetched_at: "2026-01-01T00:00:00".into(),
             diff_hash: None,
+            platform_metadata_json: None,
+            platform_metadata_fetched_at: None,
         };
         insert_pull_request(&conn, &pr).unwrap();
         let found = get_pull_request(&conn, "pr-1")
@@ -1019,6 +1036,8 @@ mod tests {
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00Z".into(),
                 diff_hash: Some("h1".into()),
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();
@@ -1045,6 +1064,8 @@ mod tests {
             changed_files: None,
             fetched_at: "2026-01-01T00:00:00".into(),
             diff_hash: None,
+            platform_metadata_json: None,
+            platform_metadata_fetched_at: None,
         };
         let result = insert_pull_request(&conn, &pr);
         assert!(result.is_err());
@@ -1080,6 +1101,8 @@ mod tests {
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
                 diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();
@@ -1140,6 +1163,8 @@ mod tests {
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
                 diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();
@@ -1246,6 +1271,8 @@ mod tests {
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
                 diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();
@@ -1376,6 +1403,8 @@ mod tests {
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00Z".into(),
                 diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();
@@ -1475,6 +1504,8 @@ mod tests {
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
                 diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();
@@ -1618,6 +1649,8 @@ mod tests {
                 changed_files: None,
                 fetched_at: "2026-01-01T00:00:00".into(),
                 diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();

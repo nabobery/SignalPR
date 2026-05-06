@@ -24,6 +24,9 @@ pub struct PullRequest {
     pub fetched_at: String,
     // V3 fields
     pub diff_hash: Option<String>,
+    // V9 fields: Phase 5 GitHub platform metadata
+    pub platform_metadata_json: Option<String>,
+    pub platform_metadata_fetched_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

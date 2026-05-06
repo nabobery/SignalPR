@@ -776,6 +776,7 @@ pub fn run() {
             commands::drafts::get_review_draft,
             commands::drafts::save_review_draft,
             commands::rerun::rerun_review,
+            commands::pr_metadata::refresh_pr_metadata,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

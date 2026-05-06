@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, Filter, Loader2, Package, ShieldCheck } from "lucide-react";
-import { getEventLog, parseError } from "../../lib/ipc";
-import type { ContextPackSummary, LocalChecksSummary } from "../../lib/types";
+import {
+  Activity,
+  Filter,
+  GitBranch,
+  Loader2,
+  Package,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
+import { getEventLog, refreshPrMetadata, parseError } from "../../lib/ipc";
+import type { ContextPackSummary, LocalChecksSummary, PlatformMetadata } from "../../lib/types";
 
 interface EventEntry {
   timestamp: string;
@@ -11,19 +19,29 @@ interface EventEntry {
 
 interface DiagnosticsProps {
   runId: string;
+  prId?: string | null;
+  onMetadataRefreshed?: () => Promise<void> | void;
   contextPackSummary?: ContextPackSummary | null;
   localChecksSummary?: LocalChecksSummary | null;
+  platformMetadata?: PlatformMetadata | null;
+  platformMetadataFetchedAt?: string | null;
 }
 
 export function DiagnosticsTab({
   runId,
+  prId,
+  onMetadataRefreshed,
   contextPackSummary,
   localChecksSummary,
+  platformMetadata,
+  platformMetadataFetchedAt,
 }: DiagnosticsProps) {
   const [events, setEvents] = useState<EventEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState("");
+  const [refreshingMetadata, setRefreshingMetadata] = useState(false);
+  const [refreshMetadataError, setRefreshMetadataError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -39,6 +57,20 @@ export function DiagnosticsTab({
   useEffect(() => {
     load();
   }, [load]);
+
+  const refreshMetadata = useCallback(async () => {
+    if (!prId) return;
+    setRefreshingMetadata(true);
+    setRefreshMetadataError(null);
+    try {
+      await refreshPrMetadata(prId);
+      await Promise.resolve(onMetadataRefreshed?.());
+    } catch (err) {
+      setRefreshMetadataError(parseError(err).message);
+    } finally {
+      setRefreshingMetadata(false);
+    }
+  }, [onMetadataRefreshed, prId]);
 
   const filtered = useMemo(() => {
     if (!filterText.trim()) return events;
@@ -68,6 +100,16 @@ export function DiagnosticsTab({
 
   return (
     <div className="overflow-y-auto p-4 space-y-4">
+      {platformMetadata && (
+        <PlatformMetadataSection
+          data={platformMetadata}
+          fetchedAt={platformMetadataFetchedAt ?? null}
+          onRefresh={refreshMetadata}
+          isRefreshing={refreshingMetadata}
+          refreshError={refreshMetadataError}
+          canRefresh={Boolean(prId)}
+        />
+      )}
       {contextPackSummary && <ContextPackSection data={contextPackSummary} />}
       {localChecksSummary && <LocalChecksSection data={localChecksSummary} />}
 
@@ -183,6 +225,111 @@ function ContextPackSection({ data }: { data: ContextPackSummary }) {
       )}
     </div>
   );
+}
+
+function PlatformMetadataSection({
+  data,
+  fetchedAt,
+  onRefresh,
+  isRefreshing,
+  refreshError,
+  canRefresh,
+}: {
+  data: PlatformMetadata;
+  fetchedAt: string | null;
+  onRefresh: () => void;
+  isRefreshing: boolean;
+  refreshError: string | null;
+  canRefresh: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const fetchedTimeLabel = formatTimestamp(fetchedAt);
+
+  return (
+    <div className="border border-zinc-800 rounded-lg bg-zinc-900/50">
+      <div className="w-full px-4 py-3 flex items-center gap-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="min-w-0 flex items-center gap-2 text-left hover:text-zinc-100 transition-colors"
+        >
+          <GitBranch className="w-4 h-4 text-zinc-400" />
+          <span className="text-sm font-medium text-zinc-200">GitHub Metadata</span>
+          <span className="text-xs text-zinc-500">
+            {data.head_sha.slice(0, 7)} &middot; {data.labels.length} label
+            {data.labels.length !== 1 ? "s" : ""}
+            {data.linked_issue_numbers.length > 0 &&
+              ` \u00b7 ${data.linked_issue_numbers.length} issue${data.linked_issue_numbers.length !== 1 ? "s" : ""}`}
+            {fetchedTimeLabel && ` \u00b7 ${fetchedTimeLabel}`}
+          </span>
+        </button>
+        <button
+          onClick={onRefresh}
+          disabled={isRefreshing || !canRefresh}
+          className="ml-auto flex items-center gap-1 text-[11px] text-zinc-300 bg-zinc-800 hover:bg-zinc-700 px-2 py-1 rounded transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
+          {isRefreshing ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+      {refreshError && (
+        <p className="text-xs text-red-400 bg-red-900/20 mx-4 mb-2 px-2 py-1 rounded">
+          {refreshError}
+        </p>
+      )}
+      {expanded && (
+        <div className="px-4 pb-3 space-y-1 text-xs text-zinc-300">
+          <div>
+            <span className="text-zinc-500">Head:</span> {data.head_ref} (
+            {data.head_sha.slice(0, 12)})
+          </div>
+          <div>
+            <span className="text-zinc-500">Base:</span> {data.base_ref} (
+            {data.base_sha.slice(0, 12)})
+          </div>
+          {data.draft && <div className="text-yellow-400">Draft PR</div>}
+          {data.labels.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Labels:</span> {data.labels.join(", ")}
+            </div>
+          )}
+          {data.requested_reviewers.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Reviewers:</span>{" "}
+              {data.requested_reviewers.join(", ")}
+            </div>
+          )}
+          {data.requested_teams.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Teams:</span> {data.requested_teams.join(", ")}
+            </div>
+          )}
+          {data.review_state_summary.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Reviews:</span>{" "}
+              {data.review_state_summary.map((r) => `${r.login}: ${r.state}`).join(", ")}
+            </div>
+          )}
+          {data.linked_issue_numbers.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Linked issues:</span>{" "}
+              {data.linked_issue_numbers.map((n) => `#${n}`).join(", ")}
+            </div>
+          )}
+          {data.text_issue_refs.length > 0 && (
+            <div>
+              <span className="text-zinc-500">Text refs:</span> {data.text_issue_refs.join(", ")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatTimestamp(value: string | null): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleTimeString();
 }
 
 function LocalChecksSection({ data }: { data: LocalChecksSummary }) {

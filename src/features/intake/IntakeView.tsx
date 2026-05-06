@@ -19,14 +19,23 @@ export function IntakeView() {
   const [channelToast, setChannelToast] = useState<string | null>(null);
 
   useEffect(() => {
-    const unlisten = listen<ChannelEvent>("channel_review_requested", (event) => {
+    const unlistenChannel = listen<ChannelEvent>("channel_review_requested", (event) => {
       const { source, pr_url, requester } = event.payload;
       setUrl(pr_url);
       setChannelToast(`Review requested via ${source}${requester ? ` from ${requester}` : ""}`);
       setTimeout(() => setChannelToast(null), 5000);
     });
+    const unlistenGitHub = listen<ChannelEvent>("github_review_requested", (event) => {
+      const { source, pr_url, requester } = event.payload;
+      setUrl(pr_url);
+      setChannelToast(
+        `GitHub review requested${requester ? ` from ${requester}` : ""}${source ? ` (${source})` : ""}`,
+      );
+      setTimeout(() => setChannelToast(null), 5000);
+    });
     return () => {
-      unlisten.then((fn) => fn());
+      unlistenChannel.then((fn) => fn());
+      unlistenGitHub.then((fn) => fn());
     };
   }, []);
 

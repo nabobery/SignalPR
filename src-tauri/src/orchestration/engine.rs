@@ -57,6 +57,8 @@ pub struct ReviewPipelineArgs {
     /// Deterministic findings from local checks, merged before the cleaner stage.
     #[allow(dead_code)]
     pub extra_raw_findings: Vec<RawFinding>,
+    /// Per-file CODEOWNERS mapping from CODEOWNERS resolution.
+    pub owners_by_path: HashMap<String, Vec<String>>,
 }
 
 /// Per-provider concurrency limits so one provider's rate limits don't block others.
@@ -283,7 +285,21 @@ pub async fn run_review_pipeline(
             }
             f.fingerprint = Some(crate::review_delta::compute_finding_fingerprint(&f));
 
-            let ctx = ExplainContext::default();
+            let owners = f
+                .file_path
+                .as_deref()
+                .and_then(|p| {
+                    let normalized = crate::context_pack::normalize_repo_path(p);
+                    args.owners_by_path
+                        .get(&normalized)
+                        .or_else(|| args.owners_by_path.get(p))
+                })
+                .cloned()
+                .unwrap_or_default();
+            let ctx = ExplainContext {
+                owners,
+                ..ExplainContext::default()
+            };
             let explanation = explainability::build_explanation(&f, &ctx);
             f.explain_json = explainability::to_json(&explanation);
 
@@ -818,6 +834,8 @@ mod tests {
                 changed_files: Some(r#"["a"]"#.into()),
                 fetched_at: "2026-01-01T00:00:00Z".into(),
                 diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
             },
         )
         .unwrap();
@@ -892,6 +910,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await
@@ -936,6 +955,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await
@@ -1006,6 +1026,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await
@@ -1084,6 +1105,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await
@@ -1140,6 +1162,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await;
@@ -1188,6 +1211,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await;
@@ -1238,6 +1262,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await;
@@ -1297,6 +1322,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await
@@ -1346,6 +1372,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await
@@ -1391,6 +1418,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await
@@ -1443,6 +1471,7 @@ mod tests {
                 event_log: None,
                 context_suffix: None,
                 extra_raw_findings: vec![],
+                owners_by_path: HashMap::new(),
             },
         )
         .await;

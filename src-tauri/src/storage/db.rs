@@ -228,6 +228,12 @@ ALTER TABLE findings ADD COLUMN explain_json TEXT;
 CREATE INDEX IF NOT EXISTS idx_findings_source_kind ON findings(source_kind);
 "#;
 
+const MIGRATION_V9: &str = r#"
+-- Phase 5: GitHub platform metadata snapshot on pull_requests
+ALTER TABLE pull_requests ADD COLUMN platform_metadata_json TEXT;
+ALTER TABLE pull_requests ADD COLUMN platform_metadata_fetched_at TEXT;
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -297,6 +303,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V8)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (8)",
+            [],
+        )?;
+    }
+
+    if current_version < 9 {
+        conn.execute_batch(MIGRATION_V9)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (9)",
             [],
         )?;
     }
@@ -525,6 +539,56 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert!(indexes.contains(&"idx_findings_source_kind".to_string()));
+    }
+
+    #[test]
+    fn test_v9_platform_metadata_columns_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url, platform_metadata_json, platform_metadata_fetched_at) VALUES ('pr', 'ws', 1, 't', 'u', '{\"head_sha\":\"abc\"}', '2026-05-06T00:00:00Z')",
+            [],
+        ).expect("V9 platform_metadata columns should exist");
+
+        let (json, fetched): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT platform_metadata_json, platform_metadata_fetched_at FROM pull_requests WHERE id = 'pr'",
+                [],
+                |row| Ok((row.get(0).unwrap(), row.get(1).unwrap())),
+            )
+            .unwrap();
+        assert_eq!(json.unwrap(), "{\"head_sha\":\"abc\"}");
+        assert_eq!(fetched.unwrap(), "2026-05-06T00:00:00Z");
+    }
+
+    #[test]
+    fn test_v9_platform_metadata_defaults_to_null() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url) VALUES ('pr', 'ws', 1, 't', 'u')",
+            [],
+        ).unwrap();
+
+        let (json, fetched): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT platform_metadata_json, platform_metadata_fetched_at FROM pull_requests WHERE id = 'pr'",
+                [],
+                |row| Ok((row.get(0).unwrap(), row.get(1).unwrap())),
+            )
+            .unwrap();
+        assert!(json.is_none());
+        assert!(fetched.is_none());
     }
 
     #[test]
