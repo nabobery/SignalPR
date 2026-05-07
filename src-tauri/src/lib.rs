@@ -8,6 +8,7 @@ mod context_pack;
 mod errors;
 mod explainability;
 mod integrations;
+mod issues;
 mod local_checks;
 mod metrics;
 mod notifications;
@@ -779,6 +780,10 @@ pub fn run() {
             commands::drafts::save_review_draft,
             commands::rerun::rerun_review,
             commands::pr_metadata::refresh_pr_metadata,
+            commands::integrations::get_integration_statuses,
+            commands::integrations::store_integration_secret,
+            commands::integrations::delete_integration_secret,
+            commands::integrations::update_integration_setting,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

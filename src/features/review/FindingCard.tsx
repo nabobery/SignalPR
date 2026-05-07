@@ -380,6 +380,18 @@ export function FindingCard({
                   Owners: {explanation.ownership.owners.join(", ")}
                 </div>
               )}
+              {explanation.issue_context && explanation.issue_context.included_count > 0 && (
+                <div className="text-xs text-zinc-400">
+                  <span className="text-sky-400">Issue context:</span>{" "}
+                  {explanation.issue_context.included_count} issue
+                  {explanation.issue_context.included_count !== 1 ? "s" : ""} in prompt
+                  {explanation.issue_context.sources?.length > 0 && (
+                    <span className="text-zinc-500 ml-1">
+                      ({explanation.issue_context.sources.join(", ")})
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

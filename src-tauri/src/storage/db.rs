@@ -239,6 +239,21 @@ const MIGRATION_V10: &str = r#"
 ALTER TABLE workspaces ADD COLUMN remote_host TEXT NOT NULL DEFAULT 'github.com';
 "#;
 
+const MIGRATION_V11: &str = r#"
+-- Phase 8: Issue context cache for cross-platform issue resolvers
+CREATE TABLE IF NOT EXISTS issue_context_cache (
+  cache_key TEXT PRIMARY KEY,
+  tracker TEXT NOT NULL,
+  scope TEXT,
+  issue_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ok'
+);
+CREATE INDEX IF NOT EXISTS idx_issue_cache_expires ON issue_context_cache(expires_at);
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -324,6 +339,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V10)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (10)",
+            [],
+        )?;
+    }
+
+    if current_version < 11 {
+        conn.execute_batch(MIGRATION_V11)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (11)",
             [],
         )?;
     }

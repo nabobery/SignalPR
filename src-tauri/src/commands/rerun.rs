@@ -124,6 +124,7 @@ pub async fn rerun_review(
     // Spawn pipeline
     let app_clone = app.clone();
     let run_id_clone = new_run_id.clone();
+    let pr_id_clone = new_pr_id.clone();
     tauri::async_runtime::spawn(async move {
         let db = app_clone.state::<AppDb>();
         let event_log = app_clone
@@ -140,8 +141,13 @@ pub async fn rerun_review(
             })
         };
 
+        let (issue_refs, base_branch_codeowners, codeowners_source) =
+            super::review::resolve_issue_refs_and_codeowners(&app_clone, &db, &pr_id_clone).await;
+
         let context_pack = ContextPackBuilder::new(&context_pack_config, &cwd_path, &changed_files)
             .with_preferences(preference_text)
+            .with_codeowners_content(base_branch_codeowners.clone(), codeowners_source.clone())
+            .with_issues(issue_refs.clone())
             .build();
 
         let context_suffix = if context_pack.prompt_suffix.is_empty() {
@@ -175,13 +181,25 @@ pub async fn rerun_review(
         }
 
         let owners_by_path = {
-            let raw = crate::context_pack::read_local_codeowners(&cwd_path);
-            match raw {
-                Some(content) => crate::context_pack::resolve_codeowners(&content, &changed_files)
+            let raw = base_branch_codeowners
+                .or_else(|| crate::context_pack::read_local_codeowners(&cwd_path));
+            raw.map(|content| {
+                crate::context_pack::resolve_codeowners(&content, &changed_files)
                     .into_iter()
-                    .collect::<std::collections::HashMap<_, _>>(),
-                None => std::collections::HashMap::new(),
-            }
+                    .collect::<std::collections::HashMap<_, _>>()
+            })
+            .unwrap_or_default()
+        };
+
+        let (issue_context_included_count, issue_context_sources) = {
+            let issue_items: Vec<_> = context_pack
+                .items
+                .iter()
+                .filter(|i| i.kind == "issue" && i.included)
+                .collect();
+            let count = issue_items.len();
+            let sources: Vec<String> = issue_items.iter().map(|i| i.source.clone()).collect();
+            (count, sources)
         };
 
         let sems = engine::build_provider_semaphores(&lanes);
@@ -203,6 +221,8 @@ pub async fn rerun_review(
                 context_suffix,
                 extra_raw_findings,
                 owners_by_path,
+                issue_context_included_count,
+                issue_context_sources,
             },
         )
         .await;

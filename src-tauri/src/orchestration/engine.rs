@@ -59,6 +59,9 @@ pub struct ReviewPipelineArgs {
     pub extra_raw_findings: Vec<RawFinding>,
     /// Per-file CODEOWNERS mapping from CODEOWNERS resolution.
     pub owners_by_path: HashMap<String, Vec<String>>,
+    /// Issue context summary for explainability (count of included issues + sources).
+    pub issue_context_included_count: usize,
+    pub issue_context_sources: Vec<String>,
 }
 
 /// Per-provider concurrency limits so one provider's rate limits don't block others.
@@ -298,6 +301,8 @@ pub async fn run_review_pipeline(
                 .unwrap_or_default();
             let ctx = ExplainContext {
                 owners,
+                issue_context_included_count: args.issue_context_included_count,
+                issue_context_sources: args.issue_context_sources.clone(),
                 ..ExplainContext::default()
             };
             let explanation = explainability::build_explanation(&f, &ctx);
@@ -912,6 +917,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await
@@ -957,6 +964,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await
@@ -1028,6 +1037,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await
@@ -1107,6 +1118,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await
@@ -1164,6 +1177,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await;
@@ -1213,6 +1228,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await;
@@ -1264,6 +1281,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await;
@@ -1324,6 +1343,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await
@@ -1374,6 +1395,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await
@@ -1420,6 +1443,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await
@@ -1473,6 +1498,8 @@ mod tests {
                 context_suffix: None,
                 extra_raw_findings: vec![],
                 owners_by_path: HashMap::new(),
+                issue_context_included_count: 0,
+                issue_context_sources: vec![],
             },
         )
         .await;

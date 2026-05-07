@@ -12,6 +12,7 @@ pub mod findings;
 pub mod gemini;
 pub mod inbox;
 pub mod intake;
+pub mod integrations;
 pub mod opencode;
 pub mod pr_metadata;
 pub mod preferences;

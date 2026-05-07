@@ -156,6 +156,7 @@ impl PlatformAdapter for GitLabAdapter {
                         title: issue.title,
                         body_excerpt: excerpt,
                         labels: issue.labels,
+                        state: Some(issue.state),
                     });
                 }
                 Err(e) => {

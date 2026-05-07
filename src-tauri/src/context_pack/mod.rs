@@ -100,6 +100,8 @@ pub struct ContextItem {
     pub omit_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +138,18 @@ pub struct IssueRef {
     pub state: Option<String>,
     #[serde(default)]
     pub omit_reason: Option<String>,
+    /// Tracker type: github, gitlab, jira, linear
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracker: Option<String>,
+    /// Confidence level: high, medium, low
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    /// Deep link URL for the issue
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// How the issue was discovered: platform_link, text_ref, url, branch_name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 impl<'a> ContextPackBuilder<'a> {
@@ -207,6 +221,17 @@ impl<'a> ContextPackBuilder<'a> {
     }
 
     fn try_add_item(&mut self, kind: &str, label: &str, source: &str, content: &str) {
+        self.try_add_item_with_confidence(kind, label, source, content, None);
+    }
+
+    fn try_add_item_with_confidence(
+        &mut self,
+        kind: &str,
+        label: &str,
+        source: &str,
+        content: &str,
+        confidence: Option<String>,
+    ) {
         let bytes = content.len();
 
         if bytes == 0 {
@@ -218,6 +243,7 @@ impl<'a> ContextPackBuilder<'a> {
                 included: false,
                 omit_reason: Some("empty".into()),
                 content: None,
+                confidence,
             });
             return;
         }
@@ -234,6 +260,7 @@ impl<'a> ContextPackBuilder<'a> {
                 included: false,
                 omit_reason: Some("budget_exceeded".into()),
                 content: None,
+                confidence,
             });
             return;
         }
@@ -247,6 +274,7 @@ impl<'a> ContextPackBuilder<'a> {
             included: true,
             omit_reason: None,
             content: Some(truncated.to_string()),
+            confidence,
         });
     }
 
@@ -269,6 +297,7 @@ impl<'a> ContextPackBuilder<'a> {
                     included: false,
                     omit_reason: Some("outside_workspace".into()),
                     content: None,
+                    confidence: None,
                 });
                 continue;
             }
@@ -283,6 +312,7 @@ impl<'a> ContextPackBuilder<'a> {
                     included: false,
                     omit_reason: Some("outside_workspace".into()),
                     content: None,
+                    confidence: None,
                 });
                 continue;
             }
@@ -300,6 +330,7 @@ impl<'a> ContextPackBuilder<'a> {
                         included: false,
                         omit_reason: Some("not_found".into()),
                         content: None,
+                        confidence: None,
                     });
                 }
             }
@@ -333,6 +364,7 @@ impl<'a> ContextPackBuilder<'a> {
                 included: false,
                 omit_reason: Some("not_found".into()),
                 content: None,
+                confidence: None,
             });
             return;
         };
@@ -347,6 +379,7 @@ impl<'a> ContextPackBuilder<'a> {
                 included: false,
                 omit_reason: Some("no_matches".into()),
                 content: None,
+                confidence: None,
             });
             return;
         }
@@ -387,15 +420,18 @@ impl<'a> ContextPackBuilder<'a> {
 
         for (i, issue) in issues.iter().enumerate() {
             let source = issue_source(issue);
+            let label = issue_label(issue);
+            let confidence = issue.confidence.clone();
             if i >= MAX_ISSUES {
                 self.items.push(ContextItem {
                     kind: "issue".into(),
-                    label: format!("Issue #{}", issue.number),
+                    label,
                     source,
                     bytes: 0,
                     included: false,
                     omit_reason: Some("budget_exceeded".into()),
                     content: None,
+                    confidence,
                 });
                 continue;
             }
@@ -403,12 +439,13 @@ impl<'a> ContextPackBuilder<'a> {
             if let Some(reason) = issue.omit_reason.clone() {
                 self.items.push(ContextItem {
                     kind: "issue".into(),
-                    label: format!("Issue #{}", issue.number),
+                    label,
                     source,
                     bytes: 0,
                     included: false,
                     omit_reason: Some(reason),
                     content: None,
+                    confidence,
                 });
                 continue;
             }
@@ -438,23 +475,19 @@ impl<'a> ContextPackBuilder<'a> {
             if total_issue_bytes + content.len() > MAX_ISSUE_CONTEXT_BYTES_TOTAL {
                 self.items.push(ContextItem {
                     kind: "issue".into(),
-                    label: format!("Issue #{}", issue.number),
+                    label,
                     source,
                     bytes: 0,
                     included: false,
                     omit_reason: Some("budget_exceeded".into()),
                     content: None,
+                    confidence,
                 });
                 continue;
             }
 
             total_issue_bytes += content.len();
-            self.try_add_item(
-                "issue",
-                &format!("Issue #{}", issue.number),
-                &source,
-                &content,
-            );
+            self.try_add_item_with_confidence("issue", &label, &source, &content, confidence);
         }
     }
 
@@ -681,9 +714,52 @@ fn build_issue_ref(body: &str, hash_pos: usize, num: &str) -> String {
 }
 
 fn issue_source(issue: &IssueRef) -> String {
-    match (&issue.owner, &issue.repo) {
-        (Some(owner), Some(repo)) => format!("github:issue:{}/{}#{}", owner, repo, issue.number),
-        _ => format!("github:issue:{}", issue.number),
+    let tracker = issue.tracker.as_deref().unwrap_or("github");
+    match tracker {
+        "jira" => {
+            if let Some(url) = issue.url.as_deref() {
+                let host = url
+                    .split("//")
+                    .nth(1)
+                    .and_then(|s| s.split('/').next())
+                    .unwrap_or("unknown");
+                format!("jira:issue:{}#{}", host, issue.number)
+            } else {
+                format!("jira:issue:{}", issue.number)
+            }
+        }
+        "linear" => {
+            if let Some(url) = issue.url.as_deref() {
+                let workspace = url
+                    .split("linear.app/")
+                    .nth(1)
+                    .and_then(|s| s.split('/').next())
+                    .unwrap_or("unknown");
+                format!("linear:issue:{}#{}", workspace, issue.number)
+            } else {
+                format!("linear:issue:{}", issue.number)
+            }
+        }
+        "gitlab" => match (&issue.owner, &issue.repo) {
+            (Some(owner), Some(repo)) => {
+                format!("gitlab:issue:{}/{}#{}", owner, repo, issue.number)
+            }
+            _ => format!("gitlab:issue:{}", issue.number),
+        },
+        _ => match (&issue.owner, &issue.repo) {
+            (Some(owner), Some(repo)) => {
+                format!("github:issue:{}/{}#{}", owner, repo, issue.number)
+            }
+            _ => format!("github:issue:{}", issue.number),
+        },
+    }
+}
+
+fn issue_label(issue: &IssueRef) -> String {
+    let tracker = issue.tracker.as_deref().unwrap_or("github");
+    match tracker {
+        "jira" | "linear" => format!("Issue {}", issue.number),
+        _ => format!("Issue #{}", issue.number),
     }
 }
 
@@ -876,6 +952,10 @@ mod tests {
             labels: vec!["bug".into()],
             state: Some("open".into()),
             omit_reason: None,
+            tracker: None,
+            confidence: None,
+            url: None,
+            origin: None,
         }];
         let pack = ContextPackBuilder::new(&config, dir.path(), &[])
             .with_issues(issues)
@@ -1220,6 +1300,10 @@ mod tests {
                 labels: vec![],
                 state: Some("open".into()),
                 omit_reason: None,
+                tracker: None,
+                confidence: None,
+                url: None,
+                origin: None,
             })
             .collect();
         let pack = ContextPackBuilder::new(&config, dir.path(), &[])
@@ -1262,6 +1346,10 @@ mod tests {
             labels: vec![],
             state: None,
             omit_reason: None,
+            tracker: None,
+            confidence: None,
+            url: None,
+            origin: None,
         }];
         let pack = ContextPackBuilder::new(&config, dir.path(), &[])
             .with_issues(issues)
@@ -1297,6 +1385,10 @@ mod tests {
             labels: vec!["enhancement".into()],
             state: Some("open".into()),
             omit_reason: None,
+            tracker: None,
+            confidence: None,
+            url: None,
+            origin: None,
         }];
         let pack = ContextPackBuilder::new(&config, dir.path(), &[])
             .with_issues(issues)
@@ -1326,6 +1418,10 @@ mod tests {
             labels: vec!["security".into(), "critical".into()],
             state: Some("open".into()),
             omit_reason: None,
+            tracker: None,
+            confidence: None,
+            url: None,
+            origin: None,
         }];
         let pack = ContextPackBuilder::new(&config, dir.path(), &[])
             .with_issues(issues)
@@ -1399,5 +1495,103 @@ mod tests {
             CODEOWNERS_LOCATIONS_GITHUB[1], CODEOWNERS_LOCATIONS_GITLAB[0],
             "Both platforms include root CODEOWNERS in early lookup order"
         );
+    }
+
+    #[test]
+    fn test_issue_source_github_with_owner_repo() {
+        let issue = IssueRef {
+            number: "42".into(),
+            title: "Bug".into(),
+            body_excerpt: "".into(),
+            owner: Some("acme".into()),
+            repo: Some("web".into()),
+            labels: vec![],
+            state: None,
+            omit_reason: None,
+            tracker: Some("github".into()),
+            confidence: Some("high".into()),
+            url: Some("https://github.com/acme/web/issues/42".into()),
+            origin: Some("linked".into()),
+        };
+        let source = issue_source(&issue);
+        assert_eq!(source, "github:issue:acme/web#42");
+    }
+
+    #[test]
+    fn test_issue_source_jira_without_url() {
+        let issue = IssueRef {
+            number: "AUTH-123".into(),
+            title: "Login bug".into(),
+            body_excerpt: "".into(),
+            owner: None,
+            repo: None,
+            labels: vec![],
+            state: None,
+            omit_reason: None,
+            tracker: Some("jira".into()),
+            confidence: Some("medium".into()),
+            url: None,
+            origin: Some("text_ref".into()),
+        };
+        let source = issue_source(&issue);
+        assert_eq!(source, "jira:issue:AUTH-123");
+    }
+
+    #[test]
+    fn test_issue_source_fallback_no_tracker() {
+        let issue = IssueRef {
+            number: "99".into(),
+            title: "Something".into(),
+            body_excerpt: "".into(),
+            owner: Some("org".into()),
+            repo: Some("repo".into()),
+            labels: vec![],
+            state: None,
+            omit_reason: None,
+            tracker: None,
+            confidence: None,
+            url: None,
+            origin: None,
+        };
+        let source = issue_source(&issue);
+        assert_eq!(source, "github:issue:org/repo#99");
+    }
+
+    #[test]
+    fn test_issue_label_github_numeric() {
+        let issue = IssueRef {
+            number: "42".into(),
+            title: "Test".into(),
+            body_excerpt: "".into(),
+            owner: None,
+            repo: None,
+            labels: vec![],
+            state: None,
+            omit_reason: None,
+            tracker: Some("github".into()),
+            confidence: None,
+            url: None,
+            origin: None,
+        };
+        assert_eq!(issue_label(&issue), "Issue #42");
+    }
+
+    #[test]
+    fn test_issue_label_jira_key() {
+        let issue = IssueRef {
+            number: "AUTH-123".into(),
+            title: "Test".into(),
+            body_excerpt: "".into(),
+            owner: None,
+            repo: None,
+            labels: vec![],
+            state: None,
+            omit_reason: None,
+            tracker: Some("jira".into()),
+            confidence: None,
+            url: None,
+            origin: None,
+        };
+        assert_eq!(issue_label(&issue), "Issue AUTH-123");
     }
 }

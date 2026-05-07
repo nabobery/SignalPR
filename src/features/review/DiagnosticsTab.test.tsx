@@ -160,4 +160,67 @@ describe("DiagnosticsTab", () => {
 
     expect(screen.getByText(/"duration_ms": 5000/)).toBeInTheDocument();
   });
+
+  it("renders Issue Context section when context pack has issue items", async () => {
+    const { getEventLog } = await import("../../lib/ipc");
+    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const contextPack: ContextPackSummary = {
+      total_bytes: 3000,
+      item_count: 3,
+      prompt_suffix: "",
+      items: [
+        {
+          kind: "issue",
+          label: "Issue #42",
+          source: "github:issue:https://github.com/acme/web/issues/42",
+          bytes: 500,
+          included: true,
+          confidence: "high",
+        },
+        {
+          kind: "issue",
+          label: "Issue AUTH-123",
+          source: "jira:issue:AUTH-123",
+          bytes: 600,
+          included: true,
+          confidence: "medium",
+        },
+        {
+          kind: "issue",
+          label: "Issue ENG-99",
+          source: "linear:issue:ENG-99",
+          bytes: 0,
+          included: false,
+          omit_reason: "budget_exceeded",
+          confidence: "high",
+        },
+      ],
+    };
+
+    render(<DiagnosticsTab runId="run-1" contextPackSummary={contextPack} />);
+
+    expect(await screen.findByText("Issue Context")).toBeInTheDocument();
+    expect(screen.getByText(/2 included/)).toBeInTheDocument();
+    expect(screen.getByText(/1 omitted/)).toBeInTheDocument();
+  });
+
+  it("does not render Issue Context section when no issue items exist", async () => {
+    const { getEventLog } = await import("../../lib/ipc");
+    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const contextPack: ContextPackSummary = {
+      total_bytes: 1000,
+      item_count: 1,
+      prompt_suffix: "",
+      items: [
+        { kind: "doc", label: "README.md", source: "/ws/README.md", bytes: 1000, included: true },
+      ],
+    };
+
+    render(<DiagnosticsTab runId="run-1" contextPackSummary={contextPack} />);
+
+    await screen.findByText("Context Pack");
+    expect(screen.queryByText("Issue Context")).not.toBeInTheDocument();
+  });
 });

@@ -11,6 +11,14 @@ pub struct FindingExplanation {
     pub preferences: Option<PreferenceInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ownership: Option<OwnershipInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_context: Option<IssueContextInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueContextInfo {
+    pub included_count: usize,
+    pub sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +59,8 @@ pub struct ExplainContext {
     pub override_action: Option<String>,
     pub owners: Vec<String>,
     pub suppressed_reason: Option<String>,
+    pub issue_context_included_count: usize,
+    pub issue_context_sources: Vec<String>,
 }
 
 /// Build explanation JSON for a finding using available context.
@@ -93,11 +103,21 @@ pub fn build_explanation(finding: &Finding, ctx: &ExplainContext) -> FindingExpl
         None
     };
 
+    let issue_context = if ctx.issue_context_included_count > 0 {
+        Some(IssueContextInfo {
+            included_count: ctx.issue_context_included_count,
+            sources: ctx.issue_context_sources.clone(),
+        })
+    } else {
+        None
+    };
+
     FindingExplanation {
         origin,
         ranking,
         preferences,
         ownership,
+        issue_context,
     }
 }
 
@@ -210,6 +230,7 @@ mod tests {
             owners: vec!["@team".into()],
             suppressed_reason: None,
             override_action: None,
+            ..Default::default()
         };
         let explain = build_explanation(&finding, &ctx);
 
@@ -233,5 +254,48 @@ mod tests {
             explain.ranking.unwrap().suppressed_reason,
             Some("low_confidence".into())
         );
+    }
+
+    #[test]
+    fn test_issue_context_present() {
+        let finding = test_finding();
+        let ctx = ExplainContext {
+            issue_context_included_count: 3,
+            issue_context_sources: vec![
+                "github:issue:#1".into(),
+                "jira:issue:AUTH-42".into(),
+                "linear:issue:ENG-99".into(),
+            ],
+            ..Default::default()
+        };
+        let explain = build_explanation(&finding, &ctx);
+        let ic = explain.issue_context.unwrap();
+        assert_eq!(ic.included_count, 3);
+        assert_eq!(ic.sources.len(), 3);
+    }
+
+    #[test]
+    fn test_issue_context_absent_when_empty() {
+        let finding = test_finding();
+        let ctx = ExplainContext::default();
+        let explain = build_explanation(&finding, &ctx);
+        assert!(explain.issue_context.is_none());
+    }
+
+    #[test]
+    fn test_issue_context_in_serialized_json() {
+        let finding = test_finding();
+        let ctx = ExplainContext {
+            issue_context_included_count: 2,
+            issue_context_sources: vec!["github:issue:#5".into(), "jira:issue:CORE-10".into()],
+            ..Default::default()
+        };
+        let explain = build_explanation(&finding, &ctx);
+        let json = to_json(&explain).unwrap();
+        assert!(json.contains("issue_context"));
+        assert!(json.contains("included_count"));
+        let parsed: FindingExplanation = serde_json::from_str(&json).unwrap();
+        let ic = parsed.issue_context.unwrap();
+        assert_eq!(ic.included_count, 2);
     }
 }

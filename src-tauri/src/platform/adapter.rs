@@ -83,6 +83,8 @@ pub struct IssueContext {
     pub title: String,
     pub body_excerpt: Option<String>,
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub state: Option<String>,
 }
 
 /// Submission result from posting a review.

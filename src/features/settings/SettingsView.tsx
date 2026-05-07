@@ -5,14 +5,16 @@ import { GeneralPanel } from "./GeneralPanel";
 import { PresetPanel } from "./PresetPanel";
 import { AgentPanel } from "./AgentPanel";
 import { ChannelPanel } from "./ChannelPanel";
+import { IntegrationsPanel } from "./IntegrationsPanel";
 
-type Tab = "general" | "presets" | "agents" | "channels";
+type Tab = "general" | "presets" | "agents" | "channels" | "integrations";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "presets", label: "Presets" },
   { id: "agents", label: "Agents" },
   { id: "channels", label: "Channels" },
+  { id: "integrations", label: "Integrations" },
 ];
 
 export function SettingsView() {
@@ -54,6 +56,7 @@ export function SettingsView() {
         {activeTab === "presets" && <PresetPanel />}
         {activeTab === "agents" && <AgentPanel />}
         {activeTab === "channels" && <ChannelPanel />}
+        {activeTab === "integrations" && <IntegrationsPanel />}
       </div>
     </div>
   );

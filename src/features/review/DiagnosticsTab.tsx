@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  BookOpen,
   Filter,
   GitBranch,
   Loader2,
@@ -9,7 +10,12 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { getEventLog, refreshPrMetadata, parseError } from "../../lib/ipc";
-import type { ContextPackSummary, LocalChecksSummary, PlatformMetadata } from "../../lib/types";
+import type {
+  ContextPackItem,
+  ContextPackSummary,
+  LocalChecksSummary,
+  PlatformMetadata,
+} from "../../lib/types";
 
 interface EventEntry {
   timestamp: string;
@@ -111,6 +117,7 @@ export function DiagnosticsTab({
         />
       )}
       {contextPackSummary && <ContextPackSection data={contextPackSummary} />}
+      {contextPackSummary && <IssueContextSection items={contextPackSummary.items ?? []} />}
       {localChecksSummary && <LocalChecksSection data={localChecksSummary} />}
 
       <div className="flex items-center gap-2">
@@ -389,6 +396,83 @@ function formatTimestamp(value: string | null): string | null {
   if (!value) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleTimeString();
+}
+
+function IssueContextSection({ items }: { items: ContextPackItem[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const issueItems = items.filter((i) => i.kind === "issue");
+
+  if (issueItems.length === 0) return null;
+
+  const included = issueItems.filter((i) => i.included);
+  const omitted = issueItems.filter((i) => !i.included);
+
+  const grouped = new Map<string, ContextPackItem[]>();
+  for (const item of issueItems) {
+    const tracker = item.source.split(":")[0] || "unknown";
+    const existing = grouped.get(tracker) || [];
+    existing.push(item);
+    grouped.set(tracker, existing);
+  }
+
+  return (
+    <div className="border border-zinc-800 rounded-lg bg-zinc-900/50">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full text-left px-4 py-3 flex items-center gap-2 hover:bg-zinc-800/30 transition-colors"
+      >
+        <BookOpen className="w-4 h-4 text-sky-400" />
+        <span className="text-sm font-medium text-zinc-200">Issue Context</span>
+        <span className="text-xs text-zinc-500">
+          {included.length} included
+          {omitted.length > 0 && `, ${omitted.length} omitted`}
+        </span>
+      </button>
+      {expanded && (
+        <div className="px-4 pb-3 space-y-3">
+          {[...grouped.entries()].map(([tracker, trackerItems]) => (
+            <div key={tracker}>
+              <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-1">
+                {tracker}
+              </h4>
+              <div className="space-y-1">
+                {trackerItems.map((item, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-center gap-2 text-xs ${item.included ? "text-zinc-300" : "text-zinc-600"}`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${item.included ? "bg-sky-400" : "bg-zinc-600"}`}
+                    />
+                    <span className="truncate">{item.label}</span>
+                    {item.confidence && (
+                      <span
+                        className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          item.confidence === "high"
+                            ? "bg-emerald-900/50 text-emerald-300"
+                            : item.confidence === "medium"
+                              ? "bg-yellow-900/50 text-yellow-300"
+                              : "bg-zinc-800 text-zinc-400"
+                        }`}
+                      >
+                        {item.confidence}
+                      </span>
+                    )}
+                    <span className="text-zinc-600 text-[10px] truncate ml-auto shrink-0">
+                      {item.source}
+                    </span>
+                    {!item.included && item.omit_reason && (
+                      <span className="text-zinc-600 italic shrink-0">{item.omit_reason}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function LocalChecksSection({ data }: { data: LocalChecksSummary }) {

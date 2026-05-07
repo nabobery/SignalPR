@@ -31,10 +31,41 @@ pub fn resolve_jira_credentials_from_env() -> Option<JiraCredentials> {
     })
 }
 
+pub fn resolve_jira_credentials(
+    base_url_setting: Option<String>,
+    email_setting: Option<String>,
+    api_token_setting: Option<String>,
+) -> Option<JiraCredentials> {
+    if let Some(from_env) = resolve_jira_credentials_from_env() {
+        return Some(from_env);
+    }
+
+    let base_url = base_url_setting
+        .map(|v| v.trim().trim_end_matches('/').to_string())
+        .filter(|v| !v.is_empty())?;
+    let email = email_setting
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())?;
+    let api_token = api_token_setting
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())?;
+
+    Some(JiraCredentials {
+        base_url,
+        email,
+        api_token,
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum JiraApiError {
     #[error("HTTP {status}: {message}")]
     HttpError { status: u16, message: String },
+    #[error("Rate limited (retry_after_secs={retry_after_secs:?}, reason={reason:?})")]
+    RateLimited {
+        retry_after_secs: Option<u64>,
+        reason: Option<String>,
+    },
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
     #[error("Invalid header value: {0}")]
@@ -115,7 +146,19 @@ impl JiraClient {
         let resp = self.client.get(&url).headers(self.headers()).send().await?;
 
         let status = resp.status().as_u16();
+        let retry_after_secs = parse_retry_after(resp.headers());
+        let rate_limit_reason = resp
+            .headers()
+            .get("RateLimit-Reason")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
         if !resp.status().is_success() {
+            if status == 429 {
+                return Err(JiraApiError::RateLimited {
+                    retry_after_secs,
+                    reason: rate_limit_reason,
+                });
+            }
             let body = resp
                 .text()
                 .await
@@ -147,6 +190,13 @@ impl JiraClient {
             state,
         })
     }
+}
+
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get("Retry-After")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
 }
 
 /// Extract plain text from Jira's ADF (Atlassian Document Format) description,
@@ -243,6 +293,23 @@ mod tests {
         let _token_guard = EnvGuard::new("JIRA_API_TOKEN", "token");
         let creds = resolve_jira_credentials_from_env().expect("should resolve");
         assert_eq!(creds.base_url, "https://myorg.atlassian.net");
+    }
+
+    #[test]
+    fn test_resolve_jira_credentials_from_settings() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let _base_guard = EnvGuard::new("JIRA_BASE_URL", "");
+        let _email_guard = EnvGuard::new("JIRA_EMAIL", "");
+        let _token_guard = EnvGuard::new("JIRA_API_TOKEN", "");
+        let creds = resolve_jira_credentials(
+            Some("https://acme.atlassian.net/".into()),
+            Some("dev@acme.com".into()),
+            Some("token-123".into()),
+        )
+        .expect("settings credentials should resolve");
+        assert_eq!(creds.base_url, "https://acme.atlassian.net");
+        assert_eq!(creds.email, "dev@acme.com");
+        assert_eq!(creds.api_token, "token-123");
     }
 
     #[test]

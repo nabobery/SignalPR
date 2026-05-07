@@ -12,6 +12,11 @@ use rusqlite::Connection;
 use crate::agents::definition::AgentDefinition;
 use crate::config;
 use crate::context_pack::ContextPackBuilder;
+use crate::integrations::cache::{
+    build_cache_key, get_issue_cache, put_issue_cache, CacheStatus, CachedIssue,
+};
+use crate::issues::extract::extract_all_external_issues;
+use crate::issues::types::IssueExtractionConfig;
 use crate::local_checks::{self, LocalChecksRunner};
 use crate::orchestration::engine;
 use crate::orchestration::lane::{AgentLaneConfig, LaneSnapshot};
@@ -23,6 +28,7 @@ use crate::providers::github::{
 use crate::providers::prompts::{self, AgentFocus};
 use crate::providers::traits::{RawFinding, ReviewProvider};
 use crate::review_delta::{self, ReviewDeltaCounts, ReviewDeltaSnapshot};
+use crate::secrets::integrations::{self as integration_secrets, IntegrationSecretField};
 use crate::storage::db::AppDb;
 use crate::storage::models::{Finding, FindingCluster, PullRequest, ReviewRun, ReviewerDecision};
 use crate::storage::queries;
@@ -255,6 +261,42 @@ pub async fn start_review(
             .unwrap_or_default()
         };
 
+        let (issue_context_included_count, issue_context_sources) = {
+            let issue_items: Vec<_> = context_pack
+                .items
+                .iter()
+                .filter(|i| i.kind == "issue" && i.included)
+                .collect();
+            let count = issue_items.len();
+            let sources: Vec<String> = issue_items.iter().map(|i| i.source.clone()).collect();
+            (count, sources)
+        };
+
+        if let Some(ref el) = event_log {
+            let omitted: Vec<_> = context_pack
+                .items
+                .iter()
+                .filter(|i| i.kind == "issue" && !i.included)
+                .map(|i| {
+                    serde_json::json!({
+                        "label": i.label,
+                        "source": i.source,
+                        "omit_reason": i.omit_reason,
+                    })
+                })
+                .collect();
+            let _ = el.append(
+                &run_id_clone,
+                "issue_context_summary",
+                serde_json::json!({
+                    "included_count": issue_context_included_count,
+                    "sources": &issue_context_sources,
+                    "omitted_count": omitted.len(),
+                    "omitted": omitted,
+                }),
+            );
+        }
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -274,6 +316,8 @@ pub async fn start_review(
                 context_suffix,
                 extra_raw_findings,
                 owners_by_path,
+                issue_context_included_count,
+                issue_context_sources,
             },
         )
         .await;
@@ -636,6 +680,10 @@ fn build_issue_refs_from_metadata(
                 labels: Vec::new(),
                 state: None,
                 omit_reason: None,
+                tracker: Some("github".to_string()),
+                confidence: Some("high".to_string()),
+                url: None,
+                origin: Some("platform_link".to_string()),
             });
         }
     }
@@ -654,6 +702,10 @@ fn build_issue_refs_from_metadata(
                     labels: Vec::new(),
                     state: None,
                     omit_reason: None,
+                    tracker: Some("github".to_string()),
+                    confidence: Some("medium".to_string()),
+                    url: None,
+                    origin: Some("text_ref".to_string()),
                 });
             }
         }
@@ -662,7 +714,7 @@ fn build_issue_refs_from_metadata(
     refs
 }
 
-/// Build issue refs from the new platform-agnostic metadata (Phase 6).
+/// Build issue refs from the new platform-agnostic metadata (Phase 6/8).
 fn build_issue_refs_from_platform_metadata(
     metadata: Option<&crate::platform::adapter::PlatformMetadata>,
     default_owner: &str,
@@ -677,7 +729,6 @@ fn build_issue_refs_from_platform_metadata(
 
     match meta {
         crate::platform::adapter::PlatformMetadata::Bitbucket(b) => {
-            // For Bitbucket, build issue refs from extracted Jira keys
             for key in &b.jira_issue_keys {
                 if dedup.insert(key.clone()) {
                     refs.push(crate::context_pack::IssueRef {
@@ -688,15 +739,23 @@ fn build_issue_refs_from_platform_metadata(
                         repo: None,
                         labels: Vec::new(),
                         state: None,
-                        omit_reason: Some("missing_jira_credentials".to_string()),
+                        omit_reason: None,
+                        tracker: Some("jira".to_string()),
+                        confidence: Some("high".to_string()),
+                        url: None,
+                        origin: Some("platform_link".to_string()),
                     });
                 }
             }
         }
         _ => {
-            let linked_ids: &[i64] = match meta {
-                crate::platform::adapter::PlatformMetadata::GitHub(g) => &g.linked_issue_numbers,
-                crate::platform::adapter::PlatformMetadata::GitLab(g) => &g.closes_issues,
+            let (linked_ids, tracker_name): (&[i64], &str) = match meta {
+                crate::platform::adapter::PlatformMetadata::GitHub(g) => {
+                    (&g.linked_issue_numbers, "github")
+                }
+                crate::platform::adapter::PlatformMetadata::GitLab(g) => {
+                    (&g.closes_issues, "gitlab")
+                }
                 crate::platform::adapter::PlatformMetadata::Bitbucket(_) => unreachable!(),
             };
 
@@ -713,6 +772,10 @@ fn build_issue_refs_from_platform_metadata(
                         labels: Vec::new(),
                         state: None,
                         omit_reason: None,
+                        tracker: Some(tracker_name.to_string()),
+                        confidence: Some("high".to_string()),
+                        url: None,
+                        origin: Some("platform_link".to_string()),
                     });
                 }
             }
@@ -733,6 +796,10 @@ fn build_issue_refs_from_platform_metadata(
                                 labels: Vec::new(),
                                 state: None,
                                 omit_reason: None,
+                                tracker: Some("github".to_string()),
+                                confidence: Some("medium".to_string()),
+                                url: None,
+                                origin: Some("text_ref".to_string()),
                             });
                         }
                     }
@@ -940,7 +1007,7 @@ async fn hydrate_issue_refs_via_adapter(
                 title: context.title,
                 body_excerpt,
                 labels: context.labels,
-                state: None,
+                state: context.state,
                 omit_reason: None,
                 ..issue_ref
             });
@@ -955,21 +1022,139 @@ async fn hydrate_issue_refs_via_adapter(
     hydrated
 }
 
+fn hydrate_issue_ref_from_cached(
+    mut issue_ref: crate::context_pack::IssueRef,
+    status: CacheStatus,
+    cached: Option<CachedIssue>,
+) -> crate::context_pack::IssueRef {
+    match status {
+        CacheStatus::Ok => {
+            if let Some(cached) = cached {
+                issue_ref.title = cached.title;
+                issue_ref.body_excerpt = cached.body_excerpt.unwrap_or_default();
+                issue_ref.labels = cached.labels;
+                issue_ref.state = Some(cached.state);
+                issue_ref.url = cached.url;
+                issue_ref.omit_reason = None;
+            } else {
+                issue_ref.omit_reason = Some("fetch_failed".to_string());
+            }
+            issue_ref
+        }
+        CacheStatus::NotFound => {
+            issue_ref.omit_reason = Some("not_found".to_string());
+            issue_ref
+        }
+        CacheStatus::Unauthorized => {
+            issue_ref.omit_reason = Some("unauthorized".to_string());
+            issue_ref
+        }
+        CacheStatus::TransientError => {
+            issue_ref.omit_reason = Some("transient_error".to_string());
+            issue_ref
+        }
+    }
+}
+
+fn cache_issue_ref(
+    db: &AppDb,
+    tracker: &str,
+    scope: Option<&str>,
+    issue_key: &str,
+    status: CacheStatus,
+    issue: Option<CachedIssue>,
+) {
+    let cache_key = build_cache_key(tracker, scope, issue_key);
+    if let Ok(conn) = db.0.lock() {
+        put_issue_cache(
+            &conn,
+            &cache_key,
+            tracker,
+            scope,
+            issue_key,
+            &status,
+            issue.as_ref(),
+        );
+    }
+}
+
+fn jira_error_cache_status(err: &crate::integrations::jira::JiraApiError) -> CacheStatus {
+    match err {
+        crate::integrations::jira::JiraApiError::HttpError {
+            status: 401 | 403, ..
+        } => CacheStatus::Unauthorized,
+        crate::integrations::jira::JiraApiError::HttpError { status: 404, .. } => {
+            CacheStatus::NotFound
+        }
+        crate::integrations::jira::JiraApiError::RateLimited { .. } => CacheStatus::TransientError,
+        _ => CacheStatus::TransientError,
+    }
+}
+
+fn linear_error_cache_status(err: &crate::integrations::linear::LinearApiError) -> CacheStatus {
+    match err {
+        crate::integrations::linear::LinearApiError::HttpError {
+            status: 401 | 403, ..
+        } => CacheStatus::Unauthorized,
+        crate::integrations::linear::LinearApiError::HttpError { status: 404, .. } => {
+            CacheStatus::NotFound
+        }
+        crate::integrations::linear::LinearApiError::GraphQL(message)
+            if message.to_ascii_lowercase().contains("not found") =>
+        {
+            CacheStatus::NotFound
+        }
+        crate::integrations::linear::LinearApiError::RateLimited { .. } => {
+            CacheStatus::TransientError
+        }
+        _ => CacheStatus::TransientError,
+    }
+}
+
 async fn hydrate_jira_issue_refs(
     refs: Vec<crate::context_pack::IssueRef>,
+    integration_config: &IntegrationResolutionConfig,
+    db: &AppDb,
 ) -> Vec<crate::context_pack::IssueRef> {
     if refs.is_empty() {
         return refs;
     }
 
-    let credentials = match crate::integrations::jira::resolve_jira_credentials_from_env() {
+    let jira_env_override = std::env::var("JIRA_API_TOKEN")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if !integration_config.jira_enabled && !jira_env_override {
+        return refs
+            .into_iter()
+            .map(|mut issue_ref| {
+                if issue_ref.omit_reason.is_none() {
+                    issue_ref.omit_reason = Some("integration_disabled".to_string());
+                }
+                issue_ref
+            })
+            .collect();
+    }
+
+    let credentials = match crate::integrations::jira::resolve_jira_credentials(
+        integration_config.jira_base_url.clone(),
+        integration_config.jira_email.clone(),
+        integration_config.jira_api_token.clone(),
+    ) {
         Some(c) => c,
         None => {
-            tracing::debug!("Jira credentials not configured; keeping refs with omit_reason");
-            return refs;
+            return refs
+                .into_iter()
+                .map(|mut issue_ref| {
+                    if issue_ref.omit_reason.is_none() {
+                        issue_ref.omit_reason = Some("missing_credentials".to_string());
+                    }
+                    issue_ref
+                })
+                .collect();
         }
     };
 
+    let jira_scope = credentials.base_url.clone();
     let client = match crate::integrations::jira::JiraClient::try_new(credentials) {
         Ok(client) => client,
         Err(err) => {
@@ -989,6 +1174,10 @@ async fn hydrate_jira_issue_refs(
     let mut total_bytes = 0usize;
 
     for (index, issue_ref) in refs.into_iter().enumerate() {
+        if issue_ref.omit_reason.is_some() {
+            hydrated.push(issue_ref);
+            continue;
+        }
         if index >= MAX_ISSUES {
             hydrated.push(crate::context_pack::IssueRef {
                 omit_reason: Some("budget_exceeded".to_string()),
@@ -997,7 +1186,30 @@ async fn hydrate_jira_issue_refs(
             continue;
         }
 
-        match client.get_issue(&issue_ref.number).await {
+        let cache_key = build_cache_key("jira", Some(jira_scope.as_str()), &issue_ref.number);
+        if let Ok(conn) = db.0.lock() {
+            if let Some((status, cached)) = get_issue_cache(&conn, &cache_key) {
+                hydrated.push(hydrate_issue_ref_from_cached(issue_ref, status, cached));
+                continue;
+            }
+        }
+
+        let mut attempt = 0usize;
+        let fetched = loop {
+            match client.get_issue(&issue_ref.number).await {
+                Err(crate::integrations::jira::JiraApiError::RateLimited {
+                    retry_after_secs,
+                    ..
+                }) if attempt < 2 => {
+                    let delay_secs = retry_after_secs.unwrap_or(1u64 << attempt).clamp(1, 8);
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                    attempt += 1;
+                }
+                other => break other,
+            }
+        };
+
+        match fetched {
             Ok(info) => {
                 let body_excerpt = info
                     .body_excerpt
@@ -1016,7 +1228,9 @@ async fn hydrate_jira_issue_refs(
                     continue;
                 }
                 total_bytes += estimated_bytes;
-                hydrated.push(crate::context_pack::IssueRef {
+                let issue_number = issue_ref.number.clone();
+                let issue_url = issue_ref.url.clone();
+                let hydrated_issue = crate::context_pack::IssueRef {
                     number: info.key,
                     title: info.title,
                     body_excerpt,
@@ -1024,14 +1238,50 @@ async fn hydrate_jira_issue_refs(
                     state: Some(info.state),
                     omit_reason: None,
                     ..issue_ref
-                });
+                };
+                let cached_issue = CachedIssue {
+                    tracker: "jira".to_string(),
+                    issue_key: issue_number.clone(),
+                    title: hydrated_issue.title.clone(),
+                    body_excerpt: if hydrated_issue.body_excerpt.is_empty() {
+                        None
+                    } else {
+                        Some(hydrated_issue.body_excerpt.clone())
+                    },
+                    labels: hydrated_issue.labels.clone(),
+                    state: hydrated_issue
+                        .state
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    url: issue_url,
+                };
+                cache_issue_ref(
+                    db,
+                    "jira",
+                    Some(jira_scope.as_str()),
+                    &issue_number,
+                    CacheStatus::Ok,
+                    Some(cached_issue),
+                );
+                hydrated.push(hydrated_issue);
             }
             Err(err) => {
                 tracing::warn!("Failed to hydrate Jira issue {}: {}", issue_ref.number, err);
-                hydrated.push(crate::context_pack::IssueRef {
-                    omit_reason: Some("fetch_failed".to_string()),
+                let issue_number = issue_ref.number.clone();
+                let cache_status = jira_error_cache_status(&err);
+                let failed_issue = crate::context_pack::IssueRef {
+                    omit_reason: Some(cache_status.as_str().to_string()),
                     ..issue_ref
-                });
+                };
+                cache_issue_ref(
+                    db,
+                    "jira",
+                    Some(jira_scope.as_str()),
+                    &issue_number,
+                    cache_status,
+                    None,
+                );
+                hydrated.push(failed_issue);
             }
         }
     }
@@ -1039,34 +1289,492 @@ async fn hydrate_jira_issue_refs(
     hydrated
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IssueHydrationStrategy {
-    GithubApi,
-    GitlabAdapter,
-    Jira,
-}
+async fn hydrate_linear_issue_refs(
+    refs: Vec<crate::context_pack::IssueRef>,
+    integration_config: &IntegrationResolutionConfig,
+    db: &AppDb,
+) -> Vec<crate::context_pack::IssueRef> {
+    if refs.is_empty() {
+        return refs;
+    }
 
-fn select_issue_hydration_strategy(
-    review_url: &crate::platform::ParsedReviewUrl,
-    adapter_platform_name: Option<&str>,
-) -> Option<IssueHydrationStrategy> {
-    if matches!(
-        review_url,
-        crate::platform::ParsedReviewUrl::Bitbucket { .. }
+    let linear_env_override = std::env::var("LINEAR_API_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if !integration_config.linear_enabled && !linear_env_override {
+        return refs
+            .into_iter()
+            .map(|mut issue_ref| {
+                if issue_ref.omit_reason.is_none() {
+                    issue_ref.omit_reason = Some("integration_disabled".to_string());
+                }
+                issue_ref
+            })
+            .collect();
+    }
+
+    let credentials = match crate::integrations::linear::resolve_linear_credentials(
+        integration_config.linear_api_key.clone(),
     ) {
-        return Some(IssueHydrationStrategy::Jira);
-    }
-    match adapter_platform_name {
-        Some("gitlab") => Some(IssueHydrationStrategy::GitlabAdapter),
-        Some(_) => Some(IssueHydrationStrategy::GithubApi),
-        None if matches!(review_url, crate::platform::ParsedReviewUrl::GitHub { .. }) => {
-            Some(IssueHydrationStrategy::GithubApi)
+        Some(c) => c,
+        None => {
+            return refs
+                .into_iter()
+                .map(|mut issue_ref| {
+                    if issue_ref.omit_reason.is_none() {
+                        issue_ref.omit_reason = Some("missing_credentials".to_string());
+                    }
+                    issue_ref
+                })
+                .collect();
         }
-        None => None,
+    };
+
+    let client = match crate::integrations::linear::LinearClient::try_new(credentials) {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::warn!("Failed to initialize Linear client: {}", err);
+            return refs
+                .into_iter()
+                .map(|mut issue_ref| {
+                    if issue_ref.omit_reason.is_none() {
+                        issue_ref.omit_reason = Some("fetch_failed".to_string());
+                    }
+                    issue_ref
+                })
+                .collect();
+        }
+    };
+
+    let scope = integration_config
+        .linear_workspace
+        .as_deref()
+        .unwrap_or("linear");
+    let mut hydrated = Vec::new();
+    let mut total_bytes = 0usize;
+
+    for (index, issue_ref) in refs.into_iter().enumerate() {
+        if issue_ref.omit_reason.is_some() {
+            hydrated.push(issue_ref);
+            continue;
+        }
+        if index >= MAX_ISSUES {
+            hydrated.push(crate::context_pack::IssueRef {
+                omit_reason: Some("budget_exceeded".to_string()),
+                ..issue_ref
+            });
+            continue;
+        }
+
+        let cache_key = build_cache_key("linear", Some(scope), &issue_ref.number);
+        if let Ok(conn) = db.0.lock() {
+            if let Some((status, cached)) = get_issue_cache(&conn, &cache_key) {
+                hydrated.push(hydrate_issue_ref_from_cached(issue_ref, status, cached));
+                continue;
+            }
+        }
+
+        let mut attempt = 0usize;
+        let fetched = loop {
+            match client.get_issue(&issue_ref.number).await {
+                Err(crate::integrations::linear::LinearApiError::RateLimited {
+                    retry_after_secs,
+                }) if attempt < 2 => {
+                    let delay_secs = retry_after_secs.unwrap_or(1u64 << attempt).clamp(1, 8);
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                    attempt += 1;
+                }
+                other => break other,
+            }
+        };
+
+        match fetched {
+            Ok(info) => {
+                let body_excerpt = info
+                    .body_excerpt
+                    .as_deref()
+                    .map(|b| truncate_to_bytes(b, MAX_ISSUE_BODY_EXCERPT_BYTES))
+                    .unwrap_or_default();
+                let estimated_bytes = info.title.len()
+                    + body_excerpt.len()
+                    + info.labels.iter().map(String::len).sum::<usize>()
+                    + 64;
+                if total_bytes + estimated_bytes > MAX_ISSUE_CONTEXT_BYTES_TOTAL {
+                    hydrated.push(crate::context_pack::IssueRef {
+                        omit_reason: Some("budget_exceeded".to_string()),
+                        ..issue_ref
+                    });
+                    continue;
+                }
+                total_bytes += estimated_bytes;
+                let issue_number = issue_ref.number.clone();
+                let hydrated_issue = crate::context_pack::IssueRef {
+                    number: info.identifier,
+                    title: info.title,
+                    body_excerpt,
+                    labels: info.labels,
+                    state: Some(info.state),
+                    url: info.url,
+                    omit_reason: None,
+                    ..issue_ref
+                };
+                let cached_issue = CachedIssue {
+                    tracker: "linear".to_string(),
+                    issue_key: issue_number.clone(),
+                    title: hydrated_issue.title.clone(),
+                    body_excerpt: if hydrated_issue.body_excerpt.is_empty() {
+                        None
+                    } else {
+                        Some(hydrated_issue.body_excerpt.clone())
+                    },
+                    labels: hydrated_issue.labels.clone(),
+                    state: hydrated_issue
+                        .state
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    url: hydrated_issue.url.clone(),
+                };
+                cache_issue_ref(
+                    db,
+                    "linear",
+                    Some(scope),
+                    &issue_number,
+                    CacheStatus::Ok,
+                    Some(cached_issue),
+                );
+                hydrated.push(hydrated_issue);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to hydrate Linear issue {}: {}",
+                    issue_ref.number,
+                    err
+                );
+                let issue_number = issue_ref.number.clone();
+                let cache_status = linear_error_cache_status(&err);
+                let failed_issue = crate::context_pack::IssueRef {
+                    omit_reason: Some(cache_status.as_str().to_string()),
+                    ..issue_ref
+                };
+                cache_issue_ref(db, "linear", Some(scope), &issue_number, cache_status, None);
+                hydrated.push(failed_issue);
+            }
+        }
+    }
+
+    hydrated
+}
+
+#[derive(Debug, Clone, Default)]
+struct IntegrationResolutionConfig {
+    jira_enabled: bool,
+    jira_base_url: Option<String>,
+    jira_email: Option<String>,
+    jira_api_token: Option<String>,
+    jira_project_keys: Vec<String>,
+    linear_enabled: bool,
+    linear_workspace: Option<String>,
+    linear_api_key: Option<String>,
+    linear_team_keys: Vec<String>,
+}
+
+fn parse_bool_setting(value: Option<String>) -> bool {
+    value
+        .map(|v| {
+            let normalized = v.trim().to_ascii_lowercase();
+            normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "on"
+        })
+        .unwrap_or(false)
+}
+
+fn parse_csv_setting(value: Option<String>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(|v| v.trim().to_ascii_uppercase())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+fn load_integration_resolution_config(db: &AppDb) -> IntegrationResolutionConfig {
+    let mut config = IntegrationResolutionConfig::default();
+
+    if let Ok(conn) = db.0.lock() {
+        config.jira_enabled = parse_bool_setting(
+            queries::get_setting(&conn, "integration_jira_enabled")
+                .ok()
+                .flatten(),
+        );
+        config.jira_base_url = queries::get_setting(&conn, "integration_jira_base_url")
+            .ok()
+            .flatten()
+            .map(|v| v.trim().trim_end_matches('/').to_string())
+            .filter(|v| !v.is_empty());
+        config.jira_email = queries::get_setting(&conn, "integration_jira_email")
+            .ok()
+            .flatten()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        config.jira_project_keys = parse_csv_setting(
+            queries::get_setting(&conn, "integration_jira_project_keys")
+                .ok()
+                .flatten(),
+        );
+
+        config.linear_enabled = parse_bool_setting(
+            queries::get_setting(&conn, "integration_linear_enabled")
+                .ok()
+                .flatten(),
+        );
+        config.linear_workspace = queries::get_setting(&conn, "integration_linear_workspace")
+            .ok()
+            .flatten()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        config.linear_team_keys = parse_csv_setting(
+            queries::get_setting(&conn, "integration_linear_team_keys")
+                .ok()
+                .flatten(),
+        );
+    }
+
+    config.jira_api_token =
+        integration_secrets::resolve_secret(IntegrationSecretField::JiraApiToken)
+            .ok()
+            .and_then(|(value, _source)| value);
+    config.linear_api_key =
+        integration_secrets::resolve_secret(IntegrationSecretField::LinearApiKey)
+            .ok()
+            .and_then(|(value, _source)| value);
+
+    config
+}
+
+fn build_external_issue_refs(
+    platform_metadata: Option<&crate::platform::adapter::PlatformMetadata>,
+    pr_title: &str,
+    pr_head_branch: Option<&str>,
+    integration_config: &IntegrationResolutionConfig,
+) -> Vec<crate::context_pack::IssueRef> {
+    let mut text_parts = Vec::new();
+    if !pr_title.trim().is_empty() {
+        text_parts.push(pr_title.trim().to_string());
+    }
+    if let Some(head_branch) = pr_head_branch.map(str::trim).filter(|b| !b.is_empty()) {
+        text_parts.push(head_branch.to_string());
+    }
+
+    if let Some(metadata) = platform_metadata {
+        match metadata {
+            crate::platform::adapter::PlatformMetadata::GitHub(g) => {
+                if let Some(body) = g
+                    .pr_body
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|b| !b.is_empty())
+                {
+                    text_parts.push(body.to_string());
+                }
+                if !g.head_ref.trim().is_empty() {
+                    text_parts.push(g.head_ref.trim().to_string());
+                }
+            }
+            crate::platform::adapter::PlatformMetadata::GitLab(g) => {
+                if let Some(body) = g
+                    .mr_body
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|b| !b.is_empty())
+                {
+                    text_parts.push(body.to_string());
+                }
+                if !g.head_ref.trim().is_empty() {
+                    text_parts.push(g.head_ref.trim().to_string());
+                }
+            }
+            crate::platform::adapter::PlatformMetadata::Bitbucket(b) => {
+                if let Some(body) = b
+                    .pr_body
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|b| !b.is_empty())
+                {
+                    text_parts.push(body.to_string());
+                }
+                if !b.head_ref.trim().is_empty() {
+                    text_parts.push(b.head_ref.trim().to_string());
+                }
+            }
+        }
+    }
+
+    let extraction_input = text_parts.join("\n");
+    if extraction_input.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let extraction_config = IssueExtractionConfig {
+        jira_project_keys: integration_config.jira_project_keys.clone(),
+        linear_team_keys: integration_config.linear_team_keys.clone(),
+        jira_enabled: integration_config.jira_enabled,
+        linear_enabled: integration_config.linear_enabled,
+    };
+    let candidates = extract_all_external_issues(&extraction_input, &extraction_config);
+    candidates
+        .into_iter()
+        .map(|candidate| {
+            let tracker = candidate.tracker.clone();
+            let title_prefix = match tracker.as_str() {
+                "jira" => "Jira issue",
+                "linear" => "Linear issue",
+                _ => "Issue",
+            };
+            crate::context_pack::IssueRef {
+                number: candidate.key.clone(),
+                title: format!("{title_prefix} {}", candidate.key),
+                body_excerpt: String::new(),
+                owner: candidate.owner,
+                repo: candidate.repo,
+                labels: Vec::new(),
+                state: None,
+                omit_reason: candidate.omit_reason,
+                tracker: Some(tracker),
+                confidence: Some(candidate.confidence),
+                url: candidate.url,
+                origin: Some(candidate.origin),
+            }
+        })
+        .collect()
+}
+
+fn dedupe_issue_refs(
+    refs: Vec<crate::context_pack::IssueRef>,
+) -> Vec<crate::context_pack::IssueRef> {
+    let mut dedup = std::collections::HashSet::new();
+    refs.into_iter()
+        .filter(|issue_ref| {
+            let tracker = issue_ref.tracker.as_deref().unwrap_or("github");
+            let key = format!(
+                "{tracker}:{}:{}:{}",
+                issue_ref.owner.as_deref().unwrap_or(""),
+                issue_ref.repo.as_deref().unwrap_or(""),
+                issue_ref.number
+            );
+            dedup.insert(key)
+        })
+        .collect()
+}
+
+fn apply_global_issue_budget(refs: &mut [crate::context_pack::IssueRef], max_issues: usize) {
+    let mut hydrate_budget = 0usize;
+    for issue_ref in refs.iter_mut() {
+        if issue_ref.omit_reason.is_some() {
+            continue;
+        }
+        hydrate_budget += 1;
+        if hydrate_budget > max_issues {
+            issue_ref.omit_reason = Some("budget_exceeded".to_string());
+        }
     }
 }
 
-async fn resolve_issue_refs_and_codeowners(
+async fn hydrate_issue_refs_by_tracker(
+    app: &AppHandle,
+    adapter: Option<&dyn crate::platform::adapter::PlatformAdapter>,
+    refs: Vec<crate::context_pack::IssueRef>,
+    integration_config: &IntegrationResolutionConfig,
+    db: &AppDb,
+) -> Vec<crate::context_pack::IssueRef> {
+    let mut passthrough: Vec<(usize, crate::context_pack::IssueRef)> = Vec::new();
+    let mut github_refs: Vec<(usize, crate::context_pack::IssueRef)> = Vec::new();
+    let mut gitlab_refs: Vec<(usize, crate::context_pack::IssueRef)> = Vec::new();
+    let mut jira_refs: Vec<(usize, crate::context_pack::IssueRef)> = Vec::new();
+    let mut linear_refs: Vec<(usize, crate::context_pack::IssueRef)> = Vec::new();
+
+    for (idx, issue_ref) in refs.into_iter().enumerate() {
+        if issue_ref.omit_reason.is_some() {
+            passthrough.push((idx, issue_ref));
+            continue;
+        }
+
+        match issue_ref.tracker.as_deref().unwrap_or("github") {
+            "gitlab" => gitlab_refs.push((idx, issue_ref)),
+            "jira" => jira_refs.push((idx, issue_ref)),
+            "linear" => linear_refs.push((idx, issue_ref)),
+            _ => github_refs.push((idx, issue_ref)),
+        }
+    }
+
+    let mut hydrated: Vec<(usize, crate::context_pack::IssueRef)> = passthrough;
+
+    if !github_refs.is_empty() {
+        let indexes: Vec<usize> = github_refs.iter().map(|(idx, _)| *idx).collect();
+        let payload: Vec<crate::context_pack::IssueRef> = github_refs
+            .into_iter()
+            .map(|(_, issue_ref)| issue_ref)
+            .collect();
+        let hydrated_payload = hydrate_issue_refs_from_github(app, payload).await;
+        hydrated.extend(indexes.into_iter().zip(hydrated_payload));
+    }
+
+    if !gitlab_refs.is_empty() {
+        let indexes: Vec<usize> = gitlab_refs.iter().map(|(idx, _)| *idx).collect();
+        let payload: Vec<crate::context_pack::IssueRef> = gitlab_refs
+            .into_iter()
+            .map(|(_, issue_ref)| issue_ref)
+            .collect();
+        let hydrated_payload = if let Some(active_adapter) = adapter {
+            if active_adapter.platform_name() == "gitlab" {
+                hydrate_issue_refs_via_adapter(active_adapter, payload).await
+            } else {
+                payload
+                    .into_iter()
+                    .map(|mut issue_ref| {
+                        issue_ref.omit_reason = Some("fetch_failed".to_string());
+                        issue_ref
+                    })
+                    .collect()
+            }
+        } else {
+            payload
+                .into_iter()
+                .map(|mut issue_ref| {
+                    issue_ref.omit_reason = Some("fetch_failed".to_string());
+                    issue_ref
+                })
+                .collect()
+        };
+        hydrated.extend(indexes.into_iter().zip(hydrated_payload));
+    }
+
+    if !jira_refs.is_empty() {
+        let indexes: Vec<usize> = jira_refs.iter().map(|(idx, _)| *idx).collect();
+        let payload: Vec<crate::context_pack::IssueRef> = jira_refs
+            .into_iter()
+            .map(|(_, issue_ref)| issue_ref)
+            .collect();
+        let hydrated_payload = hydrate_jira_issue_refs(payload, integration_config, db).await;
+        hydrated.extend(indexes.into_iter().zip(hydrated_payload));
+    }
+
+    if !linear_refs.is_empty() {
+        let indexes: Vec<usize> = linear_refs.iter().map(|(idx, _)| *idx).collect();
+        let payload: Vec<crate::context_pack::IssueRef> = linear_refs
+            .into_iter()
+            .map(|(_, issue_ref)| issue_ref)
+            .collect();
+        let hydrated_payload = hydrate_linear_issue_refs(payload, integration_config, db).await;
+        hydrated.extend(indexes.into_iter().zip(hydrated_payload));
+    }
+
+    hydrated.sort_by_key(|(idx, _)| *idx);
+    hydrated
+        .into_iter()
+        .map(|(_, issue_ref)| issue_ref)
+        .collect()
+}
+
+pub(crate) async fn resolve_issue_refs_and_codeowners(
     app: &AppHandle,
     db: &AppDb,
     pr_id: &str,
@@ -1075,11 +1783,11 @@ async fn resolve_issue_refs_and_codeowners(
     Option<String>,
     Option<String>,
 ) {
-    let (pr_url, metadata_json) = {
+    let (pr_url, metadata_json, pr_title, pr_head_branch) = {
         let conn = db.0.lock().ok();
         conn.and_then(|c| {
             let pr = queries::get_pull_request(&c, pr_id).ok()??;
-            Some((pr.url, pr.platform_metadata_json))
+            Some((pr.url, pr.platform_metadata_json, pr.title, pr.head_branch))
         })
         .unwrap_or_default()
     };
@@ -1103,7 +1811,7 @@ async fn resolve_issue_refs_and_codeowners(
         serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(j).ok()
     });
 
-    let issue_refs_seed = if platform_metadata.is_some() {
+    let platform_issue_refs_seed = if platform_metadata.is_some() {
         build_issue_refs_from_platform_metadata(
             platform_metadata.as_ref(),
             &default_owner,
@@ -1117,32 +1825,35 @@ async fn resolve_issue_refs_and_codeowners(
         )
     };
 
+    let integration_config = load_integration_resolution_config(db);
+    if let Ok(conn) = db.0.lock() {
+        crate::integrations::cache::prune_issue_cache(&conn);
+    }
+    let external_issue_refs_seed = build_external_issue_refs(
+        platform_metadata.as_ref(),
+        &pr_title,
+        pr_head_branch.as_deref(),
+        &integration_config,
+    );
+    let mut issue_refs_seed = dedupe_issue_refs(
+        platform_issue_refs_seed
+            .into_iter()
+            .chain(external_issue_refs_seed)
+            .collect(),
+    );
+    apply_global_issue_budget(&mut issue_refs_seed, MAX_ISSUES);
+
     let adapter = crate::commands::pr_metadata::build_adapter(app, &review_url)
         .await
         .ok();
-    let issue_refs = match select_issue_hydration_strategy(
-        &review_url,
-        adapter.as_ref().map(|a| a.platform_name()),
-    ) {
-        Some(IssueHydrationStrategy::GitlabAdapter) => {
-            if let Some(adapter) = adapter.as_ref() {
-                hydrate_issue_refs_via_adapter(adapter.as_ref(), issue_refs_seed).await
-            } else {
-                issue_refs_seed
-            }
-        }
-        Some(IssueHydrationStrategy::Jira) => hydrate_jira_issue_refs(issue_refs_seed).await,
-        Some(IssueHydrationStrategy::GithubApi) => {
-            hydrate_issue_refs_from_github(app, issue_refs_seed).await
-        }
-        None => issue_refs_seed
-            .into_iter()
-            .map(|mut issue_ref| {
-                issue_ref.omit_reason = Some("fetch_failed".to_string());
-                issue_ref
-            })
-            .collect(),
-    };
+    let issue_refs = hydrate_issue_refs_by_tracker(
+        app,
+        adapter.as_deref(),
+        issue_refs_seed,
+        &integration_config,
+        db,
+    )
+    .await;
 
     let base_ref = if let Some(meta) = platform_metadata.as_ref() {
         match meta {
@@ -1472,6 +2183,17 @@ pub async fn resume_review(
             .unwrap_or_default()
         };
 
+        let (issue_context_included_count, issue_context_sources) = {
+            let issue_items: Vec<_> = context_pack
+                .items
+                .iter()
+                .filter(|i| i.kind == "issue" && i.included)
+                .collect();
+            let count = issue_items.len();
+            let sources: Vec<String> = issue_items.iter().map(|i| i.source.clone()).collect();
+            (count, sources)
+        };
+
         let sems = engine::build_provider_semaphores(&lanes);
         let result = engine::run_review_pipeline(
             &db,
@@ -1491,6 +2213,8 @@ pub async fn resume_review(
                 context_suffix,
                 extra_raw_findings,
                 owners_by_path,
+                issue_context_included_count,
+                issue_context_sources,
             },
         )
         .await;
@@ -1516,31 +2240,6 @@ mod tests {
     use crate::storage::db::init_db_in_memory;
     use crate::storage::models::{Finding, PullRequest, ReviewRun, Workspace};
     use crate::storage::queries;
-
-    #[test]
-    fn select_issue_hydration_prefers_jira_for_bitbucket_even_without_adapter() {
-        let url =
-            crate::platform::parse_review_url("https://bitbucket.org/acme/repo/pull-requests/12")
-                .unwrap();
-        let strategy = select_issue_hydration_strategy(&url, None);
-        assert_eq!(strategy, Some(IssueHydrationStrategy::Jira));
-    }
-
-    #[test]
-    fn select_issue_hydration_uses_gitlab_adapter_when_available() {
-        let url =
-            crate::platform::parse_review_url("https://gitlab.com/acme/repo/-/merge_requests/3")
-                .unwrap();
-        let strategy = select_issue_hydration_strategy(&url, Some("gitlab"));
-        assert_eq!(strategy, Some(IssueHydrationStrategy::GitlabAdapter));
-    }
-
-    #[test]
-    fn select_issue_hydration_uses_github_api_for_github_without_adapter() {
-        let url = crate::platform::parse_review_url("https://github.com/acme/repo/pull/5").unwrap();
-        let strategy = select_issue_hydration_strategy(&url, None);
-        assert_eq!(strategy, Some(IssueHydrationStrategy::GithubApi));
-    }
 
     #[test]
     fn require_non_empty_diff_rejects_none() {

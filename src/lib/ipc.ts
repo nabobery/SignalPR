@@ -260,3 +260,28 @@ export async function getProviderCapabilities(): Promise<ProviderCapabilities[]>
 export async function getAgentRunMetadata(runId: string): Promise<AgentRunMetadata[]> {
   return invoke("get_agent_run_metadata", { runId });
 }
+
+// --- Integrations ---
+
+export interface IntegrationStatus {
+  id: string;
+  enabled: boolean;
+  has_secret: boolean;
+  settings: Record<string, string>;
+}
+
+export async function getIntegrationStatuses(): Promise<IntegrationStatus[]> {
+  return invoke("get_integration_statuses");
+}
+
+export async function storeIntegrationSecret(integrationId: string, value: string): Promise<void> {
+  return invoke("store_integration_secret", { integrationId, value });
+}
+
+export async function deleteIntegrationSecret(integrationId: string): Promise<void> {
+  return invoke("delete_integration_secret", { integrationId });
+}
+
+export async function updateIntegrationSetting(key: string, value: string): Promise<void> {
+  return invoke("update_integration_setting", { key, value });
+}

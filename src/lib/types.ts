@@ -94,6 +94,10 @@ export interface FindingExplanation {
   ownership?: {
     owners: string[];
   };
+  issue_context?: {
+    included_count: number;
+    sources: string[];
+  };
 }
 
 // Phase 3: Context pack summary stored on review run
@@ -112,6 +116,7 @@ export interface ContextPackItem {
   included: boolean;
   omit_reason?: string;
   content?: string;
+  confidence?: string;
 }
 
 // Phase 3: Local checks summary stored on review run

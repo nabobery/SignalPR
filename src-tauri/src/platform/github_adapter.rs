@@ -127,7 +127,7 @@ impl PlatformAdapter for GitHubAdapter {
                     let excerpt = issue.body.as_deref().map(|b| {
                         let max = crate::providers::github::MAX_ISSUE_BODY_EXCERPT_BYTES;
                         if b.len() > max {
-                            format!("{}...", &b[..max])
+                            format!("{}...", crate::context_pack::truncate_utf8(b, max))
                         } else {
                             b.to_string()
                         }
@@ -142,6 +142,7 @@ impl PlatformAdapter for GitHubAdapter {
                             .into_iter()
                             .map(|l| l.name)
                             .collect(),
+                        state: Some(issue.state),
                     });
                 }
                 Err(e) => {
