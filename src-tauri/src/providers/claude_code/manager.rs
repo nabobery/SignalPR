@@ -626,7 +626,7 @@ mod tests {
         manager.cancel_lane(lane_a).await;
 
         assert!(
-            manager.inner.lock().await.reviews.get(lane_a).is_none(),
+            !manager.inner.lock().await.reviews.contains_key(lane_a),
             "cancelled lane should be removed"
         );
         assert!(

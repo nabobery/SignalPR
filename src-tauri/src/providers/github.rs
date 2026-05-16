@@ -15,6 +15,12 @@ pub const MAX_ISSUES: usize = 3;
 pub const MAX_ISSUE_BODY_EXCERPT_BYTES: usize = 2_048;
 pub const MAX_ISSUE_CONTEXT_BYTES_TOTAL: usize = 6_144;
 
+const _: () = {
+    assert!(MAX_ISSUES >= 1 && MAX_ISSUES <= 10);
+    assert!(MAX_ISSUE_BODY_EXCERPT_BYTES >= 512);
+    assert!(MAX_ISSUE_CONTEXT_BYTES_TOTAL >= MAX_ISSUE_BODY_EXCERPT_BYTES);
+};
+
 // --- Token sourcing ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -726,13 +732,6 @@ mod tests {
         assert!(json.contains("REQUEST_CHANGES"));
         let parsed: CreateReviewPayload = serde_json::from_str(&json).unwrap();
         assert!(parsed.comments.is_empty());
-    }
-
-    #[test]
-    fn test_budget_constants_reasonable() {
-        assert!(MAX_ISSUES >= 1 && MAX_ISSUES <= 10);
-        assert!(MAX_ISSUE_BODY_EXCERPT_BYTES >= 512);
-        assert!(MAX_ISSUE_CONTEXT_BYTES_TOTAL >= MAX_ISSUE_BODY_EXCERPT_BYTES);
     }
 
     struct EnvGuard {

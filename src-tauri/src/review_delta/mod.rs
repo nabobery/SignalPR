@@ -263,6 +263,10 @@ fn parse_hunk_header(line: &str) -> Option<HunkRange> {
 mod tests {
     use super::*;
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test fixture helper keeps review-delta cases compact and readable"
+    )]
     fn make_finding(
         id: &str,
         agent_type: &str,
