@@ -8,14 +8,19 @@ import {
   Package,
   RefreshCw,
   ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
-import { getEventLog, refreshPrMetadata, parseError } from "../../lib/ipc";
+import { getEnvironmentSummary, getEventLog, refreshPrMetadata, parseError } from "../../lib/ipc";
 import type {
+  CapabilitySupport,
   ContextPackItem,
   ContextPackSummary,
+  EnvironmentSummary,
   LocalChecksSummary,
+  PlatformCapabilities,
   PlatformMetadata,
 } from "../../lib/types";
+import { getPlatformAuthDiagnostic, isPlatformAuthReady } from "../../lib/types";
 
 interface EventEntry {
   timestamp: string;
@@ -31,6 +36,8 @@ interface DiagnosticsProps {
   localChecksSummary?: LocalChecksSummary | null;
   platformMetadata?: PlatformMetadata | null;
   platformMetadataFetchedAt?: string | null;
+  platformCapabilities?: PlatformCapabilities | null;
+  platformCapabilitiesFetchedAt?: string | null;
 }
 
 export function DiagnosticsTab({
@@ -41,6 +48,8 @@ export function DiagnosticsTab({
   localChecksSummary,
   platformMetadata,
   platformMetadataFetchedAt,
+  platformCapabilities,
+  platformCapabilitiesFetchedAt,
 }: DiagnosticsProps) {
   const [events, setEvents] = useState<EventEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +57,7 @@ export function DiagnosticsTab({
   const [filterText, setFilterText] = useState("");
   const [refreshingMetadata, setRefreshingMetadata] = useState(false);
   const [refreshMetadataError, setRefreshMetadataError] = useState<string | null>(null);
+  const [environmentSummary, setEnvironmentSummary] = useState<EnvironmentSummary | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -63,6 +73,24 @@ export function DiagnosticsTab({
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getEnvironmentSummary()
+      .then((summary) => {
+        if (!cancelled) {
+          setEnvironmentSummary(summary);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEnvironmentSummary(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refreshMetadata = useCallback(async () => {
     if (!prId) return;
@@ -122,6 +150,13 @@ export function DiagnosticsTab({
           canRefresh={Boolean(prId)}
         />
       )}
+      {platformCapabilities && (
+        <PlatformCapabilitiesSection
+          data={platformCapabilities}
+          fetchedAt={platformCapabilitiesFetchedAt ?? null}
+          environmentSummary={environmentSummary}
+        />
+      )}
       {contextPackSummary && <ContextPackSection data={contextPackSummary} />}
       {contextPackSummary && <IssueContextSection items={contextPackSummary.items ?? []} />}
       {localChecksSummary && <LocalChecksSection data={localChecksSummary} />}
@@ -154,6 +189,95 @@ export function DiagnosticsTab({
           <EventRow key={i} event={event} />
         ))}
       </div>
+    </div>
+  );
+}
+
+function PlatformCapabilitiesSection({
+  data,
+  fetchedAt,
+  environmentSummary,
+}: {
+  data: PlatformCapabilities;
+  fetchedAt: string | null;
+  environmentSummary: EnvironmentSummary | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const counts = data.capabilities.reduce(
+    (acc, capability) => {
+      acc[capability.support] += 1;
+      return acc;
+    },
+    { full: 0, partial: 0, none: 0 } as Record<CapabilitySupport, number>,
+  );
+  const authReady = isPlatformAuthReady(data.platform, environmentSummary);
+  const authDiagnostic = getPlatformAuthDiagnostic(data.platform, environmentSummary);
+
+  return (
+    <div className="border border-zinc-800 rounded-lg bg-zinc-900/50">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full text-left px-4 py-3 flex items-center gap-2 hover:bg-zinc-800/30 transition-colors"
+      >
+        <ShieldCheck className="w-4 h-4 text-emerald-400" />
+        <span className="text-sm font-medium text-zinc-200">Platform capabilities</span>
+        <span className="text-xs text-zinc-500">
+          {counts.full} full, {counts.partial} partial, {counts.none} blocked
+          {fetchedAt ? ` · ${formatTimestamp(fetchedAt)}` : ""}
+        </span>
+      </button>
+      {expanded && (
+        <div className="px-4 pb-3 space-y-2">
+          <div className="rounded-md border border-zinc-800/60 bg-zinc-950/40 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <ShieldAlert
+                className={`w-3.5 h-3.5 ${authReady ? "text-emerald-400" : "text-red-300"}`}
+              />
+              <span className="text-xs font-medium text-zinc-200">
+                {authReady ? "Auth ready" : "Auth not ready"}
+              </span>
+            </div>
+            {!authReady && authDiagnostic && (
+              <p className="mt-1 text-xs text-zinc-400">{authDiagnostic}</p>
+            )}
+          </div>
+          {data.capabilities.map((capability) => (
+            <div
+              key={capability.key}
+              className="rounded-md border border-zinc-800/60 bg-zinc-950/40 px-3 py-2"
+            >
+              <div className="flex items-center gap-2">
+                <code className="text-[11px] text-zinc-300">{capability.key}</code>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    capability.support === "full"
+                      ? "bg-emerald-900/40 text-emerald-300"
+                      : capability.support === "partial"
+                        ? "bg-yellow-900/30 text-yellow-300"
+                        : "bg-red-900/30 text-red-300"
+                  }`}
+                >
+                  {capability.support}
+                </span>
+              </div>
+              {capability.constraints.length > 0 && (
+                <div className="mt-1 space-y-1">
+                  {capability.constraints.map((constraint) => (
+                    <p key={constraint.code} className="text-xs text-zinc-400">
+                      {constraint.message}
+                    </p>
+                  ))}
+                </div>
+              )}
+              {capability.fallback && (
+                <p className="mt-1 text-xs text-zinc-500">
+                  Fallback: {capability.fallback.action} · {capability.fallback.reason}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

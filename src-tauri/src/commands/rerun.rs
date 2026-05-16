@@ -39,6 +39,8 @@ struct LatestPrSnapshot {
     changed_files_json: String,
     platform_metadata_json: Option<String>,
     platform_metadata_fetched_at: Option<String>,
+    platform_capabilities_json: Option<String>,
+    platform_capabilities_fetched_at: Option<String>,
     head_sha: Option<String>,
 }
 
@@ -135,6 +137,12 @@ pub async fn rerun_review(
                 latest_platform_metadata_json: latest_snapshot.platform_metadata_json.as_deref(),
                 latest_platform_metadata_fetched_at: latest_snapshot
                     .platform_metadata_fetched_at
+                    .as_deref(),
+                latest_platform_capabilities_json: latest_snapshot
+                    .platform_capabilities_json
+                    .as_deref(),
+                latest_platform_capabilities_fetched_at: latest_snapshot
+                    .platform_capabilities_fetched_at
                     .as_deref(),
                 latest_head_sha: latest_snapshot.head_sha.as_deref(),
                 trigger_source: &trigger_source,
@@ -280,19 +288,24 @@ async fn fetch_latest_pr_snapshot(
     pr: &PullRequest,
 ) -> Result<LatestPrSnapshot, AppError> {
     let review_url = crate::platform::parse_review_url(&pr.url)?;
-    let adapter = crate::commands::pr_metadata::build_adapter(app, &review_url).await?;
+    let adapter = crate::platform::factory::build_adapter(app, &review_url).await?;
 
-    let diff_text = adapter.fetch_diff().await?;
+    let snapshot = adapter.fetch_review_snapshot().await?;
+    let diff_text = snapshot.diff_text;
     if diff_text.trim().is_empty() {
         return Err(AppError::InvalidInput(
             "Empty diff returned from platform".into(),
         ));
     }
 
-    let metadata = adapter.fetch_metadata().await?;
+    let metadata = snapshot.metadata;
+    let capabilities = snapshot.capabilities;
     let platform_metadata_json =
         serde_json::to_string(&metadata).map_err(|e| AppError::InvalidInput(e.to_string()))?;
     let platform_metadata_fetched_at = chrono::Utc::now().to_rfc3339();
+    let platform_capabilities_json =
+        serde_json::to_string(&capabilities).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let platform_capabilities_fetched_at = platform_metadata_fetched_at.clone();
     let diff_hash = sha256_hex(&diff_text);
     let changed_files = extract_changed_files_from_diff(&diff_text);
     let changed_files_json = serde_json::to_string(&changed_files).unwrap_or_default();
@@ -305,6 +318,8 @@ async fn fetch_latest_pr_snapshot(
         changed_files_json,
         platform_metadata_json: Some(platform_metadata_json),
         platform_metadata_fetched_at: Some(platform_metadata_fetched_at),
+        platform_capabilities_json: Some(platform_capabilities_json),
+        platform_capabilities_fetched_at: Some(platform_capabilities_fetched_at),
         head_sha,
     })
 }
@@ -334,6 +349,8 @@ struct RerunRecordInput<'a> {
     now: &'a str,
     latest_platform_metadata_json: Option<&'a str>,
     latest_platform_metadata_fetched_at: Option<&'a str>,
+    latest_platform_capabilities_json: Option<&'a str>,
+    latest_platform_capabilities_fetched_at: Option<&'a str>,
     latest_head_sha: Option<&'a str>,
     trigger_source: &'a str,
     reason: &'a str,
@@ -384,6 +401,8 @@ fn create_rerun_records(
             fetched_at_rfc3339: input.now,
             metadata_json: input.latest_platform_metadata_json,
             metadata_fetched_at_rfc3339: input.latest_platform_metadata_fetched_at,
+            capabilities_json: input.latest_platform_capabilities_json,
+            capabilities_fetched_at_rfc3339: input.latest_platform_capabilities_fetched_at,
         },
     )?;
 
@@ -448,6 +467,8 @@ mod tests {
             diff_hash: Some("basehash".into()),
             platform_metadata_json: None,
             platform_metadata_fetched_at: None,
+            platform_capabilities_json: None,
+            platform_capabilities_fetched_at: None,
         };
         queries::insert_pull_request(conn, &baseline_pr).unwrap();
 
@@ -523,6 +544,8 @@ index 222..333 100644
                 now: "2026-01-02T00:00:00Z",
                 latest_platform_metadata_json: None,
                 latest_platform_metadata_fetched_at: None,
+                latest_platform_capabilities_json: None,
+                latest_platform_capabilities_fetched_at: None,
                 latest_head_sha: None,
                 trigger_source: "workspace",
                 reason: "manual",
@@ -572,6 +595,8 @@ index 222..333 100644
                 now: "2026-01-02T00:00:00Z",
                 latest_platform_metadata_json: None,
                 latest_platform_metadata_fetched_at: None,
+                latest_platform_capabilities_json: None,
+                latest_platform_capabilities_fetched_at: None,
                 latest_head_sha: None,
                 trigger_source: "workspace",
                 reason: "manual",
@@ -619,6 +644,8 @@ index 222..333 100644
                 now: "2026-01-02T00:00:00Z",
                 latest_platform_metadata_json: Some(latest_metadata),
                 latest_platform_metadata_fetched_at: Some("2026-01-02T00:00:00Z"),
+                latest_platform_capabilities_json: None,
+                latest_platform_capabilities_fetched_at: None,
                 latest_head_sha: Some("sha-new"),
                 trigger_source: "workspace",
                 reason: "manual",

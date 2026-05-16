@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use crate::errors::AppError;
 use crate::platform::adapter::*;
 use crate::providers::bitbucket::{
-    BbTaskCommentRef, BitbucketApi, BitbucketApiError, CreateCommentPayload, CreateContent,
-    CreateInline, CreateTaskPayload,
+    BbPullRequest, BbTaskCommentRef, BitbucketApi, BitbucketApiError, CreateCommentPayload,
+    CreateContent, CreateInline, CreateTaskPayload,
 };
 
 const INLINE_FINGERPRINT_PREFIX: &str = "<!-- signalpr:fingerprint=";
@@ -28,6 +28,103 @@ impl BitbucketAdapter {
             repo_slug,
             pr_id,
         }
+    }
+
+    fn review_target_from_pull_request(pr: &BbPullRequest) -> PlatformReviewTarget {
+        PlatformReviewTarget {
+            title: pr.title.clone(),
+            author: pr.author.as_ref().map(|author| author.best_name()),
+            base_branch: Some(pr.destination.branch.name.clone()),
+            head_branch: Some(pr.source.branch.name.clone()),
+        }
+    }
+
+    async fn build_metadata_from_pull_request(
+        &self,
+        pr: BbPullRequest,
+    ) -> Result<PlatformMetadata, AppError> {
+        let default_reviewers = self
+            .api
+            .list_default_reviewers(&self.workspace, &self.repo_slug)
+            .await
+            .unwrap_or_default();
+
+        let reviewers: Vec<String> = pr.reviewers.iter().map(|u| u.best_name()).collect();
+
+        let approved_by: Vec<String> = pr
+            .participants
+            .iter()
+            .filter(|p| p.approved)
+            .map(|p| p.user.best_name())
+            .collect();
+
+        let approval_status = Some(ApprovalInfo {
+            approved: !approved_by.is_empty(),
+            approved_by,
+            approvals_required: None,
+            approvals_left: None,
+        });
+
+        let default_reviewer_names: Vec<String> = default_reviewers
+            .iter()
+            .map(|r| {
+                r.nickname
+                    .as_deref()
+                    .or(r.display_name.as_deref())
+                    .unwrap_or("unknown")
+                    .to_string()
+            })
+            .collect();
+
+        let mut jira_text = pr.title.clone();
+        if let Some(desc) = &pr.description {
+            jira_text.push(' ');
+            jira_text.push_str(desc);
+        }
+        jira_text.push(' ');
+        jira_text.push_str(&pr.source.branch.name);
+        jira_text.push(' ');
+        jira_text.push_str(&pr.destination.branch.name);
+        let jira_issue_keys = extract_jira_keys(&jira_text);
+
+        Ok(PlatformMetadata::Bitbucket(BitbucketMeta {
+            pr_body: pr.description,
+            head_sha: pr.source.commit.hash,
+            base_sha: pr.destination.commit.hash,
+            head_ref: pr.source.branch.name,
+            base_ref: pr.destination.branch.name,
+            draft: pr.draft,
+            labels: vec![],
+            reviewers,
+            reviewer_statuses: pr
+                .participants
+                .iter()
+                .map(|participant| ReviewerStatus {
+                    login: participant
+                        .user
+                        .nickname
+                        .clone()
+                        .or_else(|| participant.user.account_id.clone())
+                        .unwrap_or_else(|| participant.user.best_name()),
+                    display_name: participant.user.display_name.clone(),
+                    state: participant
+                        .state
+                        .clone()
+                        .or_else(|| participant.role.clone())
+                        .unwrap_or_else(|| {
+                            if participant.approved {
+                                "approved".to_string()
+                            } else {
+                                "participant".to_string()
+                            }
+                        }),
+                    updated_at: None,
+                })
+                .collect(),
+            approval_status,
+            default_reviewers: default_reviewer_names,
+            jira_issue_keys,
+        }))
     }
 }
 
@@ -110,8 +207,144 @@ pub fn extract_jira_keys(text: &str) -> Vec<String> {
 
 #[async_trait]
 impl PlatformAdapter for BitbucketAdapter {
+    fn platform_id(&self) -> PlatformId {
+        PlatformId::Bitbucket
+    }
+
     fn platform_name(&self) -> &'static str {
         "bitbucket"
+    }
+
+    fn capabilities(&self) -> PlatformCapabilities {
+        PlatformCapabilities {
+            platform: PlatformId::Bitbucket,
+            capabilities: vec![
+                PlatformCapability {
+                    key: PlatformCapabilityKey::PrMetadata,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::DiffFetch,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::FileContent,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::IssueContext,
+                    support: CapabilitySupport::None,
+                    constraints: vec![CapabilityConstraint {
+                        code: "jira_outside_adapter".into(),
+                        message: "Bitbucket issue context is not native in SignalPR; Jira hydration runs outside the platform adapter.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "jira_hydration".into(),
+                        reason: "Use Jira-linked issue context when integration credentials are configured.".into(),
+                    }),
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ReviewSummaryComment,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::InlineComment,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ApproveReview,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::RequestChangesReview,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::PendingCommentBatch,
+                    support: CapabilitySupport::None,
+                    constraints: vec![CapabilityConstraint {
+                        code: "pending_workflow_not_implemented".into(),
+                        message: "SignalPR does not currently maintain a pending Bitbucket review batch prior to submission.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "direct_submit".into(),
+                        reason: "Submit comments and state changes immediately.".into(),
+                    }),
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::SuggestionMarkup,
+                    support: CapabilitySupport::Partial,
+                    constraints: vec![CapabilityConstraint {
+                        code: "markdown_only".into(),
+                        message: "Bitbucket suggestions are rendered as plain markdown/code blocks rather than first-class applyable suggestions.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "plain_code_block".into(),
+                        reason: "Render suggested code as a regular fenced block in the review comment.".into(),
+                    }),
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ReviewerMetadata,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::WebhookNotifications,
+                    support: CapabilitySupport::None,
+                    constraints: vec![CapabilityConstraint {
+                        code: "not_integrated".into(),
+                        message: "Bitbucket webhook notifications are not yet integrated into SignalPR.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "manual_refresh".into(),
+                        reason: "Use queue refresh and rerun until notification transport is implemented.".into(),
+                    }),
+                },
+            ],
+        }
+    }
+
+    async fn fetch_review_snapshot(&self) -> Result<PlatformReviewSnapshot, AppError> {
+        let pr = self
+            .api
+            .get_pull_request(&self.workspace, &self.repo_slug, self.pr_id)
+            .await
+            .map_err(bb_err)?;
+        let review_target = Self::review_target_from_pull_request(&pr);
+        let metadata = self.build_metadata_from_pull_request(pr).await?;
+        let diff_text = self.fetch_diff().await?;
+
+        Ok(PlatformReviewSnapshot {
+            review_target,
+            metadata,
+            diff_text,
+            capabilities: self.capabilities(),
+        })
+    }
+
+    async fn fetch_review_target(&self) -> Result<PlatformReviewTarget, AppError> {
+        let pr = self
+            .api
+            .get_pull_request(&self.workspace, &self.repo_slug, self.pr_id)
+            .await
+            .map_err(bb_err)?;
+
+        Ok(Self::review_target_from_pull_request(&pr))
     }
 
     async fn fetch_metadata(&self) -> Result<PlatformMetadata, AppError> {
@@ -120,65 +353,7 @@ impl PlatformAdapter for BitbucketAdapter {
             .get_pull_request(&self.workspace, &self.repo_slug, self.pr_id)
             .await
             .map_err(bb_err)?;
-
-        let default_reviewers = self
-            .api
-            .list_default_reviewers(&self.workspace, &self.repo_slug)
-            .await
-            .unwrap_or_default();
-
-        let reviewers: Vec<String> = pr.reviewers.iter().map(|u| u.best_name()).collect();
-
-        let approved_by: Vec<String> = pr
-            .participants
-            .iter()
-            .filter(|p| p.approved)
-            .map(|p| p.user.best_name())
-            .collect();
-
-        let approval_status = Some(ApprovalInfo {
-            approved: !approved_by.is_empty(),
-            approved_by,
-            approvals_required: None,
-            approvals_left: None,
-        });
-
-        let default_reviewer_names: Vec<String> = default_reviewers
-            .iter()
-            .map(|r| {
-                r.nickname
-                    .as_deref()
-                    .or(r.display_name.as_deref())
-                    .unwrap_or("unknown")
-                    .to_string()
-            })
-            .collect();
-
-        // Extract Jira keys from title, description, and branch names
-        let mut jira_text = pr.title.clone();
-        if let Some(desc) = &pr.description {
-            jira_text.push(' ');
-            jira_text.push_str(desc);
-        }
-        jira_text.push(' ');
-        jira_text.push_str(&pr.source.branch.name);
-        jira_text.push(' ');
-        jira_text.push_str(&pr.destination.branch.name);
-        let jira_issue_keys = extract_jira_keys(&jira_text);
-
-        Ok(PlatformMetadata::Bitbucket(BitbucketMeta {
-            pr_body: pr.description,
-            head_sha: pr.source.commit.hash,
-            base_sha: pr.destination.commit.hash,
-            head_ref: pr.source.branch.name,
-            base_ref: pr.destination.branch.name,
-            draft: pr.draft,
-            labels: vec![],
-            reviewers,
-            approval_status,
-            default_reviewers: default_reviewer_names,
-            jira_issue_keys,
-        }))
+        self.build_metadata_from_pull_request(pr).await
     }
 
     async fn fetch_diff(&self) -> Result<String, AppError> {

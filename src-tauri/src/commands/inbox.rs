@@ -86,7 +86,12 @@ pub async fn get_inbox_overview(
         let projection = load_projection_data(&conn, &candidates)?;
         let mut rows = Vec::new();
         for candidate in candidates {
-            if let Some(row) = build_queue_row(&candidate, github_login.as_deref(), &projection) {
+            if let Some(row) = build_queue_row(
+                &candidate,
+                github_login.as_deref(),
+                &projection,
+                &environment_summary,
+            ) {
                 rows.push(row);
             }
         }
@@ -131,6 +136,7 @@ fn build_queue_row(
     candidate: &InboxPrCandidate,
     github_login: Option<&str>,
     projection: &InboxProjectionData,
+    environment_summary: &EnvironmentSummary,
 ) -> Option<DerivedQueueRow> {
     let latest_run = projection.latest_runs_by_pr.get(&candidate.pr_id)?;
     let agent_runs = projection
@@ -146,6 +152,8 @@ fn build_queue_row(
     let has_saved_review_draft = projection.review_draft_run_ids.contains(&latest_run.id);
 
     let metadata = parse_platform_metadata(candidate.platform_metadata_json.as_deref());
+    let platform_capabilities =
+        parse_platform_capabilities(candidate.platform_capabilities_json.as_deref());
     let metadata_freshness =
         derive_metadata_freshness(candidate.platform_metadata_fetched_at.as_deref());
     let reviewer_signal = derive_reviewer_signal(&metadata, github_login);
@@ -155,8 +163,10 @@ fn build_queue_row(
     let allowed_actions = derive_allowed_actions(
         latest_run,
         &metadata,
+        platform_capabilities.as_ref(),
         &metadata_freshness,
         &review_freshness,
+        environment_summary,
     );
     let queue_state = classify_queue_state(
         latest_run,
@@ -208,6 +218,8 @@ fn build_queue_row(
         draft: metadata.draft,
         has_saved_review_draft,
         metadata_freshness,
+        platform_capabilities,
+        platform_capabilities_fetched_at: candidate.platform_capabilities_fetched_at.clone(),
         review_freshness,
         reviewer_signal,
         lane_health,
@@ -280,6 +292,12 @@ fn parse_platform_metadata(json: Option<&str>) -> ParsedPlatformMetadata {
         platform: "unknown".into(),
         ..ParsedPlatformMetadata::default()
     }
+}
+
+fn parse_platform_capabilities(
+    json: Option<&str>,
+) -> Option<crate::platform::adapter::PlatformCapabilities> {
+    json.and_then(|raw| serde_json::from_str(raw).ok())
 }
 
 fn derive_metadata_freshness(fetched_at: Option<&str>) -> InboxMetadataFreshness {
@@ -528,8 +546,10 @@ fn derive_attention_reasons(
 fn derive_allowed_actions(
     latest_run: &ReviewRun,
     metadata: &ParsedPlatformMetadata,
+    platform_capabilities: Option<&crate::platform::adapter::PlatformCapabilities>,
     metadata_freshness: &InboxMetadataFreshness,
     review_freshness: &InboxReviewFreshness,
+    environment_summary: &EnvironmentSummary,
 ) -> Vec<String> {
     let mut actions = vec!["open".to_string()];
     if matches!(
@@ -538,16 +558,64 @@ fn derive_allowed_actions(
     ) {
         actions.push("resume".into());
     }
-    if metadata.platform != "unknown" {
+    if metadata.platform != "unknown"
+        && platform_auth_ready(&metadata.platform, environment_summary)
+        && (platform_capabilities.is_none()
+            || capability_available(
+                platform_capabilities,
+                crate::platform::adapter::PlatformCapabilityKey::PrMetadata,
+            ))
+    {
         actions.push("refresh_metadata".into());
     }
     if !metadata_freshness.is_stale
         && matches!(latest_run.status.as_str(), "ready" | "submitted")
         && review_freshness.has_unreviewed_updates
+        && platform_auth_ready(&metadata.platform, environment_summary)
+        && capability_available(
+            platform_capabilities,
+            crate::platform::adapter::PlatformCapabilityKey::DiffFetch,
+        )
     {
         actions.push("rerun".into());
     }
     actions
+}
+
+fn capability_available(
+    capabilities: Option<&crate::platform::adapter::PlatformCapabilities>,
+    key: crate::platform::adapter::PlatformCapabilityKey,
+) -> bool {
+    match capabilities.and_then(|caps| caps.get(key)) {
+        Some(capability) => capability.support != crate::platform::adapter::CapabilitySupport::None,
+        None => false,
+    }
+}
+
+fn platform_auth_ready(platform: &str, environment_summary: &EnvironmentSummary) -> bool {
+    match platform {
+        "github" => {
+            std::env::var("GITHUB_TOKEN")
+                .ok()
+                .is_some_and(|v| !v.is_empty())
+                || std::env::var("GH_TOKEN")
+                    .ok()
+                    .is_some_and(|v| !v.is_empty())
+                || tool_ready(environment_summary, "github_token")
+                || tool_ready(environment_summary, "gh")
+        }
+        "gitlab" => tool_ready(environment_summary, "gitlab_token"),
+        "bitbucket" => tool_ready(environment_summary, "bitbucket_token"),
+        _ => false,
+    }
+}
+
+fn tool_ready(environment_summary: &EnvironmentSummary, tool_name: &str) -> bool {
+    environment_summary
+        .tools
+        .iter()
+        .find(|tool| tool.tool_name == tool_name)
+        .is_some_and(|tool| tool.status == "ready")
 }
 
 fn build_attention_summary(rows: &[DerivedQueueRow]) -> InboxAttentionSummary {
@@ -741,12 +809,45 @@ fn parse_github_login_from_status_line(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::environment::EnvironmentSummary;
     use crate::storage::db::init_db_in_memory;
     use crate::storage::models::{
         InboxLaneHealth, InboxMetadataFreshness, InboxReviewFreshness, InboxReviewRow,
         InboxReviewerSignal, InboxSubmissionHealth, PullRequest, ReviewRun, SubmissionRecord,
         Workspace,
     };
+
+    fn test_environment_summary() -> EnvironmentSummary {
+        EnvironmentSummary {
+            can_review: true,
+            can_submit: true,
+            available_providers: vec!["codex".into()],
+            warnings: vec![],
+            tools: vec![
+                crate::storage::models::ToolStatus {
+                    tool_name: "gh".into(),
+                    status: "ready".into(),
+                    version: None,
+                    message: None,
+                    checked_at: "2026-01-01T00:00:00Z".into(),
+                },
+                crate::storage::models::ToolStatus {
+                    tool_name: "gitlab_token".into(),
+                    status: "ready".into(),
+                    version: None,
+                    message: None,
+                    checked_at: "2026-01-01T00:00:00Z".into(),
+                },
+                crate::storage::models::ToolStatus {
+                    tool_name: "bitbucket_token".into(),
+                    status: "ready".into(),
+                    version: None,
+                    message: None,
+                    checked_at: "2026-01-01T00:00:00Z".into(),
+                },
+            ],
+        }
+    }
 
     fn insert_workspace_and_pr(conn: &rusqlite::Connection, metadata_json: Option<&str>) {
         queries::insert_workspace(
@@ -761,6 +862,7 @@ mod tests {
             },
         )
         .unwrap();
+        let default_capabilities = r#"{"platform":"github","capabilities":[{"key":"pr_metadata","support":"full","constraints":[],"fallback":null},{"key":"diff_fetch","support":"full","constraints":[],"fallback":null}]}"#;
         queries::insert_pull_request(
             conn,
             &PullRequest {
@@ -778,6 +880,8 @@ mod tests {
                 diff_hash: Some("abc".into()),
                 platform_metadata_json: metadata_json.map(ToString::to_string),
                 platform_metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+                platform_capabilities_json: Some(default_capabilities.into()),
+                platform_capabilities_fetched_at: Some(Utc::now().to_rfc3339()),
             },
         )
         .unwrap();
@@ -821,6 +925,8 @@ mod tests {
                     fetched_at: None,
                     is_stale: false,
                 },
+                platform_capabilities: None,
+                platform_capabilities_fetched_at: None,
                 review_freshness: InboxReviewFreshness {
                     state: "current".into(),
                     reviewed_at: Some("2026-01-01T00:00:00Z".into()),
@@ -893,7 +999,13 @@ mod tests {
         .unwrap();
 
         let (candidate, projection) = load_candidate_and_projection(&conn);
-        let row = build_queue_row(&candidate, Some("mona"), &projection).unwrap();
+        let row = build_queue_row(
+            &candidate,
+            Some("mona"),
+            &projection,
+            &test_environment_summary(),
+        )
+        .unwrap();
         assert_eq!(row.row.queue_state, "needs_your_review");
         assert_eq!(row.row.reviewer_signal.precision, "exact");
     }
@@ -939,7 +1051,7 @@ mod tests {
                 submitted_at: Some((Utc::now() - Duration::hours(72)).to_rfc3339()),
                 status: "submitted".into(),
                 commit_id_at_submission: Some("sha-2".into()),
-                gh_review_id: None,
+                platform_review_id: None,
                 error_message: None,
                 idempotency_key: None,
                 attempt_count: Some(1),
@@ -949,7 +1061,8 @@ mod tests {
         .unwrap();
 
         let (candidate, projection) = load_candidate_and_projection(&conn);
-        let row = build_queue_row(&candidate, None, &projection).unwrap();
+        let row =
+            build_queue_row(&candidate, None, &projection, &test_environment_summary()).unwrap();
         assert_eq!(row.row.queue_state, "waiting_on_author");
     }
 
@@ -994,7 +1107,8 @@ mod tests {
         .unwrap();
 
         let (candidate, projection) = load_candidate_and_projection(&conn);
-        let row = build_queue_row(&candidate, None, &projection).unwrap();
+        let row =
+            build_queue_row(&candidate, None, &projection, &test_environment_summary()).unwrap();
         assert_eq!(row.row.queue_state, "attention_needed");
         assert!(row.row.metadata_freshness.is_stale);
     }
@@ -1033,7 +1147,8 @@ mod tests {
         .unwrap();
 
         let (candidate, projection) = load_candidate_and_projection(&conn);
-        let row = build_queue_row(&candidate, None, &projection).unwrap();
+        let row =
+            build_queue_row(&candidate, None, &projection, &test_environment_summary()).unwrap();
         assert_eq!(row.row.queue_state, "updated_since_review");
         assert_eq!(row.row.review_freshness.state, "stale");
         assert!(row.row.review_freshness.has_unreviewed_updates);
@@ -1093,7 +1208,8 @@ mod tests {
         .unwrap();
 
         let (candidate, projection) = load_candidate_and_projection(&conn);
-        let row = build_queue_row(&candidate, None, &projection).unwrap();
+        let row =
+            build_queue_row(&candidate, None, &projection, &test_environment_summary()).unwrap();
         assert_eq!(row.row.queue_state, "attention_needed");
         assert_eq!(row.row.review_freshness.state, "stale");
         assert!(row.row.review_freshness.has_unreviewed_updates);
@@ -1168,7 +1284,8 @@ mod tests {
         queries::save_review_draft(&conn, "run-1", "Summary", "comment").unwrap();
 
         let (candidate, projection) = load_candidate_and_projection(&conn);
-        let row = build_queue_row(&candidate, None, &projection).unwrap();
+        let row =
+            build_queue_row(&candidate, None, &projection, &test_environment_summary()).unwrap();
 
         assert!(!row.row.draft);
         assert!(row.row.has_saved_review_draft);

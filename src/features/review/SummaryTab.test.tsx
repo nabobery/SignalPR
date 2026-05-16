@@ -92,6 +92,8 @@ function renderWithContext(state: Partial<ReviewState>) {
     localChecksSummary: null,
     platformMetadata: null,
     platformMetadataFetchedAt: null,
+    platformCapabilities: null,
+    platformCapabilitiesFetchedAt: null,
     ...state,
   };
 
@@ -221,6 +223,8 @@ describe("SummaryTab", () => {
         localChecksSummary: null,
         platformMetadata: null,
         platformMetadataFetchedAt: null,
+        platformCapabilities: null,
+        platformCapabilitiesFetchedAt: null,
       },
       setSelectedFile,
       setSessionDecision: vi.fn(),
@@ -522,6 +526,7 @@ describe("SummaryTab", () => {
         draft: false,
         labels: ["fix"],
         reviewers: ["alice"],
+        reviewer_statuses: [],
         approval_status: {
           approved: true,
           approved_by: ["alice"],
@@ -548,6 +553,7 @@ describe("SummaryTab", () => {
         draft: false,
         labels: [],
         reviewers: ["alice", "bob"],
+        reviewer_statuses: [],
         approval_status: {
           approved: true,
           approved_by: ["alice"],

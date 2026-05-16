@@ -19,6 +19,8 @@ pub struct InboxPrCandidate {
     pub pr_url: String,
     pub platform_metadata_json: Option<String>,
     pub platform_metadata_fetched_at: Option<String>,
+    pub platform_capabilities_json: Option<String>,
+    pub platform_capabilities_fetched_at: Option<String>,
     pub last_activity_at: String,
 }
 
@@ -29,6 +31,8 @@ pub struct PullRequestSnapshotUpdate<'a> {
     pub fetched_at_rfc3339: &'a str,
     pub metadata_json: Option<&'a str>,
     pub metadata_fetched_at_rfc3339: Option<&'a str>,
+    pub capabilities_json: Option<&'a str>,
+    pub capabilities_fetched_at_rfc3339: Option<&'a str>,
 }
 
 fn sql_placeholders(count: usize) -> String {
@@ -84,8 +88,8 @@ pub fn get_workspace_by_remote_and_host(
 
 pub fn insert_pull_request(conn: &Connection, pr: &PullRequest) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO pull_requests (id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash, platform_metadata_json, platform_metadata_fetched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-        params![pr.id, pr.workspace_id, pr.pr_number, pr.title, pr.author, pr.base_branch, pr.head_branch, pr.url, pr.diff_text, pr.changed_files, pr.fetched_at, pr.diff_hash, pr.platform_metadata_json, pr.platform_metadata_fetched_at],
+        "INSERT INTO pull_requests (id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash, platform_metadata_json, platform_metadata_fetched_at, platform_capabilities_json, platform_capabilities_fetched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        params![pr.id, pr.workspace_id, pr.pr_number, pr.title, pr.author, pr.base_branch, pr.head_branch, pr.url, pr.diff_text, pr.changed_files, pr.fetched_at, pr.diff_hash, pr.platform_metadata_json, pr.platform_metadata_fetched_at, pr.platform_capabilities_json, pr.platform_capabilities_fetched_at],
     )?;
     Ok(())
 }
@@ -95,7 +99,7 @@ pub fn get_pull_request(
     pr_id: &str,
 ) -> Result<Option<PullRequest>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash, platform_metadata_json, platform_metadata_fetched_at FROM pull_requests WHERE id = ?1",
+        "SELECT id, workspace_id, pr_number, title, author, base_branch, head_branch, url, diff_text, changed_files, fetched_at, diff_hash, platform_metadata_json, platform_metadata_fetched_at, platform_capabilities_json, platform_capabilities_fetched_at FROM pull_requests WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![pr_id], |row| {
         Ok(PullRequest {
@@ -113,6 +117,8 @@ pub fn get_pull_request(
             diff_hash: row.get(11)?,
             platform_metadata_json: row.get(12)?,
             platform_metadata_fetched_at: row.get(13)?,
+            platform_capabilities_json: row.get(14)?,
+            platform_capabilities_fetched_at: row.get(15)?,
         })
     })?;
     match rows.next() {
@@ -146,8 +152,10 @@ pub fn update_pull_request_snapshot(
              diff_hash = ?3,
              fetched_at = ?4,
              platform_metadata_json = ?5,
-             platform_metadata_fetched_at = ?6
-         WHERE id = ?7",
+             platform_metadata_fetched_at = ?6,
+             platform_capabilities_json = ?7,
+             platform_capabilities_fetched_at = ?8
+         WHERE id = ?9",
         params![
             update.diff_text,
             update.changed_files_json,
@@ -155,6 +163,8 @@ pub fn update_pull_request_snapshot(
             update.fetched_at_rfc3339,
             update.metadata_json,
             update.metadata_fetched_at_rfc3339,
+            update.capabilities_json,
+            update.capabilities_fetched_at_rfc3339,
             pr_id
         ],
     )?;
@@ -170,6 +180,19 @@ pub fn update_pull_request_metadata(
     conn.execute(
         "UPDATE pull_requests SET platform_metadata_json = ?1, platform_metadata_fetched_at = ?2 WHERE id = ?3",
         params![metadata_json, fetched_at_rfc3339, pr_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_pull_request_capabilities(
+    conn: &Connection,
+    pr_id: &str,
+    capabilities_json: &str,
+    fetched_at_rfc3339: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE pull_requests SET platform_capabilities_json = ?1, platform_capabilities_fetched_at = ?2 WHERE id = ?3",
+        params![capabilities_json, fetched_at_rfc3339, pr_id],
     )?;
     Ok(())
 }
@@ -557,8 +580,8 @@ pub fn get_settings_by_prefix(
 
 pub fn insert_submission(conn: &Connection, sub: &SubmissionRecord) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![sub.id, sub.review_run_id, sub.review_action, sub.submitted_at, sub.status, sub.commit_id_at_submission, sub.gh_review_id, sub.error_message, sub.idempotency_key, sub.attempt_count, sub.last_attempt_at],
+        "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, platform_review_id, error_message, idempotency_key, attempt_count, last_attempt_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![sub.id, sub.review_run_id, sub.review_action, sub.submitted_at, sub.status, sub.commit_id_at_submission, Option::<String>::None, sub.platform_review_id, sub.error_message, sub.idempotency_key, sub.attempt_count, sub.last_attempt_at],
     )?;
     Ok(())
 }
@@ -567,19 +590,19 @@ pub fn update_submission_status(
     conn: &Connection,
     sub_id: &str,
     status: &str,
-    gh_review_id: Option<&str>,
+    platform_review_id: Option<&str>,
     error_message: Option<&str>,
     timestamp_rfc3339: &str,
 ) -> Result<(), rusqlite::Error> {
     if status == "submitted" {
         conn.execute(
-            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = ?4, submitted_at = ?4 WHERE id = ?5",
-            params![status, gh_review_id, error_message, timestamp_rfc3339, sub_id],
+            "UPDATE submission_records SET status = ?1, platform_review_id = ?2, error_message = ?3, last_attempt_at = ?4, submitted_at = ?4 WHERE id = ?5",
+            params![status, platform_review_id, error_message, timestamp_rfc3339, sub_id],
         )?;
     } else {
         conn.execute(
-            "UPDATE submission_records SET status = ?1, gh_review_id = ?2, error_message = ?3, last_attempt_at = ?4 WHERE id = ?5",
-            params![status, gh_review_id, error_message, timestamp_rfc3339, sub_id],
+            "UPDATE submission_records SET status = ?1, platform_review_id = ?2, error_message = ?3, last_attempt_at = ?4 WHERE id = ?5",
+            params![status, platform_review_id, error_message, timestamp_rfc3339, sub_id],
         )?;
     }
     Ok(())
@@ -590,7 +613,7 @@ pub fn get_submission_for_run(
     review_run_id: &str,
 ) -> Result<Option<SubmissionRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 AND status = 'submitted' LIMIT 1",
+        "SELECT id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, COALESCE(platform_review_id, gh_review_id), error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 AND status = 'submitted' LIMIT 1",
     )?;
     let mut rows = stmt.query_map(params![review_run_id], |row| {
         Ok(SubmissionRecord {
@@ -600,7 +623,7 @@ pub fn get_submission_for_run(
             submitted_at: row.get(3)?,
             status: row.get(4)?,
             commit_id_at_submission: row.get(5)?,
-            gh_review_id: row.get(6)?,
+            platform_review_id: row.get(6)?,
             error_message: row.get(7)?,
             idempotency_key: row.get(8)?,
             attempt_count: row.get(9)?,
@@ -618,7 +641,7 @@ pub fn get_submission_history(
     review_run_id: &str,
 ) -> Result<Vec<SubmissionRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 ORDER BY COALESCE(last_attempt_at, submitted_at) DESC",
+        "SELECT id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, COALESCE(platform_review_id, gh_review_id), error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 ORDER BY COALESCE(last_attempt_at, submitted_at) DESC",
     )?;
     let rows = stmt.query_map(params![review_run_id], |row| {
         Ok(SubmissionRecord {
@@ -628,7 +651,7 @@ pub fn get_submission_history(
             submitted_at: row.get(3)?,
             status: row.get(4)?,
             commit_id_at_submission: row.get(5)?,
-            gh_review_id: row.get(6)?,
+            platform_review_id: row.get(6)?,
             error_message: row.get(7)?,
             idempotency_key: row.get(8)?,
             attempt_count: row.get(9)?,
@@ -812,6 +835,8 @@ pub fn list_inbox_pr_candidates(
             p.url,
             p.platform_metadata_json,
             p.platform_metadata_fetched_at,
+            p.platform_capabilities_json,
+            p.platform_capabilities_fetched_at,
             COALESCE(
               (
                 SELECT MAX(COALESCE(sr.last_attempt_at, sr.submitted_at))
@@ -846,7 +871,9 @@ pub fn list_inbox_pr_candidates(
             pr_url: row.get(9)?,
             platform_metadata_json: row.get(10)?,
             platform_metadata_fetched_at: row.get(11)?,
-            last_activity_at: row.get(12)?,
+            platform_capabilities_json: row.get(12)?,
+            platform_capabilities_fetched_at: row.get(13)?,
+            last_activity_at: row.get(14)?,
         })
     })?;
     rows.collect()
@@ -940,7 +967,7 @@ pub fn get_submission_history_for_pr(
     pr_id: &str,
 ) -> Result<Vec<SubmissionRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT sr.id, sr.review_run_id, sr.review_action, sr.submitted_at, sr.status, sr.commit_id_at_submission, sr.gh_review_id, sr.error_message, sr.idempotency_key, sr.attempt_count, sr.last_attempt_at
+        "SELECT sr.id, sr.review_run_id, sr.review_action, sr.submitted_at, sr.status, sr.commit_id_at_submission, COALESCE(sr.platform_review_id, sr.gh_review_id), sr.error_message, sr.idempotency_key, sr.attempt_count, sr.last_attempt_at
          FROM submission_records sr
          JOIN review_runs rr ON rr.id = sr.review_run_id
          WHERE rr.pr_id = ?1
@@ -954,7 +981,7 @@ pub fn get_submission_history_for_pr(
             submitted_at: row.get(3)?,
             status: row.get(4)?,
             commit_id_at_submission: row.get(5)?,
-            gh_review_id: row.get(6)?,
+            platform_review_id: row.get(6)?,
             error_message: row.get(7)?,
             idempotency_key: row.get(8)?,
             attempt_count: row.get(9)?,
@@ -973,7 +1000,7 @@ pub fn list_submission_history_for_prs(
     }
 
     let sql = format!(
-        "SELECT rr.pr_id, sr.id, sr.review_run_id, sr.review_action, sr.submitted_at, sr.status, sr.commit_id_at_submission, sr.gh_review_id, sr.error_message, sr.idempotency_key, sr.attempt_count, sr.last_attempt_at
+        "SELECT rr.pr_id, sr.id, sr.review_run_id, sr.review_action, sr.submitted_at, sr.status, sr.commit_id_at_submission, COALESCE(sr.platform_review_id, sr.gh_review_id), sr.error_message, sr.idempotency_key, sr.attempt_count, sr.last_attempt_at
          FROM submission_records sr
          JOIN review_runs rr ON rr.id = sr.review_run_id
          WHERE rr.pr_id IN ({})
@@ -991,7 +1018,7 @@ pub fn list_submission_history_for_prs(
                 submitted_at: row.get(4)?,
                 status: row.get(5)?,
                 commit_id_at_submission: row.get(6)?,
-                gh_review_id: row.get(7)?,
+                platform_review_id: row.get(7)?,
                 error_message: row.get(8)?,
                 idempotency_key: row.get(9)?,
                 attempt_count: row.get(10)?,
@@ -1211,6 +1238,8 @@ pub fn list_recent_review_runs(
             draft: false,
             has_saved_review_draft: false,
             metadata_freshness: empty_inbox_metadata_freshness(),
+            platform_capabilities: None,
+            platform_capabilities_fetched_at: None,
             review_freshness: empty_inbox_review_freshness(),
             reviewer_signal: empty_inbox_reviewer_signal(),
             lane_health: empty_inbox_lane_health(),
@@ -1274,6 +1303,8 @@ pub fn list_incomplete_review_runs_enriched(
             draft: false,
             has_saved_review_draft: false,
             metadata_freshness: empty_inbox_metadata_freshness(),
+            platform_capabilities: None,
+            platform_capabilities_fetched_at: None,
             review_freshness: empty_inbox_review_freshness(),
             reviewer_signal: empty_inbox_reviewer_signal(),
             lane_health: empty_inbox_lane_health(),
@@ -1506,6 +1537,8 @@ mod tests {
             diff_hash: None,
             platform_metadata_json: None,
             platform_metadata_fetched_at: None,
+            platform_capabilities_json: None,
+            platform_capabilities_fetched_at: None,
         };
         insert_pull_request(&conn, &pr).unwrap();
         let found = get_pull_request(&conn, "pr-1")
@@ -1547,6 +1580,8 @@ mod tests {
                 diff_hash: Some("h1".into()),
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();
@@ -1575,6 +1610,8 @@ mod tests {
             diff_hash: None,
             platform_metadata_json: None,
             platform_metadata_fetched_at: None,
+            platform_capabilities_json: None,
+            platform_capabilities_fetched_at: None,
         };
         let result = insert_pull_request(&conn, &pr);
         assert!(result.is_err());
@@ -1613,6 +1650,8 @@ mod tests {
                 diff_hash: None,
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();
@@ -1680,6 +1719,8 @@ mod tests {
                 diff_hash: None,
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();
@@ -1793,6 +1834,8 @@ mod tests {
                 diff_hash: None,
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();
@@ -1930,6 +1973,8 @@ mod tests {
                 diff_hash: None,
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();
@@ -1965,7 +2010,7 @@ mod tests {
                 submitted_at: None,
                 status: "pending".into(),
                 commit_id_at_submission: None,
-                gh_review_id: None,
+                platform_review_id: None,
                 error_message: None,
                 idempotency_key: Some("k".into()),
                 attempt_count: Some(1),
@@ -2005,6 +2050,178 @@ mod tests {
     }
 
     #[test]
+    fn test_submission_history_falls_back_to_legacy_gh_review_id() {
+        let conn = test_db();
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                remote_host: "github.com".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
+            },
+        )
+        .unwrap();
+        insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run".into(),
+                pr_id: "pr".into(),
+                status: "submitted".into(),
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+                head_sha_at_run: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
+            },
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, platform_review_id, error_message, idempotency_key, attempt_count, last_attempt_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                "sub",
+                "run",
+                "comment",
+                "2026-01-01T00:00:10Z",
+                "submitted",
+                "sha-1",
+                "legacy-review",
+                Option::<String>::None,
+                Option::<String>::None,
+                1,
+                "2026-01-01T00:00:10Z"
+            ],
+        )
+        .unwrap();
+
+        let hist = get_submission_history(&conn, "run").unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0].platform_review_id.as_deref(), Some("legacy-review"));
+    }
+
+    #[test]
+    fn test_insert_submission_keeps_legacy_gh_review_id_null() {
+        let conn = test_db();
+        insert_workspace(
+            &conn,
+            &Workspace {
+                id: "ws".into(),
+                local_path: "/tmp".into(),
+                remote_owner: "o".into(),
+                remote_repo: "r".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                remote_host: "gitlab.com".into(),
+            },
+        )
+        .unwrap();
+        insert_pull_request(
+            &conn,
+            &PullRequest {
+                id: "pr".into(),
+                workspace_id: "ws".into(),
+                pr_number: 1,
+                title: "t".into(),
+                author: None,
+                base_branch: None,
+                head_branch: None,
+                url: "u".into(),
+                diff_text: None,
+                changed_files: None,
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                diff_hash: None,
+                platform_metadata_json: None,
+                platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
+            },
+        )
+        .unwrap();
+        insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run".into(),
+                pr_id: "pr".into(),
+                status: "submitted".into(),
+                started_at: None,
+                completed_at: None,
+                error_message: None,
+                head_sha_at_run: None,
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
+            },
+        )
+        .unwrap();
+
+        insert_submission(
+            &conn,
+            &SubmissionRecord {
+                id: "sub".into(),
+                review_run_id: "run".into(),
+                review_action: "comment".into(),
+                submitted_at: Some("2026-01-01T00:00:10Z".into()),
+                status: "submitted".into(),
+                commit_id_at_submission: Some("sha-1".into()),
+                platform_review_id: Some("gl-review-1".into()),
+                error_message: None,
+                idempotency_key: Some("k".into()),
+                attempt_count: Some(1),
+                last_attempt_at: Some("2026-01-01T00:00:10Z".into()),
+            },
+        )
+        .unwrap();
+
+        let (legacy_review_id, platform_review_id): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT gh_review_id, platform_review_id FROM submission_records WHERE id = ?1",
+                rusqlite::params!["sub"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(legacy_review_id, None);
+        assert_eq!(platform_review_id.as_deref(), Some("gl-review-1"));
+    }
+
+    #[test]
     fn test_decision_insert_and_query() {
         let conn = test_db();
         // Setup chain
@@ -2037,6 +2254,8 @@ mod tests {
                 diff_hash: None,
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();
@@ -2187,6 +2406,8 @@ mod tests {
                 diff_hash: None,
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();

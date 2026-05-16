@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod bitbucket_adapter;
+pub mod factory;
 pub mod github_adapter;
 pub mod gitlab_adapter;
 

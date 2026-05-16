@@ -6,10 +6,12 @@ import { DraftReviewTab } from "./DraftReviewTab";
 import type { Finding } from "../../lib/types";
 
 const mockGetReviewDraft = vi.fn();
+const mockGetEnvironmentSummary = vi.fn();
 const mockSaveReviewDraft = vi.fn();
 const mockSubmitReview = vi.fn();
 
 vi.mock("../../lib/ipc", () => ({
+  getEnvironmentSummary: (...args: unknown[]) => mockGetEnvironmentSummary(...args),
   getReviewDraft: (...args: unknown[]) => mockGetReviewDraft(...args),
   saveReviewDraft: (...args: unknown[]) => mockSaveReviewDraft(...args),
   submitReview: (...args: unknown[]) => mockSubmitReview(...args),
@@ -94,8 +96,32 @@ function renderDraft(stateOverrides: Partial<ReviewState> = {}, onSubmitted = vi
     },
     contextPackSummary: null,
     localChecksSummary: null,
-    platformMetadata: null,
-    platformMetadataFetchedAt: null,
+    platformMetadata: {
+      platform: "github",
+      pr_body: null,
+      head_sha: "abc123",
+      base_sha: "def456",
+      base_ref: "main",
+      head_ref: "feature/auth",
+      draft: false,
+      labels: [],
+      requested_reviewers: [],
+      requested_teams: [],
+      review_state_summary: [],
+      linked_issue_numbers: [],
+      text_issue_refs: [],
+    },
+    platformMetadataFetchedAt: "2026-05-16T10:00:00Z",
+    platformCapabilities: {
+      platform: "github",
+      capabilities: [
+        { key: "review_summary_comment", support: "full", constraints: [], fallback: null },
+        { key: "approve_review", support: "full", constraints: [], fallback: null },
+        { key: "request_changes_review", support: "full", constraints: [], fallback: null },
+        { key: "pending_comment_batch", support: "full", constraints: [], fallback: null },
+      ],
+    },
+    platformCapabilitiesFetchedAt: "2026-05-16T10:00:00Z",
     ...stateOverrides,
   };
 
@@ -117,6 +143,21 @@ function renderDraft(stateOverrides: Partial<ReviewState> = {}, onSubmitted = vi
 describe("DraftReviewTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetEnvironmentSummary.mockResolvedValue({
+      can_review: true,
+      can_submit: true,
+      available_providers: ["codex"],
+      warnings: [],
+      tools: [
+        {
+          tool_name: "github_token",
+          status: "ready",
+          version: null,
+          message: "GITHUB_TOKEN set",
+          checked_at: "2026-05-16T10:00:00Z",
+        },
+      ],
+    });
     mockGetReviewDraft.mockResolvedValue(null);
     mockSaveReviewDraft.mockResolvedValue(undefined);
     mockSubmitReview.mockResolvedValue(undefined);
@@ -198,6 +239,205 @@ describe("DraftReviewTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Some analysis lanes failed/)).toBeInTheDocument();
+    });
+  });
+
+  it("disables unsupported review actions from platform capabilities", async () => {
+    renderDraft({
+      platformCapabilities: {
+        platform: "bitbucket",
+        capabilities: [
+          {
+            key: "review_summary_comment",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+          {
+            key: "approve_review",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+          {
+            key: "request_changes_review",
+            support: "none",
+            constraints: [
+              {
+                code: "unsupported_request_changes",
+                message: "Request changes is not supported on this platform.",
+              },
+            ],
+            fallback: null,
+          },
+          {
+            key: "pending_comment_batch",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+        ],
+      },
+    });
+
+    const blockedRadio = (await screen.findAllByRole("radio")).find(
+      (radio) => (radio as HTMLInputElement).value === "request-changes",
+    ) as HTMLInputElement | undefined;
+    expect(blockedRadio).toBeDefined();
+    expect(blockedRadio).toBeDisabled();
+    expect(
+      screen.getByText(/Request changes is not supported on this platform/),
+    ).toBeInTheDocument();
+  });
+
+  it("blocks submission when platform auth is not ready", async () => {
+    mockGetEnvironmentSummary.mockResolvedValue({
+      can_review: true,
+      can_submit: false,
+      available_providers: ["codex"],
+      warnings: ["No submit path ready"],
+      tools: [
+        {
+          tool_name: "github_token",
+          status: "missing",
+          version: null,
+          message: "Set GITHUB_TOKEN or GH_TOKEN",
+          checked_at: "2026-05-16T10:00:00Z",
+        },
+        {
+          tool_name: "gh",
+          status: "unauthenticated",
+          version: "2.0.0",
+          message: "Run: gh auth login",
+          checked_at: "2026-05-16T10:00:00Z",
+        },
+      ],
+    });
+
+    renderDraft({
+      platformCapabilities: {
+        platform: "github",
+        capabilities: [
+          {
+            key: "review_summary_comment",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+          {
+            key: "approve_review",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+          {
+            key: "request_changes_review",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+          {
+            key: "pending_comment_batch",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+        ],
+      },
+      platformMetadata: {
+        platform: "github",
+        pr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: false,
+        labels: [],
+        requested_reviewers: [],
+        requested_teams: [],
+        review_state_summary: [],
+        linked_issue_numbers: [],
+        text_issue_refs: [],
+      },
+    });
+
+    expect(await screen.findAllByText(/Set GITHUB_TOKEN or GH_TOKEN/)).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /Submit review/ })).toBeDisabled();
+  });
+
+  it("blocks submission when capability metadata has not been loaded", async () => {
+    renderDraft({
+      platformMetadata: {
+        platform: "github",
+        pr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: false,
+        labels: [],
+        requested_reviewers: [],
+        requested_teams: [],
+        review_state_summary: [],
+        linked_issue_numbers: [],
+        text_issue_refs: [],
+      },
+      platformCapabilities: null,
+    });
+
+    expect(
+      await screen.findAllByText(/Refresh platform metadata to load the available review actions/),
+    ).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /Submit review/ })).toBeDisabled();
+  });
+
+  it("surfaces degraded batch behavior when pending comment batching is partial", async () => {
+    renderDraft({
+      platformCapabilities: {
+        platform: "gitlab",
+        capabilities: [
+          {
+            key: "review_summary_comment",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+          {
+            key: "approve_review",
+            support: "full",
+            constraints: [],
+            fallback: null,
+          },
+          {
+            key: "request_changes_review",
+            support: "partial",
+            constraints: [
+              {
+                code: "maps_to_unapprove",
+                message: "Request changes currently maps to an approval removal flow.",
+              },
+            ],
+            fallback: null,
+          },
+          {
+            key: "pending_comment_batch",
+            support: "partial",
+            constraints: [
+              {
+                code: "draft_notes_only",
+                message: "Pending review batches are preserved as draft notes only.",
+              },
+            ],
+            fallback: null,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Pending review batches are preserved as draft notes only/),
+      ).toBeInTheDocument();
     });
   });
 

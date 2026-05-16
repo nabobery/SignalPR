@@ -9,6 +9,7 @@ import type {
   ContextPackSummary,
   LocalChecksSummary,
   PlatformMetadata,
+  PlatformCapabilities,
 } from "./types";
 
 export interface ReviewState {
@@ -35,6 +36,8 @@ export interface ReviewState {
   localChecksSummary: LocalChecksSummary | null;
   platformMetadata: PlatformMetadata | null;
   platformMetadataFetchedAt: string | null;
+  platformCapabilities: PlatformCapabilities | null;
+  platformCapabilitiesFetchedAt: string | null;
 }
 
 export interface ReviewContextType {

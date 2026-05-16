@@ -58,6 +58,8 @@ index abc..def 100644
     localChecksSummary: null,
     platformMetadata: null,
     platformMetadataFetchedAt: null,
+    platformCapabilities: null,
+    platformCapabilitiesFetchedAt: null,
     ...overrides,
   };
 }

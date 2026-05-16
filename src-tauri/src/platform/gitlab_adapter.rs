@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::errors::AppError;
 use crate::platform::adapter::*;
 use crate::providers::gitlab::{
-    CreateDiffNotePayload, DiffNotePosition, GitLabApi, GitLabApiError,
+    CreateDiffNotePayload, DiffNotePosition, GitLabApi, GitLabApiError, GlMergeRequest,
     MAX_ISSUE_BODY_EXCERPT_BYTES,
 };
 
@@ -28,53 +28,20 @@ impl GitLabAdapter {
             host,
         }
     }
-}
 
-fn gl_err(e: GitLabApiError) -> AppError {
-    match e {
-        GitLabApiError::RateLimited { .. } => AppError::Transient(e.to_string()),
-        GitLabApiError::HttpError { status: 404, .. } => AppError::NotFound(e.to_string()),
-        GitLabApiError::HttpError { status, .. } if status >= 500 => {
-            AppError::Transient(e.to_string())
+    fn review_target_from_merge_request(mr: &GlMergeRequest) -> PlatformReviewTarget {
+        PlatformReviewTarget {
+            title: mr.title.clone(),
+            author: mr.author.as_ref().map(|author| author.username.clone()),
+            base_branch: Some(mr.target_branch.clone()),
+            head_branch: Some(mr.source_branch.clone()),
         }
-        _ => AppError::InvalidInput(e.to_string()),
-    }
-}
-
-fn extract_marker(body: &str, prefix: &str, suffix: &str) -> Option<String> {
-    let start = body.find(prefix)?;
-    let marker_start = start + prefix.len();
-    let remainder = &body[marker_start..];
-    let end_offset = remainder.find(suffix)?;
-    let raw = remainder[..end_offset].trim();
-    if raw.is_empty() {
-        None
-    } else {
-        Some(raw.to_string())
-    }
-}
-
-fn extract_inline_fingerprint(body: &str) -> Option<String> {
-    extract_marker(body, INLINE_FINGERPRINT_PREFIX, INLINE_FINGERPRINT_SUFFIX)
-}
-
-fn extract_summary_fingerprint(body: &str) -> Option<String> {
-    extract_marker(body, SUMMARY_FINGERPRINT_PREFIX, SUMMARY_FINGERPRINT_SUFFIX)
-}
-
-#[async_trait]
-impl PlatformAdapter for GitLabAdapter {
-    fn platform_name(&self) -> &'static str {
-        "gitlab"
     }
 
-    async fn fetch_metadata(&self) -> Result<PlatformMetadata, AppError> {
-        let mr = self
-            .api
-            .get_merge_request(&self.project_path, self.iid)
-            .await
-            .map_err(gl_err)?;
-
+    async fn build_metadata_from_merge_request(
+        &self,
+        mr: GlMergeRequest,
+    ) -> Result<PlatformMetadata, AppError> {
         let approvals = self
             .api
             .get_approvals(&self.project_path, self.iid)
@@ -112,6 +79,20 @@ impl PlatformAdapter for GitLabAdapter {
             approvals_left: approvals.approvals_left,
         });
 
+        let reviewer_statuses: Vec<ReviewerStatus> = reviewers
+            .iter()
+            .map(|reviewer| ReviewerStatus {
+                login: reviewer.username.clone(),
+                display_name: reviewer.name.clone(),
+                state: reviewer
+                    .state
+                    .clone()
+                    .unwrap_or_else(|| "unreviewed".to_string()),
+                updated_at: None,
+            })
+            .collect();
+        let reviewer_names: Vec<String> = reviewers.iter().map(|r| r.username.clone()).collect();
+
         Ok(PlatformMetadata::GitLab(GitLabMeta {
             mr_body: mr.description,
             head_sha,
@@ -120,10 +101,189 @@ impl PlatformAdapter for GitLabAdapter {
             head_ref: mr.source_branch,
             draft: mr.draft,
             labels: mr.labels,
-            reviewers: reviewers.into_iter().map(|r| r.username).collect(),
+            reviewers: reviewer_names,
+            reviewer_statuses,
             approval_status: approval_info,
             closes_issues: closes_issues.into_iter().map(|i| i.iid).collect(),
         }))
+    }
+}
+
+fn gl_err(e: GitLabApiError) -> AppError {
+    match e {
+        GitLabApiError::RateLimited { .. } => AppError::Transient(e.to_string()),
+        GitLabApiError::HttpError { status: 404, .. } => AppError::NotFound(e.to_string()),
+        GitLabApiError::HttpError { status, .. } if status >= 500 => {
+            AppError::Transient(e.to_string())
+        }
+        _ => AppError::InvalidInput(e.to_string()),
+    }
+}
+
+fn extract_marker(body: &str, prefix: &str, suffix: &str) -> Option<String> {
+    let start = body.find(prefix)?;
+    let marker_start = start + prefix.len();
+    let remainder = &body[marker_start..];
+    let end_offset = remainder.find(suffix)?;
+    let raw = remainder[..end_offset].trim();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw.to_string())
+    }
+}
+
+fn extract_inline_fingerprint(body: &str) -> Option<String> {
+    extract_marker(body, INLINE_FINGERPRINT_PREFIX, INLINE_FINGERPRINT_SUFFIX)
+}
+
+fn extract_summary_fingerprint(body: &str) -> Option<String> {
+    extract_marker(body, SUMMARY_FINGERPRINT_PREFIX, SUMMARY_FINGERPRINT_SUFFIX)
+}
+
+#[async_trait]
+impl PlatformAdapter for GitLabAdapter {
+    fn platform_id(&self) -> PlatformId {
+        PlatformId::GitLab
+    }
+
+    fn platform_name(&self) -> &'static str {
+        "gitlab"
+    }
+
+    fn capabilities(&self) -> PlatformCapabilities {
+        PlatformCapabilities {
+            platform: PlatformId::GitLab,
+            capabilities: vec![
+                PlatformCapability {
+                    key: PlatformCapabilityKey::PrMetadata,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::DiffFetch,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::FileContent,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::IssueContext,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ReviewSummaryComment,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::InlineComment,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ApproveReview,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::RequestChangesReview,
+                    support: CapabilitySupport::Partial,
+                    constraints: vec![CapabilityConstraint {
+                        code: "unapprove_only".into(),
+                        message: "SignalPR currently represents GitLab change requests by posting review notes and removing approval, not by a dedicated request-changes submit path.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "comment_plus_unapprove".into(),
+                        reason: "Use inline discussions and the merge request unapprove action to communicate required changes.".into(),
+                    }),
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::PendingCommentBatch,
+                    support: CapabilitySupport::Partial,
+                    constraints: vec![CapabilityConstraint {
+                        code: "draft_notes_not_used".into(),
+                        message: "GitLab supports draft notes, but SignalPR currently submits directly instead of maintaining a pending-review draft batch.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "direct_submit".into(),
+                        reason: "Submit review notes immediately without a separate publish-later draft state.".into(),
+                    }),
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::SuggestionMarkup,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ReviewerMetadata,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::WebhookNotifications,
+                    support: CapabilitySupport::None,
+                    constraints: vec![CapabilityConstraint {
+                        code: "not_integrated".into(),
+                        message: "GitLab webhook notifications are not yet integrated into SignalPR's operational queue.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "manual_refresh".into(),
+                        reason: "Refresh metadata or rerun from the queue until platform notifications are implemented.".into(),
+                    }),
+                },
+            ],
+        }
+    }
+
+    async fn fetch_review_snapshot(&self) -> Result<PlatformReviewSnapshot, AppError> {
+        let mr = self
+            .api
+            .get_merge_request(&self.project_path, self.iid)
+            .await
+            .map_err(gl_err)?;
+        let review_target = Self::review_target_from_merge_request(&mr);
+        let metadata = self.build_metadata_from_merge_request(mr).await?;
+        let diff_text = self.fetch_diff().await?;
+
+        Ok(PlatformReviewSnapshot {
+            review_target,
+            metadata,
+            diff_text,
+            capabilities: self.capabilities(),
+        })
+    }
+
+    async fn fetch_review_target(&self) -> Result<PlatformReviewTarget, AppError> {
+        let mr = self
+            .api
+            .get_merge_request(&self.project_path, self.iid)
+            .await
+            .map_err(gl_err)?;
+
+        Ok(Self::review_target_from_merge_request(&mr))
+    }
+
+    async fn fetch_metadata(&self) -> Result<PlatformMetadata, AppError> {
+        let mr = self
+            .api
+            .get_merge_request(&self.project_path, self.iid)
+            .await
+            .map_err(gl_err)?;
+        self.build_metadata_from_merge_request(mr).await
     }
 
     async fn fetch_diff(&self) -> Result<String, AppError> {

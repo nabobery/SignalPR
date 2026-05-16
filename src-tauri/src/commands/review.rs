@@ -65,6 +65,8 @@ pub struct ReviewSnapshot {
     pub local_checks_summary: Option<serde_json::Value>,
     pub platform_metadata: Option<serde_json::Value>,
     pub platform_metadata_fetched_at: Option<String>,
+    pub platform_capabilities: Option<serde_json::Value>,
+    pub platform_capabilities_fetched_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -632,6 +634,11 @@ pub async fn get_review_snapshot(
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         platform_metadata_fetched_at: pr.platform_metadata_fetched_at,
+        platform_capabilities: pr
+            .platform_capabilities_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
+        platform_capabilities_fetched_at: pr.platform_capabilities_fetched_at,
     })
 }
 
@@ -1927,7 +1934,7 @@ pub(crate) async fn resolve_issue_refs_and_codeowners(
     );
     apply_global_issue_budget(&mut issue_refs_seed, MAX_ISSUES);
 
-    let adapter = crate::commands::pr_metadata::build_adapter(app, &review_url)
+    let adapter = crate::platform::factory::build_adapter(app, &review_url)
         .await
         .ok();
     let issue_refs = hydrate_issue_refs_by_tracker(
@@ -2500,6 +2507,8 @@ mod tests {
             diff_hash: None,
             platform_metadata_json: None,
             platform_metadata_fetched_at: None,
+            platform_capabilities_json: None,
+            platform_capabilities_fetched_at: None,
         };
         queries::insert_pull_request(&conn, &baseline_pr).unwrap();
 
@@ -2518,6 +2527,8 @@ mod tests {
             diff_hash: None,
             platform_metadata_json: None,
             platform_metadata_fetched_at: None,
+            platform_capabilities_json: None,
+            platform_capabilities_fetched_at: None,
         };
         queries::insert_pull_request(&conn, &current_pr).unwrap();
 
@@ -2750,6 +2761,8 @@ mod tests {
             diff_hash: Some("hash".into()),
             platform_metadata_json: Some(metadata_json.into()),
             platform_metadata_fetched_at: Some("2026-01-02T00:00:00Z".into()),
+            platform_capabilities_json: None,
+            platform_capabilities_fetched_at: None,
         };
         queries::insert_pull_request(&conn, &pr).unwrap();
 
@@ -2781,7 +2794,7 @@ mod tests {
                 submitted_at: Some("2026-01-02T00:05:00Z".into()),
                 status: "submitted".into(),
                 commit_id_at_submission: Some("sha-submitted".into()),
-                gh_review_id: None,
+                platform_review_id: None,
                 error_message: None,
                 idempotency_key: None,
                 attempt_count: Some(1),

@@ -1,8 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Send, Loader2, AlertTriangle, FileText, MessageSquare } from "lucide-react";
-import { getReviewDraft, saveReviewDraft, submitReview, parseError } from "../../lib/ipc";
+import {
+  getEnvironmentSummary,
+  getReviewDraft,
+  saveReviewDraft,
+  submitReview,
+  parseError,
+} from "../../lib/ipc";
 import { useReviewContext } from "../../lib/store";
-import type { ReviewAction } from "../../lib/types";
+import {
+  getPlatformAuthDiagnostic,
+  getPlatformCapability,
+  isPlatformAuthReady,
+  type PlatformCapabilityKey,
+  type ReviewAction,
+} from "../../lib/types";
 import { buildFindingTrustViewModel } from "../../lib/trust";
 
 const AUTOSAVE_DELAY = 1500;
@@ -17,6 +29,12 @@ const actions: { value: ReviewAction; label: string; description: string }[] = [
   },
 ];
 
+const actionCapabilities: Record<ReviewAction, PlatformCapabilityKey> = {
+  comment: "review_summary_comment",
+  approve: "approve_review",
+  "request-changes": "request_changes_review",
+};
+
 export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmitted: () => void }) {
   const { state } = useReviewContext();
   const [summary, setSummary] = useState("");
@@ -25,6 +43,9 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const [environmentSummary, setEnvironmentSummary] = useState<Awaited<
+    ReturnType<typeof getEnvironmentSummary>
+  > | null>(null);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftLoaded = useRef(false);
   const summaryRef = useRef(summary);
@@ -85,6 +106,24 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
   };
 
   useEffect(() => {
+    let cancelled = false;
+    getEnvironmentSummary()
+      .then((summary) => {
+        if (!cancelled) {
+          setEnvironmentSummary(summary);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEnvironmentSummary(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     };
@@ -130,7 +169,25 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
       platformMetadata: state.platformMetadata,
     }).warningBadges.some((badge) => badge.key === "ai-only"),
   );
-  const canSubmit = summary.trim().length > 0 || includedFindings.length > 0;
+  const selectedActionCapability = getPlatformCapability(
+    state.platformCapabilities,
+    actionCapabilities[action],
+  );
+  const draftBatchCapability = getPlatformCapability(
+    state.platformCapabilities,
+    "pending_comment_batch",
+  );
+  const platformId =
+    state.platformCapabilities?.platform ?? state.platformMetadata?.platform ?? null;
+  const authReady = isPlatformAuthReady(platformId, environmentSummary);
+  const authDiagnostic = getPlatformAuthDiagnostic(platformId, environmentSummary);
+  const capabilityMetadataMissing = selectedActionCapability === null;
+  const hasSubmitContent = summary.trim().length > 0 || includedFindings.length > 0;
+  const canSubmit =
+    hasSubmitContent &&
+    authReady &&
+    selectedActionCapability !== null &&
+    selectedActionCapability.support !== "none";
 
   if (loadingDraft) {
     return (
@@ -238,7 +295,13 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
         </section>
 
         {/* Warnings */}
-        {(hasPartialLanes || hasStaleAnchors || hasAiOnlyFindings) && (
+        {(hasPartialLanes ||
+          hasStaleAnchors ||
+          hasAiOnlyFindings ||
+          !authReady ||
+          capabilityMetadataMissing ||
+          selectedActionCapability?.support === "partial" ||
+          draftBatchCapability?.support !== "full") && (
           <section className="space-y-2">
             {hasPartialLanes && (
               <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
@@ -259,6 +322,33 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                 evidence trail before submitting.
               </div>
             )}
+            {!authReady && (
+              <div className="flex items-center gap-2 text-xs text-red-300 bg-red-900/20 px-3 py-2 rounded-lg">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                {authDiagnostic ?? "Platform authentication is not ready for submission."}
+              </div>
+            )}
+            {capabilityMetadataMissing && (
+              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                Refresh platform metadata to load the available review actions for this pull
+                request.
+              </div>
+            )}
+            {selectedActionCapability?.support === "partial" && (
+              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                {selectedActionCapability.constraints[0]?.message ??
+                  "This platform only partially supports the selected review action."}
+              </div>
+            )}
+            {draftBatchCapability && draftBatchCapability.support !== "full" && (
+              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                {draftBatchCapability.constraints[0]?.message ??
+                  "This platform does not preserve pending review batches the same way SignalPR drafts do."}
+              </div>
+            )}
           </section>
         )}
 
@@ -268,29 +358,49 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
             Review action
           </h3>
           <div className="space-y-1.5">
-            {actions.map((a) => (
-              <label
-                key={a.value}
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer ${
-                  action === a.value
-                    ? "border-emerald-500/50 bg-emerald-900/10"
-                    : "border-zinc-800 hover:border-zinc-700"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="draft-action"
-                  value={a.value}
-                  checked={action === a.value}
-                  onChange={() => handleActionChange(a.value)}
-                  className="mt-0.5"
-                />
-                <div>
-                  <div className="text-sm font-medium text-zinc-100">{a.label}</div>
-                  <div className="text-xs text-zinc-400">{a.description}</div>
-                </div>
-              </label>
-            ))}
+            {actions.map((a) => {
+              const capability = getPlatformCapability(
+                state.platformCapabilities,
+                actionCapabilities[a.value],
+              );
+              const disabled = capability === null || capability.support === "none";
+              return (
+                <label
+                  key={a.value}
+                  className={`flex items-start gap-3 p-3 rounded-lg border ${
+                    disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                  } ${
+                    action === a.value
+                      ? "border-emerald-500/50 bg-emerald-900/10"
+                      : "border-zinc-800 hover:border-zinc-700"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="draft-action"
+                    value={a.value}
+                    checked={action === a.value}
+                    onChange={() => !disabled && handleActionChange(a.value)}
+                    disabled={disabled}
+                    className="mt-0.5"
+                  />
+                  <div>
+                    <div className="text-sm font-medium text-zinc-100">{a.label}</div>
+                    <div className="text-xs text-zinc-400">{a.description}</div>
+                    {capability?.support === "partial" && capability.constraints[0] && (
+                      <div className="mt-1 text-[11px] text-yellow-300">
+                        {capability.constraints[0].message}
+                      </div>
+                    )}
+                    {capability?.support === "none" && capability.constraints[0] && (
+                      <div className="mt-1 text-[11px] text-red-300">
+                        {capability.constraints[0].message}
+                      </div>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
           </div>
         </section>
       </div>
@@ -301,6 +411,22 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
 
         <div className="flex items-center gap-2">
           {isSubmitted && <span className="text-xs text-zinc-500">Already submitted.</span>}
+          {!isSubmitted && !authReady && (
+            <span className="text-xs text-red-400">
+              {authDiagnostic ?? "Platform authentication is not ready for submission."}
+            </span>
+          )}
+          {!isSubmitted && authReady && capabilityMetadataMissing && (
+            <span className="text-xs text-yellow-400">
+              Refresh platform metadata to load the available review actions.
+            </span>
+          )}
+          {!isSubmitted && selectedActionCapability?.support === "none" && (
+            <span className="text-xs text-red-400">
+              {selectedActionCapability.constraints[0]?.message ??
+                "This action is not available on the active platform."}
+            </span>
+          )}
           <div className="flex-1" />
           {isSubmitted && (
             <button

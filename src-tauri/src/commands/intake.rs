@@ -102,203 +102,35 @@ async fn do_open_from_url(
     let host = review_url.host().to_string();
     let number = review_url.number_or_iid();
 
-    match &review_url {
-        ParsedReviewUrl::GitHub { .. } => {
-            do_open_github_pr(app, url, db, &host, &owner, &repo, number).await
-        }
-        ParsedReviewUrl::GitLab {
-            project_path,
-            iid,
-            host: gl_host,
-        } => do_open_gitlab_mr(app, url, db, gl_host, project_path, *iid, &owner, &repo).await,
-        ParsedReviewUrl::Bitbucket {
-            workspace,
-            repo_slug,
-            pull_request_id,
-            ..
-        } => do_open_bitbucket_pr(url, db, &host, workspace, repo_slug, *pull_request_id).await,
-    }
-}
-
-async fn do_open_github_pr(
-    app: AppHandle,
-    url: &str,
-    db: &AppDb,
-    host: &str,
-    owner: &str,
-    repo: &str,
-    number: i32,
-) -> Result<PrIntakeResult, AppError> {
-    let shell = app.shell();
-    let full_repo = format!("{}/{}", owner, repo);
-
-    let meta_output = shell
-        .command("gh")
-        .args([
-            "pr",
-            "view",
-            &number.to_string(),
-            "--repo",
-            &full_repo,
-            "--json",
-            "title,author,baseRefName,headRefName,files",
-        ])
-        .output()
-        .await
-        .map_err(|e| AppError::InvalidInput(format!("Failed to run gh: {}", e)))?;
-
-    if !meta_output.status.success() {
-        let stderr = String::from_utf8_lossy(&meta_output.stderr);
-        return Err(AppError::InvalidInput(format!(
-            "gh pr view failed: {}",
-            stderr
-        )));
-    }
-
-    let meta: serde_json::Value = serde_json::from_slice(&meta_output.stdout)?;
-
-    let title = meta["title"].as_str().unwrap_or("").to_string();
-    let author = meta["author"]["login"].as_str().map(|s| s.to_string());
-    let base_branch = meta["baseRefName"].as_str().map(|s| s.to_string());
-    let head_branch = meta["headRefName"].as_str().map(|s| s.to_string());
-    let files = meta["files"].as_array();
-    let changed_files: Vec<String> = files
-        .map(|f| {
-            f.iter()
-                .filter_map(|file| file["path"].as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let diff_output = shell
-        .command("gh")
-        .args(["pr", "diff", &number.to_string(), "--repo", &full_repo])
-        .output()
-        .await
-        .map_err(|e| AppError::InvalidInput(format!("Failed to fetch diff: {}", e)))?;
-
-    let diff_text = require_diff_text(
-        diff_output.status.success(),
-        &diff_output.stdout,
-        &diff_output.stderr,
-    )?;
+    let adapter = crate::platform::factory::build_adapter(&app, &review_url).await?;
+    let snapshot = adapter.fetch_review_snapshot().await?;
+    let review_target = snapshot.review_target;
+    let metadata = snapshot.metadata;
+    let capabilities = snapshot.capabilities;
+    let diff_text = snapshot.diff_text;
     let diff_hash = sha256_hex(&diff_text);
+    let changed_files = derive_changed_files_from_diff(&diff_text);
+    let metadata_json =
+        serde_json::to_string(&metadata).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let capabilities_json =
+        serde_json::to_string(&capabilities).map_err(|e| AppError::InvalidInput(e.to_string()))?;
 
     persist_intake(
         db,
         url,
-        host,
-        owner,
-        repo,
+        &host,
+        &owner,
+        &repo,
         number,
-        &title,
-        author.as_deref(),
-        base_branch.as_deref(),
-        head_branch.as_deref(),
+        &review_target.title,
+        review_target.author.as_deref(),
+        review_target.base_branch.as_deref(),
+        review_target.head_branch.as_deref(),
         Some(&diff_text),
         &changed_files,
         Some(&diff_hash),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn do_open_gitlab_mr(
-    _app: AppHandle,
-    url: &str,
-    db: &AppDb,
-    host: &str,
-    project_path: &str,
-    iid: i32,
-    owner: &str,
-    repo: &str,
-) -> Result<PrIntakeResult, AppError> {
-    let token = crate::providers::gitlab::resolve_gitlab_token().ok_or_else(|| {
-        AppError::InvalidInput("GITLAB_TOKEN environment variable is not set. Set it to a GitLab personal access token with api scope.".into())
-    })?;
-    let api = crate::providers::gitlab::GitLabApi::new(token, host)
-        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-
-    let mr = api
-        .get_merge_request(project_path, iid)
-        .await
-        .map_err(|e| AppError::Transient(format!("GitLab MR fetch failed: {}", e)))?;
-    let diff_text = api
-        .get_raw_diffs(project_path, iid, host)
-        .await
-        .map_err(|e| AppError::Transient(format!("GitLab diff fetch failed: {}", e)))?;
-    let diff_hash = sha256_hex(&diff_text);
-    let changed_files = derive_changed_files_from_diff(&diff_text);
-
-    let title = mr.title;
-    let author = mr.author.map(|a| a.username);
-    let base_branch = Some(mr.target_branch);
-    let head_branch = Some(mr.source_branch);
-
-    persist_intake(
-        db,
-        url,
-        host,
-        owner,
-        repo,
-        iid,
-        &title,
-        author.as_deref(),
-        base_branch.as_deref(),
-        head_branch.as_deref(),
-        Some(&diff_text),
-        &changed_files,
-        Some(&diff_hash),
-    )
-}
-
-async fn do_open_bitbucket_pr(
-    url: &str,
-    db: &AppDb,
-    host: &str,
-    workspace: &str,
-    repo_slug: &str,
-    pr_id: i32,
-) -> Result<PrIntakeResult, AppError> {
-    let credentials =
-        crate::providers::bitbucket::resolve_bitbucket_credentials_from_env().ok_or_else(|| {
-            AppError::InvalidInput(
-                "Bitbucket credentials not set. Set BITBUCKET_EMAIL and BITBUCKET_TOKEN environment variables (API token, not app password).".into(),
-            )
-        })?;
-    let api = crate::providers::bitbucket::BitbucketApi::try_new(credentials).map_err(|e| {
-        AppError::InvalidInput(format!("Failed to initialize Bitbucket client: {e}"))
-    })?;
-
-    let pr = api
-        .get_pull_request(workspace, repo_slug, pr_id)
-        .await
-        .map_err(|e| AppError::Transient(format!("Bitbucket PR fetch failed: {}", e)))?;
-    let diff_text = api
-        .get_pull_request_diff(workspace, repo_slug, pr_id)
-        .await
-        .map_err(|e| AppError::Transient(format!("Bitbucket diff fetch failed: {}", e)))?;
-    let diff_hash = sha256_hex(&diff_text);
-    let changed_files = derive_changed_files_from_diff(&diff_text);
-
-    let title = pr.title;
-    let author = pr.author.map(|a| a.best_name());
-    let base_branch = Some(pr.destination.branch.name);
-    let head_branch = Some(pr.source.branch.name);
-
-    persist_intake(
-        db,
-        url,
-        host,
-        workspace,
-        repo_slug,
-        pr_id,
-        &title,
-        author.as_deref(),
-        base_branch.as_deref(),
-        head_branch.as_deref(),
-        Some(&diff_text),
-        &changed_files,
-        Some(&diff_hash),
+        Some(&metadata_json),
+        Some(&capabilities_json),
     )
 }
 
@@ -317,6 +149,8 @@ fn persist_intake(
     diff_text: Option<&str>,
     changed_files: &[String],
     diff_hash: Option<&str>,
+    metadata_json: Option<&str>,
+    capabilities_json: Option<&str>,
 ) -> Result<PrIntakeResult, AppError> {
     let workspace_suggestion = {
         let conn =
@@ -326,6 +160,7 @@ fn persist_intake(
     };
 
     let pr_id = uuid::Uuid::new_v4().to_string();
+    let fetched_at = chrono::Utc::now().to_rfc3339();
     let ws_id = {
         let conn =
             db.0.lock()
@@ -368,10 +203,12 @@ fn persist_intake(
                 url: url.to_string(),
                 diff_text: diff_text.map(|s| s.to_string()),
                 changed_files: Some(serde_json::to_string(&changed_files)?),
-                fetched_at: chrono::Utc::now().to_rfc3339(),
+                fetched_at: fetched_at.clone(),
                 diff_hash: diff_hash.map(|s| s.to_string()),
-                platform_metadata_json: None,
-                platform_metadata_fetched_at: None,
+                platform_metadata_json: metadata_json.map(ToOwned::to_owned),
+                platform_metadata_fetched_at: metadata_json.map(|_| fetched_at.clone()),
+                platform_capabilities_json: capabilities_json.map(ToOwned::to_owned),
+                platform_capabilities_fetched_at: capabilities_json.map(|_| fetched_at.clone()),
             },
         )?;
     }
@@ -388,19 +225,6 @@ fn persist_intake(
         changed_file_count: changed_files.len(),
         workspace_suggestion,
     })
-}
-
-fn require_diff_text(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<String, AppError> {
-    if success {
-        return Ok(String::from_utf8_lossy(stdout).to_string());
-    }
-    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
-    let msg = if stderr.is_empty() {
-        "gh pr diff failed".to_string()
-    } else {
-        format!("gh pr diff failed: {}", stderr)
-    };
-    Err(AppError::Transient(msg))
 }
 
 fn derive_changed_files_from_diff(diff_text: &str) -> Vec<String> {
@@ -422,6 +246,20 @@ fn derive_changed_files_from_diff(diff_text: &str) -> Vec<String> {
         }
     }
     files
+}
+
+#[cfg(test)]
+fn require_diff_text(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<String, AppError> {
+    if success {
+        return Ok(String::from_utf8_lossy(stdout).to_string());
+    }
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    let msg = if stderr.is_empty() {
+        "platform diff fetch failed".to_string()
+    } else {
+        format!("platform diff fetch failed: {}", stderr)
+    };
+    Err(AppError::Transient(msg))
 }
 
 #[tauri::command]

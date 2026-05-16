@@ -275,6 +275,18 @@ CREATE INDEX IF NOT EXISTS idx_review_runs_rerun_reason
   ON review_runs(rerun_reason);
 "#;
 
+const MIGRATION_V14: &str = r#"
+-- Platform capability snapshots and neutral review submission IDs
+ALTER TABLE pull_requests ADD COLUMN platform_capabilities_json TEXT;
+ALTER TABLE pull_requests ADD COLUMN platform_capabilities_fetched_at TEXT;
+ALTER TABLE submission_records ADD COLUMN platform_review_id TEXT;
+
+UPDATE submission_records
+SET platform_review_id = gh_review_id
+WHERE platform_review_id IS NULL
+  AND gh_review_id IS NOT NULL;
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -384,6 +396,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V13)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (13)",
+            [],
+        )?;
+    }
+
+    if current_version < 14 {
+        conn.execute_batch(MIGRATION_V14)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (14)",
             [],
         )?;
     }
@@ -717,6 +737,32 @@ mod tests {
             .unwrap();
         assert!(indexes.contains(&"idx_review_runs_pr_started_at".to_string()));
         assert!(indexes.contains(&"idx_submission_records_run_status".to_string()));
+    }
+
+    #[test]
+    fn test_v14_platform_capability_and_submission_columns_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url, platform_capabilities_json, platform_capabilities_fetched_at) VALUES ('pr', 'ws', 1, 't', 'u', '{\"platform\":\"github\",\"capabilities\":[]}', '2026-05-16T00:00:00Z')",
+            [],
+        )
+        .expect("V14 capability snapshot columns should exist");
+        conn.execute(
+            "INSERT INTO review_runs (id, pr_id, status) VALUES ('run', 'pr', 'ready')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO submission_records (id, review_run_id, review_action, gh_review_id, platform_review_id) VALUES ('sub', 'run', 'comment', 'legacy-review', 'platform-review')",
+            [],
+        )
+        .expect("V14 platform review id column should exist");
     }
 
     #[test]

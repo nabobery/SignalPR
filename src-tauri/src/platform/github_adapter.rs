@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::errors::AppError;
 use crate::platform::adapter::*;
 use crate::providers::github::{
-    CreateReviewPayload, GitHubApi, GitHubApiError, ReviewCommentPayload,
+    CreateReviewPayload, GhPullRequest, GitHubApi, GitHubApiError, ReviewCommentPayload,
 };
 
 pub struct GitHubAdapter {
@@ -22,32 +22,20 @@ impl GitHubAdapter {
             number,
         }
     }
-}
 
-fn gh_err(e: GitHubApiError) -> AppError {
-    match e {
-        GitHubApiError::RateLimited { .. } => AppError::Transient(e.to_string()),
-        GitHubApiError::HttpError { status: 404, .. } => AppError::NotFound(e.to_string()),
-        GitHubApiError::HttpError { status, .. } if status >= 500 => {
-            AppError::Transient(e.to_string())
+    fn review_target_from_pull_request(gh_pr: &GhPullRequest) -> PlatformReviewTarget {
+        PlatformReviewTarget {
+            title: gh_pr.title.clone(),
+            author: gh_pr.user.as_ref().map(|user| user.login.clone()),
+            base_branch: Some(gh_pr.base.ref_name.clone()),
+            head_branch: Some(gh_pr.head.ref_name.clone()),
         }
-        _ => AppError::InvalidInput(e.to_string()),
-    }
-}
-
-#[async_trait]
-impl PlatformAdapter for GitHubAdapter {
-    fn platform_name(&self) -> &'static str {
-        "github"
     }
 
-    async fn fetch_metadata(&self) -> Result<PlatformMetadata, AppError> {
-        let gh_pr = self
-            .api
-            .get_pull_request(&self.owner, &self.repo, self.number)
-            .await
-            .map_err(gh_err)?;
-
+    async fn build_metadata_from_pull_request(
+        &self,
+        gh_pr: GhPullRequest,
+    ) -> Result<PlatformMetadata, AppError> {
         let reviewers = self
             .api
             .get_requested_reviewers(&self.owner, &self.repo, self.number)
@@ -104,6 +92,151 @@ impl PlatformAdapter for GitHubAdapter {
             linked_issue_numbers: linked_issues,
             text_issue_refs: all_text_refs,
         }))
+    }
+}
+
+fn gh_err(e: GitHubApiError) -> AppError {
+    match e {
+        GitHubApiError::RateLimited { .. } => AppError::Transient(e.to_string()),
+        GitHubApiError::HttpError { status: 404, .. } => AppError::NotFound(e.to_string()),
+        GitHubApiError::HttpError { status, .. } if status >= 500 => {
+            AppError::Transient(e.to_string())
+        }
+        _ => AppError::InvalidInput(e.to_string()),
+    }
+}
+
+#[async_trait]
+impl PlatformAdapter for GitHubAdapter {
+    fn platform_id(&self) -> PlatformId {
+        PlatformId::GitHub
+    }
+
+    fn platform_name(&self) -> &'static str {
+        "github"
+    }
+
+    fn capabilities(&self) -> PlatformCapabilities {
+        PlatformCapabilities {
+            platform: PlatformId::GitHub,
+            capabilities: vec![
+                PlatformCapability {
+                    key: PlatformCapabilityKey::PrMetadata,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::DiffFetch,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::FileContent,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::IssueContext,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ReviewSummaryComment,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::InlineComment,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ApproveReview,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::RequestChangesReview,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::PendingCommentBatch,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::SuggestionMarkup,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::ReviewerMetadata,
+                    support: CapabilitySupport::Full,
+                    constraints: vec![],
+                    fallback: None,
+                },
+                PlatformCapability {
+                    key: PlatformCapabilityKey::WebhookNotifications,
+                    support: CapabilitySupport::Partial,
+                    constraints: vec![CapabilityConstraint {
+                        code: "github_only_notifications".into(),
+                        message: "Webhook-like notifications are available only through the current GitHub polling implementation.".into(),
+                    }],
+                    fallback: Some(CapabilityFallback {
+                        action: "polling".into(),
+                        reason: "SignalPR currently uses GitHub notification polling instead of a normalized webhook transport.".into(),
+                    }),
+                },
+            ],
+        }
+    }
+
+    async fn fetch_review_snapshot(&self) -> Result<PlatformReviewSnapshot, AppError> {
+        let gh_pr = self
+            .api
+            .get_pull_request(&self.owner, &self.repo, self.number)
+            .await
+            .map_err(gh_err)?;
+        let review_target = Self::review_target_from_pull_request(&gh_pr);
+        let metadata = self.build_metadata_from_pull_request(gh_pr).await?;
+        let diff_text = self.fetch_diff().await?;
+
+        Ok(PlatformReviewSnapshot {
+            review_target,
+            metadata,
+            diff_text,
+            capabilities: self.capabilities(),
+        })
+    }
+
+    async fn fetch_review_target(&self) -> Result<PlatformReviewTarget, AppError> {
+        let gh_pr = self
+            .api
+            .get_pull_request(&self.owner, &self.repo, self.number)
+            .await
+            .map_err(gh_err)?;
+
+        Ok(Self::review_target_from_pull_request(&gh_pr))
+    }
+
+    async fn fetch_metadata(&self) -> Result<PlatformMetadata, AppError> {
+        let gh_pr = self
+            .api
+            .get_pull_request(&self.owner, &self.repo, self.number)
+            .await
+            .map_err(gh_err)?;
+        self.build_metadata_from_pull_request(gh_pr).await
     }
 
     async fn fetch_diff(&self) -> Result<String, AppError> {

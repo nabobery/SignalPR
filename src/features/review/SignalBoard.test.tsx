@@ -86,6 +86,8 @@ function SignalBoardHarness() {
       localChecksSummary: null,
       platformMetadata: null,
       platformMetadataFetchedAt: null,
+      platformCapabilities: null,
+      platformCapabilitiesFetchedAt: null,
     }),
     [findings],
   );
@@ -176,6 +178,8 @@ describe("SignalBoard", () => {
       localChecksSummary: null,
       platformMetadata: null,
       platformMetadataFetchedAt: null,
+      platformCapabilities: null,
+      platformCapabilitiesFetchedAt: null,
     };
 
     const ctx: ReviewContextType = {

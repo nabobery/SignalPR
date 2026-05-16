@@ -23,6 +23,7 @@ pub async fn inspect_environment(
     let mut results = vec![];
 
     results.push(check_gh(&app, &now).await);
+    results.push(check_github_token(&now));
     results.push(check_gitlab_token(&now));
     results.push(check_bitbucket_token(&now));
     results.push(check_jira_token(&now));
@@ -40,6 +41,7 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
     let mut tools = vec![];
 
     tools.push(check_gh(app, &now).await);
+    tools.push(check_github_token(&now));
     tools.push(check_gitlab_token(&now));
     tools.push(check_bitbucket_token(&now));
     tools.push(check_jira_token(&now));
@@ -51,7 +53,10 @@ pub async fn build_environment_summary(app: &AppHandle) -> EnvironmentSummary {
     tools.push(check_claude_code(app, &now));
 
     let can_submit = tools.iter().any(|t| {
-        (t.tool_name == "gh" || t.tool_name == "gitlab_token" || t.tool_name == "bitbucket_token")
+        (t.tool_name == "gh"
+            || t.tool_name == "github_token"
+            || t.tool_name == "gitlab_token"
+            || t.tool_name == "bitbucket_token")
             && t.status == "ready"
     });
     let available_providers: Vec<String> = tools
@@ -144,6 +149,31 @@ async fn check_gh(app: &AppHandle, now: &str) -> ToolStatus {
         version,
         message: None,
         checked_at: now.into(),
+    }
+}
+
+fn check_github_token(now: &str) -> ToolStatus {
+    match std::env::var("GITHUB_TOKEN")
+        .ok()
+        .or_else(|| std::env::var("GH_TOKEN").ok())
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(_) => ToolStatus {
+            tool_name: "github_token".into(),
+            status: "ready".into(),
+            version: None,
+            message: Some("GITHUB_TOKEN or GH_TOKEN set".into()),
+            checked_at: now.into(),
+        },
+        None => ToolStatus {
+            tool_name: "github_token".into(),
+            status: "missing".into(),
+            version: None,
+            message: Some(
+                "Optional: Set GITHUB_TOKEN or GH_TOKEN for GitHub review submission".into(),
+            ),
+            checked_at: now.into(),
+        },
     }
 }
 
@@ -489,9 +519,13 @@ mod tests {
     }
 
     fn build_summary(tools: &[crate::storage::models::ToolStatus]) -> EnvironmentSummary {
-        let can_submit = tools
-            .iter()
-            .any(|t| (t.tool_name == "gh" || t.tool_name == "gitlab_token") && t.status == "ready");
+        let can_submit = tools.iter().any(|t| {
+            (t.tool_name == "gh"
+                || t.tool_name == "github_token"
+                || t.tool_name == "gitlab_token"
+                || t.tool_name == "bitbucket_token")
+                && t.status == "ready"
+        });
         let available_providers: Vec<String> = tools
             .iter()
             .filter(|t| {

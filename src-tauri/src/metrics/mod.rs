@@ -283,6 +283,8 @@ mod tests {
                 diff_hash: None,
                 platform_metadata_json: None,
                 platform_metadata_fetched_at: None,
+                platform_capabilities_json: None,
+                platform_capabilities_fetched_at: None,
             },
         )
         .unwrap();

@@ -70,6 +70,8 @@ export function ReviewWorkspace() {
         localChecksSummary: snap.local_checks_summary ?? null,
         platformMetadata: snap.platform_metadata ?? null,
         platformMetadataFetchedAt: snap.platform_metadata_fetched_at ?? null,
+        platformCapabilities: snap.platform_capabilities ?? null,
+        platformCapabilitiesFetchedAt: snap.platform_capabilities_fetched_at ?? null,
         selectedFile:
           prev?.selectedFile && snap.changed_files.includes(prev.selectedFile)
             ? prev.selectedFile
@@ -324,6 +326,8 @@ export function ReviewWorkspace() {
                 localChecksSummary={state?.localChecksSummary ?? null}
                 platformMetadata={state?.platformMetadata ?? null}
                 platformMetadataFetchedAt={state?.platformMetadataFetchedAt ?? null}
+                platformCapabilities={state?.platformCapabilities ?? null}
+                platformCapabilitiesFetchedAt={state?.platformCapabilitiesFetchedAt ?? null}
               />
             )}
           </main>

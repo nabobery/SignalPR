@@ -237,6 +237,55 @@ export interface ReviewSnapshot {
   // Platform metadata
   platform_metadata: PlatformMetadata | null;
   platform_metadata_fetched_at: string | null;
+  platform_capabilities: PlatformCapabilities | null;
+  platform_capabilities_fetched_at: string | null;
+}
+
+export type PlatformId = "github" | "gitlab" | "bitbucket";
+
+export type PlatformCapabilityKey =
+  | "pr_metadata"
+  | "diff_fetch"
+  | "file_content"
+  | "issue_context"
+  | "review_summary_comment"
+  | "inline_comment"
+  | "approve_review"
+  | "request_changes_review"
+  | "pending_comment_batch"
+  | "suggestion_markup"
+  | "reviewer_metadata"
+  | "webhook_notifications";
+
+export type CapabilitySupport = "full" | "partial" | "none";
+
+export interface CapabilityConstraint {
+  code: string;
+  message: string;
+}
+
+export interface CapabilityFallback {
+  action: string;
+  reason: string;
+}
+
+export interface PlatformCapability {
+  key: PlatformCapabilityKey;
+  support: CapabilitySupport;
+  constraints: CapabilityConstraint[];
+  fallback: CapabilityFallback | null;
+}
+
+export interface PlatformCapabilities {
+  platform: PlatformId;
+  capabilities: PlatformCapability[];
+}
+
+export interface ReviewerStatus {
+  login: string;
+  display_name: string | null;
+  state: string;
+  updated_at: string | null;
 }
 
 // Platform metadata across supported review hosts
@@ -268,6 +317,7 @@ export interface GitLabMetadata {
   draft: boolean;
   labels: string[];
   reviewers: string[];
+  reviewer_statuses: ReviewerStatus[];
   approval_status: ApprovalInfo | null;
   closes_issues: number[];
 }
@@ -282,6 +332,7 @@ export interface BitbucketMetadata {
   draft: boolean;
   labels: string[];
   reviewers: string[];
+  reviewer_statuses: ReviewerStatus[];
   approval_status: ApprovalInfo | null;
   default_reviewers: string[];
   jira_issue_keys: string[];
@@ -336,10 +387,72 @@ export function isBitbucketMetadata(meta: unknown): meta is BitbucketMetadata {
   );
 }
 
+export function getPlatformCapability(
+  capabilities: PlatformCapabilities | null | undefined,
+  key: PlatformCapabilityKey,
+): PlatformCapability | null {
+  return capabilities?.capabilities.find((capability) => capability.key === key) ?? null;
+}
+
+function getToolStatus(
+  environmentSummary: EnvironmentSummary | null | undefined,
+  toolName: string,
+): ToolStatus | null {
+  return environmentSummary?.tools.find((tool) => tool.tool_name === toolName) ?? null;
+}
+
+export function isPlatformAuthReady(
+  platform: PlatformId | null | undefined,
+  environmentSummary: EnvironmentSummary | null | undefined,
+): boolean {
+  if (!platform || !environmentSummary) return false;
+  switch (platform) {
+    case "github":
+      return (
+        getToolStatus(environmentSummary, "github_token")?.status === "ready" ||
+        getToolStatus(environmentSummary, "gh")?.status === "ready"
+      );
+    case "gitlab":
+      return getToolStatus(environmentSummary, "gitlab_token")?.status === "ready";
+    case "bitbucket":
+      return getToolStatus(environmentSummary, "bitbucket_token")?.status === "ready";
+    default:
+      return false;
+  }
+}
+
+export function getPlatformAuthDiagnostic(
+  platform: PlatformId | null | undefined,
+  environmentSummary: EnvironmentSummary | null | undefined,
+): string | null {
+  if (!platform || !environmentSummary) return "Checking platform authentication...";
+  switch (platform) {
+    case "github": {
+      const envToken = getToolStatus(environmentSummary, "github_token");
+      const gh = getToolStatus(environmentSummary, "gh");
+      if (envToken?.status === "ready" || gh?.status === "ready") return null;
+      return envToken?.message ?? gh?.message ?? "GitHub auth is not ready for review submission.";
+    }
+    case "gitlab":
+      return (
+        getToolStatus(environmentSummary, "gitlab_token")?.message ?? "GitLab auth is not ready."
+      );
+    case "bitbucket":
+      return (
+        getToolStatus(environmentSummary, "bitbucket_token")?.message ??
+        "Bitbucket auth is not ready."
+      );
+    default:
+      return "Platform authentication is unavailable for this review.";
+  }
+}
+
 export interface RefreshMetadataResult {
   pr_id: string;
   fetched_at: string;
   metadata: PlatformMetadata;
+  capabilities: PlatformCapabilities;
+  capabilities_fetched_at: string;
 }
 
 export interface ReviewerDecision {
@@ -535,6 +648,8 @@ export interface InboxReviewRow {
   draft: boolean;
   has_saved_review_draft: boolean;
   metadata_freshness: InboxMetadataFreshness;
+  platform_capabilities: PlatformCapabilities | null;
+  platform_capabilities_fetched_at: string | null;
   review_freshness: InboxReviewFreshness;
   reviewer_signal: InboxReviewerSignal;
   lane_health: InboxLaneHealth;

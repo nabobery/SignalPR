@@ -2,9 +2,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 
 use crate::cleaner::{remap, verify};
+use crate::platform::adapter::{
+    CapabilitySupport, PlatformAdapter, PlatformCapabilities, PlatformCapability,
+    PlatformCapabilityKey, PlatformId,
+};
 use crate::preferences::{decisions, scoring};
 use crate::storage::db::AppDb;
 use crate::storage::event_log::EventLog;
@@ -31,6 +34,159 @@ enum SuggestionPlatform {
     GitHub,
     GitLab,
     Bitbucket,
+}
+
+#[derive(Clone, Copy)]
+enum CapabilityRequirementMode {
+    Required,
+    Advisory,
+}
+
+struct SubmissionCapabilityRequirement {
+    key: PlatformCapabilityKey,
+    mode: CapabilityRequirementMode,
+    reason: &'static str,
+}
+
+fn required_capability_for_action(action: &str) -> PlatformCapabilityKey {
+    match action {
+        "approve" => PlatformCapabilityKey::ApproveReview,
+        "request-changes" => PlatformCapabilityKey::RequestChangesReview,
+        _ => PlatformCapabilityKey::ReviewSummaryComment,
+    }
+}
+
+fn capability_for(
+    capabilities: &PlatformCapabilities,
+    key: PlatformCapabilityKey,
+) -> Result<&PlatformCapability, crate::errors::AppError> {
+    capabilities.get(key).ok_or_else(|| {
+        crate::errors::AppError::InvalidInput(format!(
+            "Platform capability metadata is missing support information for {}.",
+            key.as_str()
+        ))
+    })
+}
+
+fn block_on_missing_capability(
+    capability: &PlatformCapability,
+    adapter: &dyn PlatformAdapter,
+) -> Result<(), crate::errors::AppError> {
+    if capability.support != CapabilitySupport::None {
+        return Ok(());
+    }
+
+    let reason = capability
+        .constraints
+        .first()
+        .map(|constraint| constraint.message.clone())
+        .or_else(|| {
+            capability
+                .fallback
+                .as_ref()
+                .map(|fallback| fallback.reason.clone())
+        })
+        .unwrap_or_else(|| "This action is not currently supported on this platform.".to_string());
+    Err(crate::errors::AppError::InvalidInput(format!(
+        "{} does not currently support this review action in SignalPR. {}",
+        adapter.platform_name(),
+        reason
+    )))
+}
+
+fn append_capability_event(
+    event_log: &EventLog,
+    run_id: &str,
+    event_type: &str,
+    platform: PlatformId,
+    action: &str,
+    capability: &PlatformCapability,
+    reason: &str,
+) {
+    let _ = event_log.append(
+        run_id,
+        event_type,
+        serde_json::json!({
+            "platform": platform.as_str(),
+            "action": action,
+            "capability": capability.key.as_str(),
+            "support": capability.support,
+            "constraints": capability.constraints,
+            "fallback": capability.fallback,
+            "reason": reason,
+        }),
+    );
+}
+
+fn evaluate_submission_capability(
+    event_log: &EventLog,
+    run_id: &str,
+    action: &str,
+    adapter: &dyn PlatformAdapter,
+    capabilities: &PlatformCapabilities,
+    requirement: SubmissionCapabilityRequirement,
+) -> Result<(), crate::errors::AppError> {
+    let capability = capability_for(capabilities, requirement.key)?;
+    match capability.support {
+        CapabilitySupport::Full => Ok(()),
+        CapabilitySupport::Partial => {
+            append_capability_event(
+                event_log,
+                run_id,
+                "submission_capability_degraded",
+                capabilities.platform,
+                action,
+                capability,
+                requirement.reason,
+            );
+            Ok(())
+        }
+        CapabilitySupport::None => match requirement.mode {
+            CapabilityRequirementMode::Required => {
+                let error = match block_on_missing_capability(capability, adapter) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => error,
+                };
+                append_capability_event(
+                    event_log,
+                    run_id,
+                    "submission_capability_blocked",
+                    capabilities.platform,
+                    action,
+                    capability,
+                    &error.to_string(),
+                );
+                Err(error)
+            }
+            CapabilityRequirementMode::Advisory => {
+                append_capability_event(
+                    event_log,
+                    run_id,
+                    "submission_capability_degraded",
+                    capabilities.platform,
+                    action,
+                    capability,
+                    requirement.reason,
+                );
+                Ok(())
+            }
+        },
+    }
+}
+
+fn finding_is_inline_submittable(finding: &Finding, anchors_verified: bool) -> bool {
+    anchors_verified
+        && finding.is_anchored
+        && finding.file_path.is_some()
+        && finding.diff_new_line.is_some()
+}
+
+fn finding_has_suggestion(finding: &Finding) -> bool {
+    finding
+        .fix_search
+        .as_deref()
+        .is_some_and(|search| !search.trim().is_empty())
+        && finding.fix_replace.is_some()
 }
 
 #[tauri::command]
@@ -95,7 +251,28 @@ pub async fn submit_review(
         )
     };
     let review_url = crate::platform::parse_review_url(&pr_url)?;
-    let adapter = crate::commands::pr_metadata::build_adapter(&app, &review_url).await?;
+    let adapter = match crate::platform::factory::build_adapter(&app, &review_url).await {
+        Ok(adapter) => adapter,
+        Err(error) => {
+            let platform = match &review_url {
+                crate::platform::ParsedReviewUrl::GitHub { .. } => PlatformId::GitHub,
+                crate::platform::ParsedReviewUrl::GitLab { .. } => PlatformId::GitLab,
+                crate::platform::ParsedReviewUrl::Bitbucket { .. } => PlatformId::Bitbucket,
+            };
+            let _ = event_log.append(
+                &run_id,
+                "submission_capability_blocked",
+                serde_json::json!({
+                    "platform": platform.as_str(),
+                    "action": action,
+                    "capability": "platform_auth",
+                    "error": error.to_string(),
+                }),
+            );
+            return Err(error);
+        }
+    };
+    let capabilities = adapter.capabilities();
 
     // Best-effort: fetch latest diff and reconcile anchors for safe inline comments.
     let mut anchors_verified_for_submission = false;
@@ -224,7 +401,7 @@ pub async fn submit_review(
                 submitted_at: None,
                 status: "pending".into(),
                 commit_id_at_submission: head_sha.clone(),
-                gh_review_id: None,
+                platform_review_id: None,
                 error_message: None,
                 idempotency_key: Some(idempotency_key),
                 attempt_count: Some(attempt),
@@ -244,7 +421,7 @@ pub async fn submit_review(
     );
 
     // Route submission by platform
-    let (gh_review_id, used_native) = if is_gitlab || is_bitbucket {
+    let submission_result = if is_gitlab || is_bitbucket {
         let suggestion_platform = if is_bitbucket {
             SuggestionPlatform::Bitbucket
         } else {
@@ -287,9 +464,82 @@ pub async fn submit_review(
             inline_comments,
             commit_id: head_sha.clone().unwrap_or_default(),
         };
+        let has_suggestions = active_findings.iter().any(|finding| {
+            finding_is_inline_submittable(finding, anchors_verified_for_submission)
+                && finding_has_suggestion(finding)
+        });
 
-        adapter.submit_review(payload).await?;
-        (None, true)
+        evaluate_submission_capability(
+            event_log.as_ref(),
+            &run_id,
+            &action,
+            adapter.as_ref(),
+            &capabilities,
+            SubmissionCapabilityRequirement {
+                key: required_capability_for_action(&action),
+                mode: CapabilityRequirementMode::Required,
+                reason: "Selected review action has a degraded platform implementation.",
+            },
+        )?;
+        if !payload.body.trim().is_empty() && action != "comment" {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::ReviewSummaryComment,
+                    mode: CapabilityRequirementMode::Required,
+                    reason: "Review summary will be posted through the platform comment path.",
+                },
+            )?;
+        }
+        if !payload.inline_comments.is_empty() {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::InlineComment,
+                    mode: CapabilityRequirementMode::Required,
+                    reason: "Inline findings are being submitted against the active diff.",
+                },
+            )?;
+        }
+        if has_suggestions {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::SuggestionMarkup,
+                    mode: CapabilityRequirementMode::Advisory,
+                    reason:
+                        "Inline suggestions will degrade to the platform fallback representation.",
+                },
+            )?;
+        }
+        if !payload.body.trim().is_empty() || !payload.inline_comments.is_empty() {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::PendingCommentBatch,
+                    mode: CapabilityRequirementMode::Advisory,
+                    reason: "SignalPR drafts are being published through the platform's non-draft submission path.",
+                },
+            )?;
+        }
+
+        adapter.submit_review(payload).await?
     } else {
         let (owner, repo) = match &review_url {
             crate::platform::ParsedReviewUrl::GitHub { owner, repo, .. } => {
@@ -311,26 +561,91 @@ pub async fn submit_review(
             active_findings: &active_findings,
             anchors_verified: anchors_verified_for_submission,
         };
+        let has_inline_comments = active_findings
+            .iter()
+            .any(|finding| finding_is_inline_submittable(finding, anchors_verified_for_submission));
+        let has_suggestions = active_findings.iter().any(|finding| {
+            finding_is_inline_submittable(finding, anchors_verified_for_submission)
+                && finding_has_suggestion(finding)
+        });
 
-        let submission_result = if let Some(ref sha) = head_sha {
+        evaluate_submission_capability(
+            event_log.as_ref(),
+            &run_id,
+            &action,
+            adapter.as_ref(),
+            &capabilities,
+            SubmissionCapabilityRequirement {
+                key: required_capability_for_action(&action),
+                mode: CapabilityRequirementMode::Required,
+                reason: "Selected review action has a degraded platform implementation.",
+            },
+        )?;
+        if !body.trim().is_empty() && action != "comment" {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::ReviewSummaryComment,
+                    mode: CapabilityRequirementMode::Required,
+                    reason: "Review summary will be posted through the platform comment path.",
+                },
+            )?;
+        }
+        if has_inline_comments {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::InlineComment,
+                    mode: CapabilityRequirementMode::Required,
+                    reason: "Inline findings are being submitted against the active diff.",
+                },
+            )?;
+        }
+        if has_suggestions {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::SuggestionMarkup,
+                    mode: CapabilityRequirementMode::Advisory,
+                    reason:
+                        "Inline suggestions will degrade to the platform fallback representation.",
+                },
+            )?;
+        }
+        if !body.trim().is_empty() || has_inline_comments {
+            evaluate_submission_capability(
+                event_log.as_ref(),
+                &run_id,
+                &action,
+                adapter.as_ref(),
+                &capabilities,
+                SubmissionCapabilityRequirement {
+                    key: PlatformCapabilityKey::PendingCommentBatch,
+                    mode: CapabilityRequirementMode::Advisory,
+                    reason: "SignalPR drafts are being published through the platform's non-draft submission path.",
+                },
+            )?;
+        }
+
+        if let Some(ref sha) = head_sha {
             submit_via_native_api(&submission_ctx, sha).await
         } else {
             Err(AppError::InvalidInput(
-                "No head SHA available; falling back to gh CLI".into(),
+                "No head SHA available for GitHub review submission.".into(),
             ))
-        };
-
-        match submission_result {
-            Ok(review_id) => (Some(review_id), true),
-            Err(native_err) => {
-                tracing::info!(
-                    "Native API submission unavailable ({}); falling back to gh CLI",
-                    native_err
-                );
-                submit_via_gh_cli(&submission_ctx).await?;
-                (None, false)
-            }
-        }
+        }?
     };
 
     // Record success
@@ -343,7 +658,7 @@ pub async fn submit_review(
             &conn,
             &sub_id,
             "submitted",
-            gh_review_id.as_deref(),
+            submission_result.review_id.as_deref(),
             None,
             &now_rfc3339,
         )?;
@@ -364,8 +679,10 @@ pub async fn submit_review(
         serde_json::json!({
             "action": action,
             "finding_count": active_findings.len(),
-            "used_native_api": used_native,
-            "gh_review_id": gh_review_id,
+            "used_native_api": true,
+            "platform_review_id": submission_result.review_id,
+            "submission_url": submission_result.url,
+            "notes_created": submission_result.notes_created,
         }),
     );
 
@@ -410,11 +727,10 @@ pub async fn get_submission_history(
 }
 
 /// Submit a single coherent GitHub review via `POST /pulls/{n}/reviews`.
-/// Returns the review ID string on success.
 async fn submit_via_native_api(
     ctx: &SubmissionContext<'_>,
     head_sha: &str,
-) -> Result<String, crate::errors::AppError> {
+) -> Result<crate::platform::adapter::SubmissionResult, crate::errors::AppError> {
     use crate::errors::AppError;
     use crate::providers::github::{
         resolve_api_from_app, CreateReviewPayload, ReviewCommentPayload,
@@ -480,6 +796,7 @@ async fn submit_via_native_api(
         vec![]
     };
 
+    let notes_created = comments.len();
     let payload = CreateReviewPayload {
         commit_id: head_sha.to_string(),
         body: ctx.body.to_string(),
@@ -492,189 +809,14 @@ async fn submit_via_native_api(
         .await
         .map_err(|e| AppError::Transient(format!("Native review submission failed: {}", e)))?;
 
-    Ok(result.id.to_string())
-}
-
-/// Fallback: submit via `gh pr review` CLI + separate inline comments.
-async fn submit_via_gh_cli(ctx: &SubmissionContext<'_>) -> Result<(), crate::errors::AppError> {
-    use crate::errors::AppError;
-
-    let shell = ctx.app.shell();
-    let gh_action = match ctx.action {
-        "approve" => "--approve",
-        "request-changes" => "--request-changes",
-        _ => "--comment",
-    };
-
-    let output = shell
-        .command("gh")
-        .args([
-            "pr",
-            "review",
-            &ctx.pr_number.to_string(),
-            "--repo",
-            &format!("{}/{}", ctx.owner, ctx.repo),
-            gh_action,
-            "--body",
-            ctx.body,
-        ])
-        .output()
-        .await
-        .map_err(|e| AppError::Transient(format!("Failed to run gh: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(AppError::Transient(format!(
-            "gh pr review failed: {}",
-            stderr
-        )));
-    }
-
-    if ctx.anchors_verified {
-        let inline_findings: Vec<&Finding> = ctx
-            .active_findings
-            .iter()
-            .filter(|f| f.diff_new_line.is_some() && f.file_path.is_some())
-            .copied()
-            .collect();
-        if !inline_findings.is_empty() {
-            if let Err(e) = post_inline_comments(ctx, &inline_findings).await {
-                tracing::warn!("Inline comments (best-effort) failed: {}", e);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Phase B: Post inline review comments for findings with valid diff anchors.
-///
-/// Uses the GitHub REST API endpoint:
-///   POST /repos/{owner}/{repo}/pulls/{pr_number}/comments
-///
-/// This is best-effort — failures are logged but never bubble up to the caller,
-/// keeping the main `gh pr review` submission (Phase A) reliable.
-async fn post_inline_comments(
-    ctx: &SubmissionContext<'_>,
-    findings: &[&Finding],
-) -> Result<(), String> {
-    let shell = ctx.app.shell();
-    let mut existing_fingerprints =
-        match crate::providers::github::resolve_api_from_app(ctx.app).await {
-            Ok((api, _)) => fetch_existing_inline_fingerprints(&api, ctx).await,
-            Err(_) => HashSet::new(),
-        };
-
-    // Get HEAD commit SHA (needed for the inline comment API)
-    let sha_output = shell
-        .command("gh")
-        .args([
-            "pr",
-            "view",
-            &ctx.pr_number.to_string(),
-            "--repo",
-            &format!("{}/{}", ctx.owner, ctx.repo),
-            "--json",
-            "headRefOid",
-            "--jq",
-            ".headRefOid",
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to get HEAD SHA: {}", e))?;
-
-    if !sha_output.status.success() {
-        return Err(format!(
-            "Failed to get HEAD SHA: {}",
-            String::from_utf8_lossy(&sha_output.stderr)
-        ));
-    }
-
-    let commit_sha = String::from_utf8_lossy(&sha_output.stdout)
-        .trim()
-        .to_string();
-    if commit_sha.is_empty() {
-        return Err("HEAD SHA is empty".into());
-    }
-
-    for finding in findings {
-        let file_path = match &finding.file_path {
-            Some(fp) => fp.clone(),
-            None => continue,
-        };
-        let line = match finding.diff_new_line {
-            Some(l) => l,
-            None => continue,
-        };
-
-        let severity_label = finding
-            .user_severity_override
-            .as_deref()
-            .unwrap_or(&finding.severity)
-            .to_uppercase();
-        let fingerprint = inline_comment_fingerprint(finding);
-        if !existing_fingerprints.insert(fingerprint.clone()) {
-            continue;
-        }
-        let comment_body = build_inline_comment_body(
-            finding,
-            &severity_label,
-            &fingerprint,
-            SuggestionPlatform::GitHub,
-        );
-
-        tracing::info!(
-            "Posting inline comment on {}:{} — {}",
-            file_path,
-            line,
-            finding.title
-        );
-
-        let line_str = line.to_string();
-        let endpoint = format!(
-            "repos/{}/{}/pulls/{}/comments",
-            ctx.owner, ctx.repo, ctx.pr_number
-        );
-
-        let result = shell
-            .command("gh")
-            .args([
-                "api",
-                &endpoint,
-                "--method",
-                "POST",
-                "-f",
-                &format!("body={}", comment_body),
-                "-f",
-                &format!("commit_id={}", commit_sha),
-                "-f",
-                &format!("path={}", file_path),
-                "-f",
-                "side=RIGHT",
-                "-F",
-                &format!("line={}", line_str),
-            ])
-            .output()
-            .await;
-
-        match result {
-            Ok(out) if out.status.success() => {
-                tracing::info!("Inline comment posted for {}", finding.title);
-            }
-            Ok(out) => {
-                tracing::warn!(
-                    "Inline comment failed for {}: {}",
-                    finding.title,
-                    String::from_utf8_lossy(&out.stderr)
-                );
-            }
-            Err(e) => {
-                tracing::warn!("Inline comment error for {}: {}", finding.title, e);
-            }
-        }
-    }
-
-    Ok(())
+    Ok(crate::platform::adapter::SubmissionResult {
+        review_id: Some(result.id.to_string()),
+        url: Some(format!(
+            "https://github.com/{}/{}/pull/{}#pullrequestreview-{}",
+            ctx.owner, ctx.repo, ctx.pr_number, result.id
+        )),
+        notes_created,
+    })
 }
 
 async fn fetch_existing_inline_fingerprints(
@@ -915,6 +1057,11 @@ fn format_review_body(findings: &[&Finding], summary: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::AppError;
+    use crate::platform::adapter::{
+        CapabilityConstraint, IssueContext, PlatformCapabilities, PlatformId, PlatformReviewTarget,
+        SubmissionPayload, SubmissionResult,
+    };
     use crate::storage::models::Finding;
 
     fn make_finding(severity: &str, title: &str, body: &str, file: Option<&str>) -> Finding {
@@ -948,6 +1095,63 @@ mod tests {
             source_kind: None,
             source_id: None,
             explain_json: None,
+        }
+    }
+
+    struct TestAdapter {
+        name: &'static str,
+        capabilities: PlatformCapabilities,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformAdapter for TestAdapter {
+        fn platform_id(&self) -> PlatformId {
+            PlatformId::GitHub
+        }
+
+        fn platform_name(&self) -> &'static str {
+            self.name
+        }
+
+        fn capabilities(&self) -> PlatformCapabilities {
+            self.capabilities.clone()
+        }
+
+        async fn fetch_review_target(&self) -> Result<PlatformReviewTarget, AppError> {
+            unreachable!("not used in this test")
+        }
+
+        async fn fetch_metadata(
+            &self,
+        ) -> Result<crate::platform::adapter::PlatformMetadata, AppError> {
+            unreachable!("not used in this test")
+        }
+
+        async fn fetch_diff(&self) -> Result<String, AppError> {
+            unreachable!("not used in this test")
+        }
+
+        async fn fetch_issue_context(
+            &self,
+            _issue_ids: &[i64],
+            _max_issues: usize,
+        ) -> Result<Vec<IssueContext>, AppError> {
+            unreachable!("not used in this test")
+        }
+
+        async fn fetch_file_content(
+            &self,
+            _path: &str,
+            _git_ref: &str,
+        ) -> Result<Option<String>, AppError> {
+            unreachable!("not used in this test")
+        }
+
+        async fn submit_review(
+            &self,
+            _payload: SubmissionPayload,
+        ) -> Result<SubmissionResult, AppError> {
+            unreachable!("not used in this test")
         }
     }
 
@@ -1035,7 +1239,7 @@ mod tests {
                 submitted_at: None,
                 status: "failed".into(),
                 commit_id_at_submission: None,
-                gh_review_id: None,
+                platform_review_id: None,
                 error_message: None,
                 idempotency_key: None,
                 attempt_count: Some(2),
@@ -1048,7 +1252,7 @@ mod tests {
                 submitted_at: None,
                 status: "failed".into(),
                 commit_id_at_submission: None,
-                gh_review_id: None,
+                platform_review_id: None,
                 error_message: None,
                 idempotency_key: None,
                 attempt_count: Some(5),
@@ -1056,6 +1260,56 @@ mod tests {
             },
         ];
         assert_eq!(next_attempt_count(&h), 6);
+    }
+
+    #[test]
+    fn test_block_on_missing_capability_rejects_unsupported_action() {
+        let adapter = TestAdapter {
+            name: "Bitbucket",
+            capabilities: PlatformCapabilities {
+                platform: PlatformId::Bitbucket,
+                capabilities: vec![],
+            },
+        };
+        let capability = PlatformCapability {
+            key: PlatformCapabilityKey::PendingCommentBatch,
+            support: CapabilitySupport::None,
+            constraints: vec![CapabilityConstraint {
+                code: "unsupported_pending_batch".into(),
+                message: "Pending review batches are not supported on this platform.".into(),
+            }],
+            fallback: None,
+        };
+
+        let error = block_on_missing_capability(&capability, &adapter).unwrap_err();
+        let message = match error {
+            AppError::InvalidInput(message) => message,
+            other => panic!("expected invalid input error, got {other:?}"),
+        };
+        assert!(message.contains("Bitbucket"));
+        assert!(message.contains("Pending review batches are not supported"));
+    }
+
+    #[test]
+    fn test_block_on_missing_capability_allows_partial_support() {
+        let adapter = TestAdapter {
+            name: "GitLab",
+            capabilities: PlatformCapabilities {
+                platform: PlatformId::GitLab,
+                capabilities: vec![],
+            },
+        };
+        let capability = PlatformCapability {
+            key: PlatformCapabilityKey::RequestChangesReview,
+            support: CapabilitySupport::Partial,
+            constraints: vec![CapabilityConstraint {
+                code: "maps_to_unapprove".into(),
+                message: "Request changes currently maps to an approval removal flow.".into(),
+            }],
+            fallback: None,
+        };
+
+        assert!(block_on_missing_capability(&capability, &adapter).is_ok());
     }
 
     #[test]

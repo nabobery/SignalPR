@@ -50,6 +50,8 @@ function makeRow(overrides: Partial<InboxReviewRow> = {}): InboxReviewRow {
     draft: false,
     has_saved_review_draft: false,
     metadata_freshness: { fetched_at: "2026-01-15T12:00:00Z", is_stale: false },
+    platform_capabilities: null,
+    platform_capabilities_fetched_at: null,
     review_freshness: {
       state: "current",
       reviewed_at: "2026-01-15T12:00:00Z",

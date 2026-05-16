@@ -33,6 +33,8 @@ pub struct PullRequest {
     // Platform metadata snapshot
     pub platform_metadata_json: Option<String>,
     pub platform_metadata_fetched_at: Option<String>,
+    pub platform_capabilities_json: Option<String>,
+    pub platform_capabilities_fetched_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,7 +134,7 @@ pub struct SubmissionRecord {
     pub submitted_at: Option<String>,
     pub status: String,
     pub commit_id_at_submission: Option<String>,
-    pub gh_review_id: Option<String>,
+    pub platform_review_id: Option<String>,
     pub error_message: Option<String>,
     // V3 fields
     pub idempotency_key: Option<String>,
@@ -248,6 +250,8 @@ pub struct InboxReviewRow {
     pub draft: bool,
     pub has_saved_review_draft: bool,
     pub metadata_freshness: InboxMetadataFreshness,
+    pub platform_capabilities: Option<crate::platform::adapter::PlatformCapabilities>,
+    pub platform_capabilities_fetched_at: Option<String>,
     pub review_freshness: InboxReviewFreshness,
     pub reviewer_signal: InboxReviewerSignal,
     pub lane_health: InboxLaneHealth,

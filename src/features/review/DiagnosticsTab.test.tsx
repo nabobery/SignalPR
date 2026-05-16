@@ -2,21 +2,41 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DiagnosticsTab } from "./DiagnosticsTab";
-import type { ContextPackSummary, LocalChecksSummary } from "../../lib/types";
+import type { ContextPackSummary, LocalChecksSummary, PlatformCapabilities } from "../../lib/types";
+
+const mockGetEnvironmentSummary = vi.fn();
+const mockGetEventLog = vi.fn();
+const mockRefreshPrMetadata = vi.fn();
 
 vi.mock("../../lib/ipc", () => ({
-  getEventLog: vi.fn(),
+  getEnvironmentSummary: (...args: unknown[]) => mockGetEnvironmentSummary(...args),
+  getEventLog: (...args: unknown[]) => mockGetEventLog(...args),
+  refreshPrMetadata: (...args: unknown[]) => mockRefreshPrMetadata(...args),
   parseError: (err: unknown) => ({ code: "unknown", message: String(err) }),
 }));
 
 describe("DiagnosticsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetEnvironmentSummary.mockResolvedValue({
+      can_review: true,
+      can_submit: true,
+      available_providers: ["codex"],
+      warnings: [],
+      tools: [
+        {
+          tool_name: "gitlab_token",
+          status: "ready",
+          version: null,
+          message: "GITLAB_TOKEN set",
+          checked_at: "2026-05-16T10:00:00Z",
+        },
+      ],
+    });
   });
 
   it("renders event entries after loading", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+    mockGetEventLog.mockResolvedValue([
       {
         timestamp: "2026-05-01T10:00:00Z",
         event_type: "lane_call_started",
@@ -37,24 +57,21 @@ describe("DiagnosticsTab", () => {
   });
 
   it("shows loading state initially", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    mockGetEventLog.mockReturnValue(new Promise(() => {}));
 
     render(<DiagnosticsTab runId="run-1" />);
     expect(document.querySelector(".animate-spin")).toBeInTheDocument();
   });
 
   it("shows error when event log fetch fails", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockRejectedValue("Network error");
+    mockGetEventLog.mockRejectedValue("Network error");
 
     render(<DiagnosticsTab runId="run-1" />);
     expect(await screen.findByText("Network error")).toBeInTheDocument();
   });
 
   it("filters events by event_type", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+    mockGetEventLog.mockResolvedValue([
       {
         timestamp: "2026-05-01T10:00:00Z",
         event_type: "lane_call_started",
@@ -81,16 +98,14 @@ describe("DiagnosticsTab", () => {
   });
 
   it("shows empty state when no events exist", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockGetEventLog.mockResolvedValue([]);
 
     render(<DiagnosticsTab runId="run-1" />);
     expect(await screen.findByText("No events recorded for this run.")).toBeInTheDocument();
   });
 
   it("renders Context Pack section when summary is provided", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockGetEventLog.mockResolvedValue([]);
 
     const contextPack: ContextPackSummary = {
       total_bytes: 2048,
@@ -116,8 +131,7 @@ describe("DiagnosticsTab", () => {
   });
 
   it("renders Local Checks section when summary is provided", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockGetEventLog.mockResolvedValue([]);
 
     const localChecks: LocalChecksSummary = {
       total_errors: 3,
@@ -143,8 +157,7 @@ describe("DiagnosticsTab", () => {
   });
 
   it("expands event payload on click", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+    mockGetEventLog.mockResolvedValue([
       {
         timestamp: "2026-05-01T10:00:00Z",
         event_type: "lane_call_completed",
@@ -162,8 +175,7 @@ describe("DiagnosticsTab", () => {
   });
 
   it("renders Issue Context section when context pack has issue items", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockGetEventLog.mockResolvedValue([]);
 
     const contextPack: ContextPackSummary = {
       total_bytes: 3000,
@@ -206,8 +218,7 @@ describe("DiagnosticsTab", () => {
   });
 
   it("does not render Issue Context section when no issue items exist", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockGetEventLog.mockResolvedValue([]);
 
     const contextPack: ContextPackSummary = {
       total_bytes: 1000,
@@ -225,11 +236,109 @@ describe("DiagnosticsTab", () => {
   });
 
   it("renders evidence trail header", async () => {
-    const { getEventLog } = await import("../../lib/ipc");
-    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    mockGetEventLog.mockResolvedValue([]);
 
     render(<DiagnosticsTab runId="run-1" />);
 
     expect(await screen.findByText("Evidence trail")).toBeInTheDocument();
+  });
+
+  it("renders platform capability diagnostics", async () => {
+    mockGetEventLog.mockResolvedValue([]);
+
+    const capabilities: PlatformCapabilities = {
+      platform: "gitlab",
+      capabilities: [
+        {
+          key: "pr_metadata",
+          support: "full",
+          constraints: [],
+          fallback: null,
+        },
+        {
+          key: "request_changes_review",
+          support: "partial",
+          constraints: [
+            {
+              code: "maps_to_unapprove",
+              message: "Request changes currently maps to an approval removal flow.",
+            },
+          ],
+          fallback: null,
+        },
+        {
+          key: "pending_comment_batch",
+          support: "none",
+          constraints: [
+            {
+              code: "unsupported_pending_batch",
+              message: "Pending review batches are not supported on this platform.",
+            },
+          ],
+          fallback: {
+            action: "body_only_summary",
+            reason: "SignalPR will collapse these findings into the review body.",
+          },
+        },
+      ],
+    };
+
+    const user = userEvent.setup();
+    render(
+      <DiagnosticsTab
+        runId="run-1"
+        platformCapabilities={capabilities}
+        platformCapabilitiesFetchedAt="2026-05-16T10:00:00Z"
+      />,
+    );
+
+    expect(await screen.findByText(/1 full, 1 partial, 1 blocked/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Platform capabilities/i }));
+
+    expect(screen.getByText("Auth ready")).toBeInTheDocument();
+    expect(screen.getByText("request_changes_review")).toBeInTheDocument();
+    expect(
+      screen.getByText("Request changes currently maps to an approval removal flow."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Fallback: body_only_summary · SignalPR will collapse these findings/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders auth diagnostics when platform auth is not ready", async () => {
+    mockGetEventLog.mockResolvedValue([]);
+    mockGetEnvironmentSummary.mockResolvedValue({
+      can_review: true,
+      can_submit: false,
+      available_providers: ["codex"],
+      warnings: ["No submit path ready"],
+      tools: [
+        {
+          tool_name: "gitlab_token",
+          status: "missing",
+          version: null,
+          message: "Optional: Set GITLAB_TOKEN for GitLab MR submission",
+          checked_at: "2026-05-16T10:00:00Z",
+        },
+      ],
+    });
+
+    render(
+      <DiagnosticsTab
+        runId="run-1"
+        platformCapabilities={{
+          platform: "gitlab",
+          capabilities: [{ key: "pr_metadata", support: "full", constraints: [], fallback: null }],
+        }}
+      />,
+    );
+
+    await screen.findByText(/1 full, 0 partial, 0 blocked/);
+    await userEvent.click(screen.getByRole("button", { name: /Platform capabilities/i }));
+
+    expect(screen.getByText("Auth not ready")).toBeInTheDocument();
+    expect(
+      screen.getByText("Optional: Set GITLAB_TOKEN for GitLab MR submission"),
+    ).toBeInTheDocument();
   });
 });
