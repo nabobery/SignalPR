@@ -158,14 +158,19 @@ pub fn has_secret(field: IntegrationSecretField) -> Result<bool, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{LazyLock, Mutex, MutexGuard};
 
-    fn setup() {
+    static TEST_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn setup() -> MutexGuard<'static, ()> {
+        let guard = TEST_GUARD.lock().unwrap();
         test_store::clear();
+        guard
     }
 
     #[test]
     fn round_trip_store_get_delete() {
-        setup();
+        let _guard = setup();
         let field = IntegrationSecretField::JiraApiToken;
         store_secret(field, "jira-token").unwrap();
         assert_eq!(get_secret(field).unwrap(), Some("jira-token".to_string()));
@@ -175,7 +180,7 @@ mod tests {
 
     #[test]
     fn resolve_secret_prefers_keychain_when_env_absent() {
-        setup();
+        let _guard = setup();
         let field = IntegrationSecretField::LinearApiKey;
         store_secret(field, "linear-token").unwrap();
         let (value, source) = resolve_secret(field).unwrap();
@@ -185,7 +190,7 @@ mod tests {
 
     #[test]
     fn store_rejects_empty_values() {
-        setup();
+        let _guard = setup();
         let field = IntegrationSecretField::LinearApiKey;
         assert!(store_secret(field, " ").is_err());
     }

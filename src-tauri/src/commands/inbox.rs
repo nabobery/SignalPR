@@ -8,9 +8,9 @@ use tauri_plugin_shell::ShellExt;
 use crate::commands::environment::EnvironmentSummary;
 use crate::storage::db::AppDb;
 use crate::storage::models::{
-    AgentRun, InboxAttentionSummary, InboxLaneHealth, InboxMetadataFreshness, InboxReviewRow,
-    InboxReviewerSignal, InboxSection, InboxSubmissionHealth, InboxWorkspaceRow, ReviewRun,
-    SubmissionRecord,
+    AgentRun, InboxAttentionSummary, InboxLaneHealth, InboxMetadataFreshness, InboxReviewFreshness,
+    InboxReviewRow, InboxReviewerSignal, InboxSection, InboxSubmissionHealth, InboxWorkspaceRow,
+    ReviewRun, SubmissionRecord,
 };
 use crate::storage::queries::{self, InboxPrCandidate};
 
@@ -151,10 +151,17 @@ fn build_queue_row(
     let reviewer_signal = derive_reviewer_signal(&metadata, github_login);
     let lane_health = derive_lane_health(latest_run, agent_runs);
     let submission_health = derive_submission_health(submissions);
-    let queue_state = classify_queue_state(
+    let review_freshness = derive_review_freshness(latest_run, &metadata, &submission_health);
+    let allowed_actions = derive_allowed_actions(
         latest_run,
         &metadata,
         &metadata_freshness,
+        &review_freshness,
+    );
+    let queue_state = classify_queue_state(
+        latest_run,
+        &metadata_freshness,
+        &review_freshness,
         &reviewer_signal,
         &lane_health,
         &submission_health,
@@ -201,11 +208,12 @@ fn build_queue_row(
         draft: metadata.draft,
         has_saved_review_draft,
         metadata_freshness,
+        review_freshness,
         reviewer_signal,
         lane_health,
         submission_health,
         attention_reasons: attention_reasons.clone(),
-        allowed_actions: derive_allowed_actions(latest_run, &metadata),
+        allowed_actions,
     };
 
     Some(DerivedQueueRow {
@@ -377,10 +385,48 @@ fn derive_submission_health(submissions: &[SubmissionRecord]) -> InboxSubmission
     }
 }
 
-fn classify_queue_state(
+fn derive_review_freshness(
     latest_run: &ReviewRun,
     metadata: &ParsedPlatformMetadata,
+    submission_health: &InboxSubmissionHealth,
+) -> InboxReviewFreshness {
+    let current_head_sha = metadata.head_sha.clone();
+    let reviewed_head_sha = if latest_run.status == "submitted" {
+        submission_health
+            .commit_id
+            .clone()
+            .or_else(|| latest_run.head_sha_at_run.clone())
+    } else {
+        latest_run
+            .head_sha_at_run
+            .clone()
+            .or_else(|| submission_health.commit_id.clone())
+    };
+    let has_unreviewed_updates = reviewed_head_sha
+        .as_deref()
+        .zip(current_head_sha.as_deref())
+        .is_some_and(|(reviewed, current)| reviewed != current);
+
+    InboxReviewFreshness {
+        state: if has_unreviewed_updates {
+            "stale".into()
+        } else {
+            "current".into()
+        },
+        reviewed_at: latest_run
+            .completed_at
+            .clone()
+            .or_else(|| latest_run.started_at.clone()),
+        reviewed_head_sha,
+        current_head_sha,
+        has_unreviewed_updates,
+    }
+}
+
+fn classify_queue_state(
+    latest_run: &ReviewRun,
     metadata_freshness: &InboxMetadataFreshness,
+    review_freshness: &InboxReviewFreshness,
     reviewer_signal: &InboxReviewerSignal,
     lane_health: &InboxLaneHealth,
     submission_health: &InboxSubmissionHealth,
@@ -401,14 +447,13 @@ fn classify_queue_state(
         return "in_progress".into();
     }
 
-    let current_head = metadata.head_sha.as_deref();
-    let latest_run_head = latest_run.head_sha_at_run.as_deref();
-    let last_submission_head = submission_health.commit_id.as_deref();
+    let current_head = review_freshness.current_head_sha.as_deref();
+    let reviewed_head = review_freshness.reviewed_head_sha.as_deref();
     let current_head_matches_submission = current_head
-        .zip(last_submission_head)
+        .zip(submission_health.commit_id.as_deref())
         .is_some_and(|(current, submitted)| current == submitted);
     let current_head_matches_run = current_head
-        .zip(latest_run_head)
+        .zip(reviewed_head)
         .is_some_and(|(current, reviewed)| current == reviewed);
     let has_recent_submission = submission_health.state == "submitted"
         && submission_health
@@ -430,23 +475,22 @@ fn classify_queue_state(
         };
     }
 
-    if latest_run.status == "ready" && (current_head_matches_run || current_head.is_none()) {
-        return "ready_to_submit".into();
+    if matches!(latest_run.status.as_str(), "ready" | "submitted")
+        && review_freshness.has_unreviewed_updates
+    {
+        return "updated_since_review".into();
     }
 
     if reviewer_signal.precision == "exact" {
         return "needs_your_review".into();
     }
 
-    if reviewer_signal.has_signal
-        || current_head
-            .zip(latest_run_head)
-            .is_some_and(|(current, reviewed)| current != reviewed)
-        || current_head
-            .zip(last_submission_head)
-            .is_some_and(|(current, submitted)| current != submitted)
-    {
+    if reviewer_signal.has_signal || review_freshness.has_unreviewed_updates {
         return "review_requested".into();
+    }
+
+    if latest_run.status == "ready" && (current_head_matches_run || current_head.is_none()) {
+        return "ready_to_submit".into();
     }
 
     if latest_run.status == "ready" {
@@ -484,6 +528,8 @@ fn derive_attention_reasons(
 fn derive_allowed_actions(
     latest_run: &ReviewRun,
     metadata: &ParsedPlatformMetadata,
+    metadata_freshness: &InboxMetadataFreshness,
+    review_freshness: &InboxReviewFreshness,
 ) -> Vec<String> {
     let mut actions = vec!["open".to_string()];
     if matches!(
@@ -494,6 +540,12 @@ fn derive_allowed_actions(
     }
     if metadata.platform != "unknown" {
         actions.push("refresh_metadata".into());
+    }
+    if !metadata_freshness.is_stale
+        && matches!(latest_run.status.as_str(), "ready" | "submitted")
+        && review_freshness.has_unreviewed_updates
+    {
+        actions.push("rerun".into());
     }
     actions
 }
@@ -519,6 +571,7 @@ fn build_attention_summary(rows: &[DerivedQueueRow]) -> InboxAttentionSummary {
 
 fn build_sections(rows: Vec<DerivedQueueRow>) -> Vec<InboxSection> {
     let mut needs_your_review = Vec::new();
+    let mut updated_since_review = Vec::new();
     let mut review_requested = Vec::new();
     let mut attention_needed = Vec::new();
     let mut in_progress = Vec::new();
@@ -529,6 +582,7 @@ fn build_sections(rows: Vec<DerivedQueueRow>) -> Vec<InboxSection> {
     for row in rows {
         match row.row.queue_state.as_str() {
             "needs_your_review" => needs_your_review.push(row.row),
+            "updated_since_review" => updated_since_review.push(row.row),
             "review_requested" => review_requested.push(row.row),
             "attention_needed" => attention_needed.push(row.row),
             "in_progress" => in_progress.push(row.row),
@@ -545,6 +599,12 @@ fn build_sections(rows: Vec<DerivedQueueRow>) -> Vec<InboxSection> {
         "needs_your_review",
         "Needs your review",
         needs_your_review,
+    );
+    push_section(
+        &mut sections,
+        "updated_since_review",
+        "Updated since review",
+        updated_since_review,
     );
     push_section(
         &mut sections,
@@ -683,8 +743,9 @@ mod tests {
     use super::*;
     use crate::storage::db::init_db_in_memory;
     use crate::storage::models::{
-        InboxLaneHealth, InboxMetadataFreshness, InboxReviewRow, InboxReviewerSignal,
-        InboxSubmissionHealth, PullRequest, ReviewRun, SubmissionRecord, Workspace,
+        InboxLaneHealth, InboxMetadataFreshness, InboxReviewFreshness, InboxReviewRow,
+        InboxReviewerSignal, InboxSubmissionHealth, PullRequest, ReviewRun, SubmissionRecord,
+        Workspace,
     };
 
     fn insert_workspace_and_pr(conn: &rusqlite::Connection, metadata_json: Option<&str>) {
@@ -760,6 +821,13 @@ mod tests {
                     fetched_at: None,
                     is_stale: false,
                 },
+                review_freshness: InboxReviewFreshness {
+                    state: "current".into(),
+                    reviewed_at: Some("2026-01-01T00:00:00Z".into()),
+                    reviewed_head_sha: Some("sha-reviewed".into()),
+                    current_head_sha: Some("sha-reviewed".into()),
+                    has_unreviewed_updates: false,
+                },
                 reviewer_signal: InboxReviewerSignal {
                     has_signal: precision != "none",
                     label: if precision == "exact" {
@@ -798,7 +866,7 @@ mod tests {
         insert_workspace_and_pr(
             &conn,
             Some(
-                r#"{"platform":"github","pr_body":null,"head_sha":"sha-2","base_sha":"sha-1","base_ref":"main","head_ref":"feature/auth","draft":false,"labels":[],"requested_reviewers":["mona"],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#,
+                r#"{"platform":"github","pr_body":null,"head_sha":"sha-1","base_sha":"sha-base","base_ref":"main","head_ref":"feature/auth","draft":false,"labels":[],"requested_reviewers":["mona"],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#,
             ),
         );
         queries::insert_review_run(
@@ -817,6 +885,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -853,6 +924,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -912,6 +986,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -920,6 +997,111 @@ mod tests {
         let row = build_queue_row(&candidate, None, &projection).unwrap();
         assert_eq!(row.row.queue_state, "attention_needed");
         assert!(row.row.metadata_freshness.is_stale);
+    }
+
+    #[test]
+    fn newer_head_sha_becomes_updated_since_review() {
+        let db = init_db_in_memory().unwrap();
+        let conn = db.0.lock().unwrap();
+        insert_workspace_and_pr(
+            &conn,
+            Some(
+                r#"{"platform":"github","pr_body":null,"head_sha":"sha-3","base_sha":"sha-1","base_ref":"main","head_ref":"feature/auth","draft":false,"labels":[],"requested_reviewers":[],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#,
+            ),
+        );
+        queries::insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run-1".into(),
+                pr_id: "pr-1".into(),
+                status: "ready".into(),
+                started_at: Some("2026-01-01T00:00:00Z".into()),
+                completed_at: Some("2026-01-01T00:05:00Z".into()),
+                error_message: None,
+                head_sha_at_run: Some("sha-2".into()),
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
+            },
+        )
+        .unwrap();
+
+        let (candidate, projection) = load_candidate_and_projection(&conn);
+        let row = build_queue_row(&candidate, None, &projection).unwrap();
+        assert_eq!(row.row.queue_state, "updated_since_review");
+        assert_eq!(row.row.review_freshness.state, "stale");
+        assert!(row.row.review_freshness.has_unreviewed_updates);
+        assert_eq!(
+            row.row.review_freshness.reviewed_head_sha.as_deref(),
+            Some("sha-2")
+        );
+        assert_eq!(
+            row.row.review_freshness.current_head_sha.as_deref(),
+            Some("sha-3")
+        );
+        assert!(row
+            .row
+            .allowed_actions
+            .iter()
+            .any(|action| action == "rerun"));
+    }
+
+    #[test]
+    fn stale_metadata_does_not_become_updated_since_review() {
+        let db = init_db_in_memory().unwrap();
+        let conn = db.0.lock().unwrap();
+        insert_workspace_and_pr(
+            &conn,
+            Some(
+                r#"{"platform":"github","pr_body":null,"head_sha":"sha-3","base_sha":"sha-1","base_ref":"main","head_ref":"feature/auth","draft":false,"labels":[],"requested_reviewers":[],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#,
+            ),
+        );
+        queries::update_pull_request_metadata(
+            &conn,
+            "pr-1",
+            r#"{"platform":"github","pr_body":null,"head_sha":"sha-3","base_sha":"sha-1","base_ref":"main","head_ref":"feature/auth","draft":false,"labels":[],"requested_reviewers":[],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#,
+            &(Utc::now() - Duration::hours(30)).to_rfc3339(),
+        )
+        .unwrap();
+        queries::insert_review_run(
+            &conn,
+            &ReviewRun {
+                id: "run-1".into(),
+                pr_id: "pr-1".into(),
+                status: "ready".into(),
+                started_at: Some("2026-01-01T00:00:00Z".into()),
+                completed_at: Some("2026-01-01T00:05:00Z".into()),
+                error_message: None,
+                head_sha_at_run: Some("sha-2".into()),
+                baseline_run_id: None,
+                metrics_json: None,
+                analysis_diff_hash: None,
+                analysis_diff_text: None,
+                context_pack_json: None,
+                local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
+            },
+        )
+        .unwrap();
+
+        let (candidate, projection) = load_candidate_and_projection(&conn);
+        let row = build_queue_row(&candidate, None, &projection).unwrap();
+        assert_eq!(row.row.queue_state, "attention_needed");
+        assert_eq!(row.row.review_freshness.state, "stale");
+        assert!(row.row.review_freshness.has_unreviewed_updates);
+        assert!(!row
+            .row
+            .allowed_actions
+            .iter()
+            .any(|action| action == "rerun"));
     }
 
     #[test]
@@ -938,14 +1120,17 @@ mod tests {
     fn mixed_precision_review_rows_split_into_two_sections() {
         let sections = build_sections(vec![
             make_section_row("needs_your_review", "exact"),
+            make_section_row("updated_since_review", "none"),
             make_section_row("review_requested", "repo"),
         ]);
 
-        assert_eq!(sections.len(), 2);
+        assert_eq!(sections.len(), 3);
         assert_eq!(sections[0].id, "needs_your_review");
         assert_eq!(sections[0].title, "Needs your review");
-        assert_eq!(sections[1].id, "review_requested");
-        assert_eq!(sections[1].title, "Review requested");
+        assert_eq!(sections[1].id, "updated_since_review");
+        assert_eq!(sections[1].title, "Updated since review");
+        assert_eq!(sections[2].id, "review_requested");
+        assert_eq!(sections[2].title, "Review requested");
     }
 
     #[test]
@@ -974,6 +1159,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();

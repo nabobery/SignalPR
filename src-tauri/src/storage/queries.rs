@@ -22,6 +22,15 @@ pub struct InboxPrCandidate {
     pub last_activity_at: String,
 }
 
+pub struct PullRequestSnapshotUpdate<'a> {
+    pub diff_text: &'a str,
+    pub changed_files_json: &'a str,
+    pub diff_hash: &'a str,
+    pub fetched_at_rfc3339: &'a str,
+    pub metadata_json: Option<&'a str>,
+    pub metadata_fetched_at_rfc3339: Option<&'a str>,
+}
+
 fn sql_placeholders(count: usize) -> String {
     std::iter::repeat_n("?", count)
         .collect::<Vec<_>>()
@@ -125,6 +134,33 @@ pub fn update_pull_request_diff(
     Ok(())
 }
 
+pub fn update_pull_request_snapshot(
+    conn: &Connection,
+    pr_id: &str,
+    update: &PullRequestSnapshotUpdate<'_>,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE pull_requests
+         SET diff_text = ?1,
+             changed_files = ?2,
+             diff_hash = ?3,
+             fetched_at = ?4,
+             platform_metadata_json = ?5,
+             platform_metadata_fetched_at = ?6
+         WHERE id = ?7",
+        params![
+            update.diff_text,
+            update.changed_files_json,
+            update.diff_hash,
+            update.fetched_at_rfc3339,
+            update.metadata_json,
+            update.metadata_fetched_at_rfc3339,
+            pr_id
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn update_pull_request_metadata(
     conn: &Connection,
     pr_id: &str,
@@ -142,8 +178,23 @@ pub fn update_pull_request_metadata(
 
 pub fn insert_review_run(conn: &Connection, run: &ReviewRun) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO review_runs (id, pr_id, status, started_at, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![run.id, run.pr_id, run.status, run.started_at, run.head_sha_at_run, run.baseline_run_id, run.metrics_json, run.analysis_diff_hash, run.analysis_diff_text, run.context_pack_json, run.local_checks_json],
+        "INSERT INTO review_runs (id, pr_id, status, started_at, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json, rerun_trigger_source, rerun_reason, rerun_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            run.id,
+            run.pr_id,
+            run.status,
+            run.started_at,
+            run.head_sha_at_run,
+            run.baseline_run_id,
+            run.metrics_json,
+            run.analysis_diff_hash,
+            run.analysis_diff_text,
+            run.context_pack_json,
+            run.local_checks_json,
+            run.rerun_trigger_source,
+            run.rerun_reason,
+            run.rerun_scope
+        ],
     )?;
     Ok(())
 }
@@ -173,7 +224,7 @@ pub fn get_review_run(
     run_id: &str,
 ) -> Result<Option<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE id = ?1",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json, rerun_trigger_source, rerun_reason, rerun_scope FROM review_runs WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![run_id], |row| {
         Ok(ReviewRun {
@@ -190,6 +241,9 @@ pub fn get_review_run(
             analysis_diff_text: row.get(10)?,
             context_pack_json: row.get(11)?,
             local_checks_json: row.get(12)?,
+            rerun_trigger_source: row.get(13)?,
+            rerun_reason: row.get(14)?,
+            rerun_scope: row.get(15)?,
         })
     })?;
     match rows.next() {
@@ -200,7 +254,7 @@ pub fn get_review_run(
 
 pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json, rerun_trigger_source, rerun_reason, rerun_scope FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(ReviewRun {
@@ -217,6 +271,9 @@ pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, r
             analysis_diff_text: row.get(10)?,
             context_pack_json: row.get(11)?,
             local_checks_json: row.get(12)?,
+            rerun_trigger_source: row.get(13)?,
+            rerun_reason: row.get(14)?,
+            rerun_scope: row.get(15)?,
         })
     })?;
     rows.collect()
@@ -800,7 +857,7 @@ pub fn get_latest_review_run_for_pr(
     pr_id: &str,
 ) -> Result<Option<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json, rerun_trigger_source, rerun_reason, rerun_scope
          FROM review_runs
          WHERE pr_id = ?1
          ORDER BY COALESCE(completed_at, started_at) DESC, id DESC
@@ -821,6 +878,9 @@ pub fn get_latest_review_run_for_pr(
             analysis_diff_text: row.get(10)?,
             context_pack_json: row.get(11)?,
             local_checks_json: row.get(12)?,
+            rerun_trigger_source: row.get(13)?,
+            rerun_reason: row.get(14)?,
+            rerun_scope: row.get(15)?,
         })
     })?;
     match rows.next() {
@@ -838,7 +898,7 @@ pub fn list_latest_review_runs_for_prs(
     }
 
     let sql = format!(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json, rerun_trigger_source, rerun_reason, rerun_scope
          FROM review_runs
          WHERE pr_id IN ({})
          ORDER BY pr_id ASC, COALESCE(completed_at, started_at) DESC, id DESC",
@@ -860,6 +920,9 @@ pub fn list_latest_review_runs_for_prs(
             analysis_diff_text: row.get(10)?,
             context_pack_json: row.get(11)?,
             local_checks_json: row.get(12)?,
+            rerun_trigger_source: row.get(13)?,
+            rerun_reason: row.get(14)?,
+            rerun_scope: row.get(15)?,
         })
     })?;
 
@@ -1056,6 +1119,16 @@ fn empty_inbox_metadata_freshness() -> InboxMetadataFreshness {
     }
 }
 
+fn empty_inbox_review_freshness() -> InboxReviewFreshness {
+    InboxReviewFreshness {
+        state: "current".into(),
+        reviewed_at: None,
+        reviewed_head_sha: None,
+        current_head_sha: None,
+        has_unreviewed_updates: false,
+    }
+}
+
 fn empty_inbox_reviewer_signal() -> InboxReviewerSignal {
     InboxReviewerSignal {
         has_signal: false,
@@ -1138,6 +1211,7 @@ pub fn list_recent_review_runs(
             draft: false,
             has_saved_review_draft: false,
             metadata_freshness: empty_inbox_metadata_freshness(),
+            review_freshness: empty_inbox_review_freshness(),
             reviewer_signal: empty_inbox_reviewer_signal(),
             lane_health: empty_inbox_lane_health(),
             submission_health: empty_inbox_submission_health(),
@@ -1200,6 +1274,7 @@ pub fn list_incomplete_review_runs_enriched(
             draft: false,
             has_saved_review_draft: false,
             metadata_freshness: empty_inbox_metadata_freshness(),
+            review_freshness: empty_inbox_review_freshness(),
             reviewer_signal: empty_inbox_reviewer_signal(),
             lane_health: empty_inbox_lane_health(),
             submission_health: empty_inbox_submission_health(),
@@ -1299,6 +1374,18 @@ pub fn update_review_run_analysis_diff(
     conn.execute(
         "UPDATE review_runs SET analysis_diff_text = ?1, analysis_diff_hash = ?2 WHERE id = ?3",
         params![analysis_diff_text, analysis_diff_hash, run_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_review_run_head_sha_at_run(
+    conn: &Connection,
+    run_id: &str,
+    head_sha_at_run: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE review_runs SET head_sha_at_run = ?1 WHERE id = ?2",
+        params![head_sha_at_run, run_id],
     )?;
     Ok(())
 }
@@ -1544,6 +1631,9 @@ mod tests {
             analysis_diff_text: None,
             context_pack_json: None,
             local_checks_json: None,
+            rerun_trigger_source: None,
+            rerun_reason: None,
+            rerun_scope: None,
         };
         insert_review_run(&conn, &run).unwrap();
 
@@ -1609,6 +1699,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -1719,6 +1812,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -1853,6 +1949,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -1957,6 +2056,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -2104,6 +2206,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();
@@ -2168,6 +2273,9 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )
         .unwrap();

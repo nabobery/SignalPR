@@ -265,6 +265,16 @@ CREATE INDEX IF NOT EXISTS idx_submission_records_run_status
   ON submission_records(review_run_id, status, submitted_at DESC);
 "#;
 
+const MIGRATION_V13: &str = r#"
+-- Rerun metadata
+ALTER TABLE review_runs ADD COLUMN rerun_trigger_source TEXT;
+ALTER TABLE review_runs ADD COLUMN rerun_reason TEXT;
+ALTER TABLE review_runs ADD COLUMN rerun_scope TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_review_runs_rerun_reason
+  ON review_runs(rerun_reason);
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -366,6 +376,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V12)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (12)",
+            [],
+        )?;
+    }
+
+    if current_version < 13 {
+        conn.execute_batch(MIGRATION_V13)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (13)",
             [],
         )?;
     }

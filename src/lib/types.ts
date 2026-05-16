@@ -201,6 +201,17 @@ export interface ReviewDeltaSnapshot {
   }[];
 }
 
+export interface ReviewFreshnessSummary {
+  is_rerun: boolean;
+  baseline_run_id: string | null;
+  reviewed_head_sha: string | null;
+  current_head_sha: string | null;
+  head_changed_since_review: boolean;
+  rerun_trigger_source: "workspace" | "queue" | null;
+  rerun_reason: "manual" | "head_updated" | "metadata_refresh" | null;
+  rerun_scope: "full_pr" | null;
+}
+
 export interface ReviewSnapshot {
   run_id: string;
   pr_id: string;
@@ -217,6 +228,7 @@ export interface ReviewSnapshot {
   baseline_run_id: string | null;
   metrics: RunScorecard | null;
   delta: ReviewDeltaSnapshot | null;
+  review_freshness: ReviewFreshnessSummary;
   decisions_by_finding_id: Record<string, string> | null;
   // Analysis artifacts
   context_pack_summary: ContextPackSummary | null;
@@ -522,6 +534,7 @@ export interface InboxReviewRow {
   draft: boolean;
   has_saved_review_draft: boolean;
   metadata_freshness: InboxMetadataFreshness;
+  review_freshness: InboxReviewFreshness;
   reviewer_signal: InboxReviewerSignal;
   lane_health: InboxLaneHealth;
   submission_health: InboxSubmissionHealth;
@@ -548,6 +561,14 @@ export interface EnvironmentSummary {
 export interface InboxMetadataFreshness {
   fetched_at: string | null;
   is_stale: boolean;
+}
+
+export interface InboxReviewFreshness {
+  state: "current" | "stale";
+  reviewed_at: string | null;
+  reviewed_head_sha: string | null;
+  current_head_sha: string | null;
+  has_unreviewed_updates: boolean;
 }
 
 export interface InboxReviewerSignal {

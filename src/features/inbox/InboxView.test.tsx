@@ -16,10 +16,12 @@ vi.mock("../intake/IntakeQuickAction", () => ({
 const mockGetInboxOverview = vi.fn();
 const mockResumeReview = vi.fn();
 const mockRefreshPrMetadata = vi.fn();
+const mockRerunReview = vi.fn();
 vi.mock("../../lib/ipc", () => ({
   getInboxOverview: (...args: unknown[]) => mockGetInboxOverview(...args),
   resumeReview: (...args: unknown[]) => mockResumeReview(...args),
   refreshPrMetadata: (...args: unknown[]) => mockRefreshPrMetadata(...args),
+  rerunReview: (...args: unknown[]) => mockRerunReview(...args),
   parseError: (err: unknown) => ({ code: "unknown", message: String(err) }),
 }));
 
@@ -48,6 +50,13 @@ function makeRow(overrides: Partial<InboxReviewRow> = {}): InboxReviewRow {
     draft: false,
     has_saved_review_draft: false,
     metadata_freshness: { fetched_at: "2026-01-15T12:00:00Z", is_stale: false },
+    review_freshness: {
+      state: "current",
+      reviewed_at: "2026-01-15T12:00:00Z",
+      reviewed_head_sha: "sha-1",
+      current_head_sha: "sha-1",
+      has_unreviewed_updates: false,
+    },
     reviewer_signal: {
       has_signal: true,
       label: "Needs your review",
@@ -161,6 +170,51 @@ describe("InboxView", () => {
       expect(screen.getByText("PR draft")).toBeInTheDocument();
     });
     expect(screen.getByText("Review draft")).toBeInTheDocument();
+  });
+
+  it("renders updated-since-review rows with rerun action", async () => {
+    mockGetInboxOverview.mockResolvedValue(
+      makeOverview({
+        sections: [
+          {
+            id: "updated_since_review",
+            title: "Updated since review",
+            items: [
+              makeRow({
+                queue_state: "updated_since_review",
+                reviewer_signal: {
+                  has_signal: false,
+                  label: "No reviewer requested",
+                  precision: "none",
+                  requested_reviewers: [],
+                  requested_teams: [],
+                },
+                review_freshness: {
+                  state: "stale",
+                  reviewed_at: "2026-01-14T12:00:00Z",
+                  reviewed_head_sha: "sha-1",
+                  current_head_sha: "sha-2",
+                  has_unreviewed_updates: true,
+                },
+                allowed_actions: ["open", "refresh_metadata", "rerun"],
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <InboxView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Updated since review").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText(/Review freshness: stale/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rerun" })).toBeInTheDocument();
   });
 
   it("shows queue/setup attention banner details", async () => {

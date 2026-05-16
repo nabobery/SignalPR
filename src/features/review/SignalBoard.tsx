@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { FindingCard } from "./FindingCard";
 import ClusterCard from "./ClusterCard";
 import { useReviewContext } from "../../lib/store";
@@ -10,12 +10,30 @@ interface ClusterGroup {
   representative: Finding;
 }
 
-type FilterPreset = "active" | "high-confidence" | "security" | "suppressed" | "edited";
+type FilterPreset =
+  | "active"
+  | "high-confidence"
+  | "security"
+  | "fresh-risk"
+  | "new"
+  | "stale"
+  | "unchanged"
+  | "suppressed"
+  | "edited";
 
-const presets: { value: FilterPreset; label: string }[] = [
+const defaultPresets: { value: FilterPreset; label: string }[] = [
   { value: "active", label: "Active" },
   { value: "high-confidence", label: "High confidence" },
   { value: "security", label: "Security" },
+  { value: "suppressed", label: "Suppressed" },
+  { value: "edited", label: "Edited" },
+];
+
+const rerunPresets: { value: FilterPreset; label: string }[] = [
+  { value: "fresh-risk", label: "Fresh risk" },
+  { value: "new", label: "New" },
+  { value: "stale", label: "Stale" },
+  { value: "unchanged", label: "Unchanged" },
   { value: "suppressed", label: "Suppressed" },
   { value: "edited", label: "Edited" },
 ];
@@ -30,6 +48,16 @@ function applyPreset(findings: Finding[], preset: FilterPreset): Finding[] {
       return findings.filter(
         (f) => f.status === "active" && (f.lane_id === "security" || f.agent_type === "security"),
       );
+    case "fresh-risk":
+      return findings.filter(
+        (f) => f.status === "active" && (f.delta_state === "new" || f.delta_state === "stale"),
+      );
+    case "new":
+      return findings.filter((f) => f.status === "active" && f.delta_state === "new");
+    case "stale":
+      return findings.filter((f) => f.status === "active" && f.delta_state === "stale");
+    case "unchanged":
+      return findings.filter((f) => f.status === "active" && f.delta_state === "unchanged");
     case "suppressed":
       return findings.filter((f) => f.status === "suppressed");
     case "edited":
@@ -43,8 +71,14 @@ function applyPreset(findings: Finding[], preset: FilterPreset): Finding[] {
 
 export function SignalBoard() {
   const { state, refreshSnapshot, setSessionDecision } = useReviewContext();
-  const [preset, setPreset] = useState<FilterPreset>("active");
+  const isRerun = state.baselineRunId !== null;
+  const presets = isRerun ? rerunPresets : defaultPresets;
+  const [preset, setPreset] = useState<FilterPreset>(isRerun ? "fresh-risk" : "active");
   const selectedFile = state.selectedFile;
+
+  useEffect(() => {
+    setPreset(isRerun ? "fresh-risk" : "active");
+  }, [isRerun, state.runId]);
 
   const handleDecision = useCallback(
     (findingId: string, decision: string) => {

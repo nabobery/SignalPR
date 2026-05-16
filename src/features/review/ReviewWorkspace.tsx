@@ -65,6 +65,7 @@ export function ReviewWorkspace() {
         baselineRunId: snap.baseline_run_id ?? null,
         metrics: snap.metrics ?? null,
         delta: snap.delta ?? null,
+        reviewFreshness: snap.review_freshness,
         contextPackSummary: snap.context_pack_summary ?? null,
         localChecksSummary: snap.local_checks_summary ?? null,
         platformMetadata: snap.platform_metadata ?? null,

@@ -11,7 +11,13 @@ import {
   Search,
   XCircle,
 } from "lucide-react";
-import { getInboxOverview, parseError, refreshPrMetadata, resumeReview } from "../../lib/ipc";
+import {
+  getInboxOverview,
+  parseError,
+  refreshPrMetadata,
+  rerunReview,
+  resumeReview,
+} from "../../lib/ipc";
 import { IntakeQuickAction } from "../intake/IntakeQuickAction";
 import type {
   EnvironmentSummary,
@@ -39,6 +45,7 @@ const defaultFilters: Filters = {
 function queueBadge(queueState: string) {
   const styles: Record<string, string> = {
     needs_your_review: "bg-blue-950/60 text-blue-300 border-blue-900/60",
+    updated_since_review: "bg-cyan-950/60 text-cyan-300 border-cyan-900/60",
     review_requested: "bg-sky-950/60 text-sky-300 border-sky-900/60",
     attention_needed: "bg-red-950/60 text-red-300 border-red-900/60",
     in_progress: "bg-amber-950/60 text-amber-300 border-amber-900/60",
@@ -48,6 +55,7 @@ function queueBadge(queueState: string) {
   };
   const labels: Record<string, string> = {
     needs_your_review: "Needs your review",
+    updated_since_review: "Updated since review",
     review_requested: "Review requested",
     attention_needed: "Attention needed",
     in_progress: "In progress",
@@ -279,12 +287,14 @@ function ReviewRow({
   row,
   refreshBusy,
   onOpen,
+  onRerun,
   onResume,
   onRefresh,
 }: {
   row: InboxReviewRow;
   refreshBusy: boolean;
   onOpen: () => void;
+  onRerun: () => void;
   onResume: () => void;
   onRefresh: () => void;
 }) {
@@ -329,6 +339,9 @@ function ReviewRow({
             <span className="rounded-md bg-zinc-900 px-2 py-1 text-zinc-300">
               Submission: {row.submission_health.state}
             </span>
+            <span className="rounded-md bg-zinc-900 px-2 py-1 text-zinc-300">
+              Review freshness: {row.review_freshness.state}
+            </span>
             {row.metadata_freshness.is_stale && (
               <span className="rounded-md bg-red-950/40 px-2 py-1 text-red-300">
                 Metadata stale
@@ -371,6 +384,16 @@ function ReviewRow({
             >
               <RotateCcw className="h-3.5 w-3.5" />
               Resume
+            </button>
+          )}
+
+          {row.allowed_actions.includes("rerun") && (
+            <button
+              onClick={onRerun}
+              className="inline-flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Rerun
             </button>
           )}
 
@@ -474,6 +497,18 @@ export function InboxView() {
     }
   };
 
+  const handleRerun = async (runId: string, hasUnreviewedUpdates: boolean) => {
+    try {
+      const newRunId = await rerunReview(runId, {
+        triggerSource: "queue",
+        reason: hasUnreviewedUpdates ? "head_updated" : "manual",
+      });
+      navigate(`/review/${newRunId}`);
+    } catch (err) {
+      setError(parseError(err).message);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-6 p-6">
@@ -524,6 +559,9 @@ export function InboxView() {
                         row={row}
                         refreshBusy={Boolean(refreshingPrIds[row.pr_id])}
                         onOpen={() => navigate(`/review/${row.run_id}`)}
+                        onRerun={() =>
+                          handleRerun(row.run_id, row.review_freshness.has_unreviewed_updates)
+                        }
                         onResume={() => handleResume(row.run_id)}
                         onRefresh={() => handleRefreshMetadata(row.pr_id)}
                       />

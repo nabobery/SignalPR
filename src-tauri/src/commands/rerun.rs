@@ -32,16 +32,30 @@ fn extract_head_sha_from_metadata_json(json: &str) -> Option<String> {
         .map(|meta| meta.head_sha)
 }
 
+struct LatestPrSnapshot {
+    diff_text: String,
+    diff_hash: String,
+    changed_files: Vec<String>,
+    changed_files_json: String,
+    platform_metadata_json: Option<String>,
+    platform_metadata_fetched_at: Option<String>,
+    head_sha: Option<String>,
+}
+
 /// Start an incremental rerun linked to a baseline review run.
 /// Fetches the latest diff from GitHub, creates a new PR snapshot and review run,
 /// then spawns the review pipeline.
 #[tauri::command]
 pub async fn rerun_review(
     baseline_run_id: String,
+    trigger_source: Option<String>,
+    reason: Option<String>,
     app: AppHandle,
     db: tauri::State<'_, AppDb>,
 ) -> Result<String, AppError> {
-    let (pr, workspace_path, new_run_id, new_pr_id) = {
+    let trigger_source = trigger_source.unwrap_or_else(|| "workspace".to_string());
+    let reason = reason.unwrap_or_else(|| "manual".to_string());
+    let (pr, workspace_path, new_run_id) = {
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
@@ -67,18 +81,13 @@ pub async fn rerun_review(
             .map_err(|_| AppError::InvalidInput("Workspace not found".into()))?;
 
         let new_run_id = uuid::Uuid::new_v4().to_string();
-        let new_pr_id = uuid::Uuid::new_v4().to_string();
 
         drop(conn);
-        (pr, workspace_path, new_run_id, new_pr_id)
+        (pr, workspace_path, new_run_id)
     };
 
-    // Fetch latest diff via gh CLI
-    let diff_text = fetch_latest_diff(&workspace_path, pr.pr_number, &app).await?;
-    let diff_hash = sha256_hex(&diff_text);
-
-    let changed_files = extract_changed_files_from_diff(&diff_text);
-    let changed_files_json = serde_json::to_string(&changed_files).unwrap_or_default();
+    let latest_snapshot = fetch_latest_pr_snapshot(&app, &pr).await?;
+    let changed_files = latest_snapshot.changed_files.clone();
 
     // Load config from workspace path
     let cwd_path = PathBuf::from(&workspace_path);
@@ -97,7 +106,12 @@ pub async fn rerun_review(
         let conn =
             db.0.lock()
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        super::review::build_agent_lanes(&diff_text, provider.clone(), &resolved, &conn)
+        super::review::build_agent_lanes(
+            &latest_snapshot.diff_text,
+            provider.clone(),
+            &resolved,
+            &conn,
+        )
     };
     let cleaner_config = resolved.cleaner;
     let context_pack_config = resolved.context_pack;
@@ -113,12 +127,19 @@ pub async fn rerun_review(
             &RerunRecordInput {
                 baseline_run_id: &baseline_run_id,
                 baseline_pr: &pr,
-                new_pr_id: &new_pr_id,
                 new_run_id: &new_run_id,
-                diff_text: &diff_text,
-                diff_hash: &diff_hash,
-                changed_files_json: &changed_files_json,
+                diff_text: &latest_snapshot.diff_text,
+                diff_hash: &latest_snapshot.diff_hash,
+                changed_files_json: &latest_snapshot.changed_files_json,
                 now: &now,
+                latest_platform_metadata_json: latest_snapshot.platform_metadata_json.as_deref(),
+                latest_platform_metadata_fetched_at: latest_snapshot
+                    .platform_metadata_fetched_at
+                    .as_deref(),
+                latest_head_sha: latest_snapshot.head_sha.as_deref(),
+                trigger_source: &trigger_source,
+                reason: &reason,
+                scope: "full_pr",
             },
         )?;
     }
@@ -137,14 +158,14 @@ pub async fn rerun_review(
     // Spawn pipeline
     let app_clone = app.clone();
     let run_id_clone = new_run_id.clone();
-    let pr_id_clone = new_pr_id.clone();
+    let pr_id_clone = pr.id.clone();
     tauri::async_runtime::spawn(async move {
         let db = app_clone.state::<AppDb>();
         let event_log = app_clone
             .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
             .map(|s| s.inner().clone());
 
-        // Phase 3: Build context pack
+        // Build context pack
         let preference_text = {
             let conn = db.0.lock().ok();
             conn.and_then(|c| {
@@ -175,7 +196,7 @@ pub async fn rerun_review(
             }
         }
 
-        // Phase 3: Run local checks if enabled
+        // Run local checks if enabled
         let mut extra_raw_findings: Vec<RawFinding> = Vec::new();
         let local_checks_summary = {
             let runner = LocalChecksRunner::new(&cwd_path, &changed_files, token.clone())
@@ -254,36 +275,38 @@ pub async fn rerun_review(
     Ok(new_run_id)
 }
 
-async fn fetch_latest_diff(
-    workspace_path: &str,
-    pr_number: i32,
+async fn fetch_latest_pr_snapshot(
     app: &AppHandle,
-) -> Result<String, AppError> {
-    use tauri_plugin_shell::ShellExt;
+    pr: &PullRequest,
+) -> Result<LatestPrSnapshot, AppError> {
+    let review_url = crate::platform::parse_review_url(&pr.url)?;
+    let adapter = crate::commands::pr_metadata::build_adapter(app, &review_url).await?;
 
-    let output = app
-        .shell()
-        .command("gh")
-        .current_dir(workspace_path)
-        .args(["pr", "diff", &pr_number.to_string(), "--color=never"])
-        .output()
-        .await
-        .map_err(|e| AppError::Transient(format!("Failed to run gh: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::Transient(format!(
-            "gh pr diff failed: {}",
-            stderr.trim()
-        )));
+    let diff_text = adapter.fetch_diff().await?;
+    if diff_text.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "Empty diff returned from platform".into(),
+        ));
     }
 
-    let diff = String::from_utf8_lossy(&output.stdout).to_string();
-    if diff.trim().is_empty() {
-        return Err(AppError::InvalidInput("Empty diff returned from gh".into()));
-    }
+    let metadata = adapter.fetch_metadata().await?;
+    let platform_metadata_json =
+        serde_json::to_string(&metadata).map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let platform_metadata_fetched_at = chrono::Utc::now().to_rfc3339();
+    let diff_hash = sha256_hex(&diff_text);
+    let changed_files = extract_changed_files_from_diff(&diff_text);
+    let changed_files_json = serde_json::to_string(&changed_files).unwrap_or_default();
+    let head_sha = extract_head_sha_from_metadata_json(&platform_metadata_json);
 
-    Ok(diff)
+    Ok(LatestPrSnapshot {
+        diff_text,
+        diff_hash,
+        changed_files,
+        changed_files_json,
+        platform_metadata_json: Some(platform_metadata_json),
+        platform_metadata_fetched_at: Some(platform_metadata_fetched_at),
+        head_sha,
+    })
 }
 
 fn extract_changed_files_from_diff(diff: &str) -> Vec<String> {
@@ -304,35 +327,63 @@ fn extract_changed_files_from_diff(diff: &str) -> Vec<String> {
 struct RerunRecordInput<'a> {
     baseline_run_id: &'a str,
     baseline_pr: &'a PullRequest,
-    new_pr_id: &'a str,
     new_run_id: &'a str,
     diff_text: &'a str,
     diff_hash: &'a str,
     changed_files_json: &'a str,
     now: &'a str,
+    latest_platform_metadata_json: Option<&'a str>,
+    latest_platform_metadata_fetched_at: Option<&'a str>,
+    latest_head_sha: Option<&'a str>,
+    trigger_source: &'a str,
+    reason: &'a str,
+    scope: &'a str,
 }
 
 fn create_rerun_records(
     conn: &rusqlite::Connection,
     input: &RerunRecordInput<'_>,
 ) -> Result<(), AppError> {
-    queries::insert_pull_request(
+    let baseline_run = queries::get_review_run(conn, input.baseline_run_id)?
+        .ok_or_else(|| AppError::InvalidInput("Baseline run not found".into()))?;
+
+    if baseline_run.analysis_diff_text.is_none() {
+        if let Some(diff_text) = input.baseline_pr.diff_text.as_deref() {
+            let diff_hash = input
+                .baseline_pr
+                .diff_hash
+                .clone()
+                .unwrap_or_else(|| sha256_hex(diff_text));
+            queries::update_review_run_analysis_diff(
+                conn,
+                input.baseline_run_id,
+                diff_text,
+                &diff_hash,
+            )?;
+        }
+    }
+
+    if baseline_run.head_sha_at_run.is_none() {
+        if let Some(head_sha) = input
+            .baseline_pr
+            .platform_metadata_json
+            .as_deref()
+            .and_then(extract_head_sha_from_metadata_json)
+        {
+            queries::update_review_run_head_sha_at_run(conn, input.baseline_run_id, &head_sha)?;
+        }
+    }
+
+    queries::update_pull_request_snapshot(
         conn,
-        &PullRequest {
-            id: input.new_pr_id.to_string(),
-            workspace_id: input.baseline_pr.workspace_id.clone(),
-            pr_number: input.baseline_pr.pr_number,
-            title: input.baseline_pr.title.clone(),
-            author: input.baseline_pr.author.clone(),
-            base_branch: input.baseline_pr.base_branch.clone(),
-            head_branch: input.baseline_pr.head_branch.clone(),
-            url: input.baseline_pr.url.clone(),
-            diff_text: Some(input.diff_text.to_string()),
-            changed_files: Some(input.changed_files_json.to_string()),
-            fetched_at: input.now.to_string(),
-            diff_hash: Some(input.diff_hash.to_string()),
-            platform_metadata_json: input.baseline_pr.platform_metadata_json.clone(),
-            platform_metadata_fetched_at: input.baseline_pr.platform_metadata_fetched_at.clone(),
+        &input.baseline_pr.id,
+        &queries::PullRequestSnapshotUpdate {
+            diff_text: input.diff_text,
+            changed_files_json: input.changed_files_json,
+            diff_hash: input.diff_hash,
+            fetched_at_rfc3339: input.now,
+            metadata_json: input.latest_platform_metadata_json,
+            metadata_fetched_at_rfc3339: input.latest_platform_metadata_fetched_at,
         },
     )?;
 
@@ -340,22 +391,25 @@ fn create_rerun_records(
         conn,
         &ReviewRun {
             id: input.new_run_id.to_string(),
-            pr_id: input.new_pr_id.to_string(),
+            pr_id: input.baseline_pr.id.clone(),
             status: "created".into(),
             started_at: Some(input.now.to_string()),
             completed_at: None,
             error_message: None,
-            head_sha_at_run: input
-                .baseline_pr
-                .platform_metadata_json
-                .as_deref()
-                .and_then(extract_head_sha_from_metadata_json),
+            head_sha_at_run: input.latest_head_sha.map(ToString::to_string).or_else(|| {
+                input
+                    .latest_platform_metadata_json
+                    .and_then(extract_head_sha_from_metadata_json)
+            }),
             baseline_run_id: Some(input.baseline_run_id.to_string()),
             metrics_json: None,
             analysis_diff_hash: Some(input.diff_hash.to_string()),
             analysis_diff_text: Some(input.diff_text.to_string()),
             context_pack_json: None,
             local_checks_json: None,
+            rerun_trigger_source: Some(input.trigger_source.to_string()),
+            rerun_reason: Some(input.reason.to_string()),
+            rerun_scope: Some(input.scope.to_string()),
         },
     )?;
 
@@ -411,6 +465,9 @@ mod tests {
             analysis_diff_text: Some("diff --git a/src/a.rs b/src/a.rs".into()),
             context_pack_json: None,
             local_checks_json: None,
+            rerun_trigger_source: None,
+            rerun_reason: None,
+            rerun_scope: None,
         };
         queries::insert_review_run(conn, &baseline_run).unwrap();
 
@@ -459,12 +516,17 @@ index 222..333 100644
             &RerunRecordInput {
                 baseline_run_id: &baseline_run.id,
                 baseline_pr: &baseline_pr,
-                new_pr_id: "pr-rerun",
                 new_run_id: "run-rerun",
                 diff_text: "diff --git a/src/c.rs b/src/c.rs",
                 diff_hash: "newhash",
                 changed_files_json: "[\"src/c.rs\"]",
                 now: "2026-01-02T00:00:00Z",
+                latest_platform_metadata_json: None,
+                latest_platform_metadata_fetched_at: None,
+                latest_head_sha: None,
+                trigger_source: "workspace",
+                reason: "manual",
+                scope: "full_pr",
             },
         )
         .expect("record creation should succeed");
@@ -478,11 +540,109 @@ index 222..333 100644
             rerun.analysis_diff_text.as_deref(),
             Some("diff --git a/src/c.rs b/src/c.rs")
         );
+        assert_eq!(rerun.pr_id, baseline_pr.id);
 
-        let rerun_pr = queries::get_pull_request(&conn, "pr-rerun")
+        let rerun_pr = queries::get_pull_request(&conn, &baseline_pr.id)
             .unwrap()
             .expect("rerun PR row should exist");
         assert_eq!(rerun_pr.diff_hash.as_deref(), Some("newhash"));
         assert_eq!(rerun_pr.changed_files.as_deref(), Some("[\"src/c.rs\"]"));
+
+        let pr_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pull_requests", [], |row| row.get(0))
+            .expect("count pull requests");
+        assert_eq!(pr_count, 1);
+    }
+
+    #[test]
+    fn create_rerun_records_persists_rerun_metadata() {
+        let db = init_db_in_memory().expect("in-memory DB");
+        let conn = db.0.into_inner().expect("owned connection");
+        let (baseline_pr, baseline_run) = setup_baseline(&conn);
+
+        create_rerun_records(
+            &conn,
+            &RerunRecordInput {
+                baseline_run_id: &baseline_run.id,
+                baseline_pr: &baseline_pr,
+                new_run_id: "run-rerun-meta",
+                diff_text: "diff --git a/src/c.rs b/src/c.rs",
+                diff_hash: "newhash",
+                changed_files_json: "[\"src/c.rs\"]",
+                now: "2026-01-02T00:00:00Z",
+                latest_platform_metadata_json: None,
+                latest_platform_metadata_fetched_at: None,
+                latest_head_sha: None,
+                trigger_source: "workspace",
+                reason: "manual",
+                scope: "full_pr",
+            },
+        )
+        .expect("record creation should succeed");
+
+        let rerun = queries::get_review_run(&conn, "run-rerun-meta")
+            .unwrap()
+            .expect("rerun row should exist");
+        assert_eq!(rerun.rerun_trigger_source.as_deref(), Some("workspace"));
+        assert_eq!(rerun.rerun_reason.as_deref(), Some("manual"));
+        assert_eq!(rerun.rerun_scope.as_deref(), Some("full_pr"));
+    }
+
+    #[test]
+    fn create_rerun_records_updates_platform_snapshot_and_head_sha() {
+        let db = init_db_in_memory().expect("in-memory DB");
+        let conn = db.0.into_inner().expect("owned connection");
+        let (mut baseline_pr, baseline_run) = setup_baseline(&conn);
+        baseline_pr.platform_metadata_json = Some(
+            r#"{"platform":"github","pr_body":null,"head_sha":"sha-old","base_sha":"sha-base","base_ref":"main","head_ref":"feature","draft":false,"labels":[],"requested_reviewers":[],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#
+                .into(),
+        );
+        queries::update_pull_request_metadata(
+            &conn,
+            &baseline_pr.id,
+            baseline_pr.platform_metadata_json.as_deref().unwrap(),
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+
+        let latest_metadata = r#"{"platform":"github","pr_body":null,"head_sha":"sha-new","base_sha":"sha-base","base_ref":"main","head_ref":"feature","draft":false,"labels":[],"requested_reviewers":[],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#;
+
+        create_rerun_records(
+            &conn,
+            &RerunRecordInput {
+                baseline_run_id: &baseline_run.id,
+                baseline_pr: &baseline_pr,
+                new_run_id: "run-rerun-meta-head",
+                diff_text: "diff --git a/src/c.rs b/src/c.rs",
+                diff_hash: "newhash",
+                changed_files_json: "[\"src/c.rs\"]",
+                now: "2026-01-02T00:00:00Z",
+                latest_platform_metadata_json: Some(latest_metadata),
+                latest_platform_metadata_fetched_at: Some("2026-01-02T00:00:00Z"),
+                latest_head_sha: Some("sha-new"),
+                trigger_source: "workspace",
+                reason: "manual",
+                scope: "full_pr",
+            },
+        )
+        .expect("record creation should succeed");
+
+        let rerun = queries::get_review_run(&conn, "run-rerun-meta-head")
+            .unwrap()
+            .expect("rerun row should exist");
+        assert_eq!(rerun.pr_id, baseline_pr.id);
+        assert_eq!(rerun.head_sha_at_run.as_deref(), Some("sha-new"));
+
+        let updated_pr = queries::get_pull_request(&conn, &baseline_pr.id)
+            .unwrap()
+            .expect("baseline pr should exist");
+        assert_eq!(
+            updated_pr.platform_metadata_json.as_deref(),
+            Some(latest_metadata)
+        );
+        assert_eq!(
+            updated_pr.platform_metadata_fetched_at.as_deref(),
+            Some("2026-01-02T00:00:00Z")
+        );
     }
 }

@@ -59,11 +59,24 @@ pub struct ReviewSnapshot {
     pub baseline_run_id: Option<String>,
     pub metrics: Option<crate::metrics::RunScorecard>,
     pub delta: Option<ReviewDeltaSnapshot>,
+    pub review_freshness: ReviewFreshnessSummary,
     pub decisions_by_finding_id: Option<HashMap<String, String>>,
     pub context_pack_summary: Option<serde_json::Value>,
     pub local_checks_summary: Option<serde_json::Value>,
     pub platform_metadata: Option<serde_json::Value>,
     pub platform_metadata_fetched_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewFreshnessSummary {
+    pub is_rerun: bool,
+    pub baseline_run_id: Option<String>,
+    pub reviewed_head_sha: Option<String>,
+    pub current_head_sha: Option<String>,
+    pub head_changed_since_review: bool,
+    pub rerun_trigger_source: Option<String>,
+    pub rerun_reason: Option<String>,
+    pub rerun_scope: Option<String>,
 }
 
 pub struct ActiveReviews(pub Mutex<HashMap<String, CancellationToken>>);
@@ -92,6 +105,54 @@ fn extract_head_sha_from_pr(pr: &Option<PullRequest>) -> Option<String> {
     serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(json)
         .ok()
         .map(|meta| meta.head_sha)
+}
+
+fn build_review_freshness_summary(
+    conn: &Connection,
+    run: &ReviewRun,
+    pr: &PullRequest,
+) -> Result<ReviewFreshnessSummary, rusqlite::Error> {
+    let baseline_run = run
+        .baseline_run_id
+        .as_deref()
+        .map(|baseline_run_id| queries::get_review_run(conn, baseline_run_id))
+        .transpose()?
+        .flatten();
+    let submission = queries::get_submission_for_run(conn, &run.id)?;
+    let reviewed_head_sha = if run.baseline_run_id.is_some() {
+        baseline_run
+            .as_ref()
+            .and_then(|baseline| baseline.head_sha_at_run.clone())
+            .or_else(|| run.head_sha_at_run.clone())
+    } else if run.status == "submitted" {
+        submission
+            .as_ref()
+            .and_then(|record| record.commit_id_at_submission.clone())
+            .or_else(|| run.head_sha_at_run.clone())
+    } else {
+        run.head_sha_at_run.clone().or_else(|| {
+            submission
+                .as_ref()
+                .and_then(|record| record.commit_id_at_submission.clone())
+        })
+    };
+    let current_head_sha =
+        extract_head_sha_from_pr(&Some(pr.clone())).or_else(|| run.head_sha_at_run.clone());
+    let head_changed_since_review = reviewed_head_sha
+        .as_deref()
+        .zip(current_head_sha.as_deref())
+        .is_some_and(|(reviewed, current)| reviewed != current);
+
+    Ok(ReviewFreshnessSummary {
+        is_rerun: run.baseline_run_id.is_some(),
+        baseline_run_id: run.baseline_run_id.clone(),
+        reviewed_head_sha,
+        current_head_sha,
+        head_changed_since_review,
+        rerun_trigger_source: run.rerun_trigger_source.clone(),
+        rerun_reason: run.rerun_reason.clone(),
+        rerun_scope: run.rerun_scope.clone(),
+    })
 }
 
 #[tauri::command]
@@ -175,6 +236,9 @@ pub async fn start_review(
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )?;
     }
@@ -215,7 +279,7 @@ pub async fn start_review(
             .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
             .map(|s| s.inner().clone());
 
-        // Phase 3: Build context pack
+        // Build context pack
         let preference_text = {
             let conn = db.0.lock().ok();
             conn.and_then(|c| {
@@ -225,7 +289,7 @@ pub async fn start_review(
             })
         };
 
-        // Phase 5/6: Resolve issue refs + base-branch CODEOWNERS through platform adapter.
+        // Resolve issue refs and base-branch CODEOWNERS through the platform adapter.
         let (issue_refs, base_branch_codeowners, codeowners_source) =
             resolve_issue_refs_and_codeowners(&app_clone, &db, &pr_id).await;
 
@@ -248,7 +312,7 @@ pub async fn start_review(
             }
         }
 
-        // Phase 3: Run local checks if enabled
+        // Run local checks if enabled
         let mut extra_raw_findings: Vec<RawFinding> = Vec::new();
         let local_checks_summary = {
             let runner = LocalChecksRunner::new(&cwd_path, &changed_files, token.clone())
@@ -509,15 +573,16 @@ pub async fn get_review_snapshot(
 
     let clusters = queries::get_clusters_for_run(&conn, &run_id)?;
 
-    // Phase 2: Deserialize cached metrics
+    // Deserialize cached metrics
     let metrics: Option<crate::metrics::RunScorecard> = run
         .metrics_json
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
 
-    // Phase 2: Build decisions_by_finding_id (latest decision per finding)
+    // Build the latest decision map for each finding
     let decisions_by_finding_id =
         latest_decisions_by_finding(&queries::get_decisions_for_run(&conn, &run_id)?);
+    let review_freshness = build_review_freshness_summary(&conn, &run, &pr)?;
 
     let mut finding_snapshots: Vec<FindingSnapshot> = findings
         .into_iter()
@@ -529,7 +594,7 @@ pub async fn get_review_snapshot(
         })
         .collect();
 
-    // Phase 2: Compute delta for baseline-linked reruns.
+    // Compute finding deltas for reruns with a previous reviewed run
     let delta = if let Some(baseline_run_id) = run.baseline_run_id.as_deref() {
         compute_delta_for_snapshot(&conn, baseline_run_id, &run, &pr, &mut finding_snapshots)?
     } else {
@@ -552,6 +617,7 @@ pub async fn get_review_snapshot(
         baseline_run_id: run.baseline_run_id,
         metrics,
         delta,
+        review_freshness,
         decisions_by_finding_id,
         context_pack_summary: run
             .context_pack_json
@@ -732,7 +798,7 @@ fn build_issue_refs_from_metadata(
     refs
 }
 
-/// Build issue refs from the new platform-agnostic metadata (Phase 6/8).
+/// Build issue refs from platform metadata.
 fn build_issue_refs_from_platform_metadata(
     metadata: Option<&crate::platform::adapter::PlatformMetadata>,
     default_owner: &str,
@@ -2120,6 +2186,9 @@ pub async fn resume_review(
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                rerun_trigger_source: None,
+                rerun_reason: None,
+                rerun_scope: None,
             },
         )?;
     }
@@ -2144,7 +2213,7 @@ pub async fn resume_review(
             .try_state::<std::sync::Arc<crate::storage::event_log::EventLog>>()
             .map(|s| s.inner().clone());
 
-        // Phase 3: Build context pack
+        // Build context pack
         let preference_text = {
             let conn = db.0.lock().ok();
             conn.and_then(|c| {
@@ -2175,7 +2244,7 @@ pub async fn resume_review(
             }
         }
 
-        // Phase 3: Run local checks if enabled
+        // Run local checks if enabled
         let mut extra_raw_findings: Vec<RawFinding> = Vec::new();
         let local_checks_summary = {
             let runner = LocalChecksRunner::new(&cwd_path, &changed_files, token.clone())
@@ -2259,7 +2328,7 @@ mod tests {
     use super::*;
     use crate::agents::definition::AgentDefinition;
     use crate::storage::db::init_db_in_memory;
-    use crate::storage::models::{Finding, PullRequest, ReviewRun, Workspace};
+    use crate::storage::models::{Finding, PullRequest, ReviewRun, SubmissionRecord, Workspace};
     use crate::storage::queries;
 
     #[test]
@@ -2466,6 +2535,9 @@ mod tests {
             analysis_diff_text: Some(baseline_diff.into()),
             context_pack_json: None,
             local_checks_json: None,
+            rerun_trigger_source: None,
+            rerun_reason: None,
+            rerun_scope: None,
         };
         queries::insert_review_run(&conn, &baseline_run).unwrap();
 
@@ -2483,6 +2555,9 @@ mod tests {
             analysis_diff_text: Some(baseline_diff.into()),
             context_pack_json: None,
             local_checks_json: None,
+            rerun_trigger_source: None,
+            rerun_reason: None,
+            rerun_scope: None,
         };
         queries::insert_review_run(&conn, &current_run).unwrap();
 
@@ -2644,7 +2719,87 @@ mod tests {
         assert!(new_finding.baseline_decision.is_none());
     }
 
-    // ---- Phase 5: build_issue_refs_from_metadata tests ----
+    #[test]
+    fn build_review_freshness_summary_prefers_submission_commit_for_submitted_run() {
+        let db = init_db_in_memory().expect("in-memory DB");
+        let conn = db.0.into_inner().expect("owned connection");
+
+        let workspace = Workspace {
+            id: "ws-submitted".into(),
+            local_path: "/tmp/repo".into(),
+            remote_owner: "o".into(),
+            remote_repo: "r".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            remote_host: "github.com".into(),
+        };
+        queries::insert_workspace(&conn, &workspace).unwrap();
+
+        let metadata_json = r#"{"platform":"github","pr_body":null,"head_sha":"sha-current","base_sha":"sha-base","base_ref":"main","head_ref":"feature","draft":false,"labels":[],"requested_reviewers":[],"requested_teams":[],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#;
+        let pr = PullRequest {
+            id: "pr-submitted".into(),
+            workspace_id: workspace.id.clone(),
+            pr_number: 7,
+            title: "Submitted".into(),
+            author: None,
+            base_branch: None,
+            head_branch: None,
+            url: "https://github.com/o/r/pull/7".into(),
+            diff_text: Some("diff".into()),
+            changed_files: Some("[\"src/lib.rs\"]".into()),
+            fetched_at: "2026-01-02T00:00:00Z".into(),
+            diff_hash: Some("hash".into()),
+            platform_metadata_json: Some(metadata_json.into()),
+            platform_metadata_fetched_at: Some("2026-01-02T00:00:00Z".into()),
+        };
+        queries::insert_pull_request(&conn, &pr).unwrap();
+
+        let run = ReviewRun {
+            id: "run-submitted".into(),
+            pr_id: pr.id.clone(),
+            status: "submitted".into(),
+            started_at: Some("2026-01-02T00:00:00Z".into()),
+            completed_at: Some("2026-01-02T00:05:00Z".into()),
+            error_message: None,
+            head_sha_at_run: Some("sha-reviewed".into()),
+            baseline_run_id: None,
+            metrics_json: None,
+            analysis_diff_hash: Some("hash".into()),
+            analysis_diff_text: Some("diff".into()),
+            context_pack_json: None,
+            local_checks_json: None,
+            rerun_trigger_source: None,
+            rerun_reason: None,
+            rerun_scope: None,
+        };
+        queries::insert_review_run(&conn, &run).unwrap();
+        queries::insert_submission(
+            &conn,
+            &SubmissionRecord {
+                id: "sub-submitted".into(),
+                review_run_id: run.id.clone(),
+                review_action: "comment".into(),
+                submitted_at: Some("2026-01-02T00:05:00Z".into()),
+                status: "submitted".into(),
+                commit_id_at_submission: Some("sha-submitted".into()),
+                gh_review_id: None,
+                error_message: None,
+                idempotency_key: None,
+                attempt_count: Some(1),
+                last_attempt_at: Some("2026-01-02T00:05:00Z".into()),
+            },
+        )
+        .unwrap();
+
+        let freshness = build_review_freshness_summary(&conn, &run, &pr).unwrap();
+        assert_eq!(
+            freshness.reviewed_head_sha.as_deref(),
+            Some("sha-submitted")
+        );
+        assert_eq!(freshness.current_head_sha.as_deref(), Some("sha-current"));
+        assert!(freshness.head_changed_since_review);
+    }
+
+    // ---- build_issue_refs_from_metadata tests ----
 
     #[test]
     fn test_build_issue_refs_none_metadata() {

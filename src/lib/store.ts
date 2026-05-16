@@ -5,6 +5,7 @@ import type {
   LaneSnapshot,
   RunScorecard,
   ReviewDeltaSnapshot,
+  ReviewFreshnessSummary,
   ContextPackSummary,
   LocalChecksSummary,
   PlatformMetadata,
@@ -29,6 +30,7 @@ export interface ReviewState {
   baselineRunId: string | null;
   metrics: RunScorecard | null;
   delta: ReviewDeltaSnapshot | null;
+  reviewFreshness: ReviewFreshnessSummary;
   contextPackSummary: ContextPackSummary | null;
   localChecksSummary: LocalChecksSummary | null;
   platformMetadata: PlatformMetadata | null;

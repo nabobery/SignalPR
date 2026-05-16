@@ -201,8 +201,18 @@ export async function resolveClaudeCodePermission(
 
 // --- Incremental Rerun ---
 
-export async function rerunReview(baselineRunId: string): Promise<string> {
-  return invoke("rerun_review", { baselineRunId });
+export async function rerunReview(
+  baselineRunId: string,
+  options?: {
+    triggerSource?: "workspace" | "queue";
+    reason?: "manual" | "head_updated" | "metadata_refresh";
+  },
+): Promise<string> {
+  return invoke("rerun_review", {
+    baselineRunId,
+    triggerSource: options?.triggerSource,
+    reason: options?.reason,
+  });
 }
 
 // --- Inbox Overview ---

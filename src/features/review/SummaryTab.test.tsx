@@ -78,6 +78,16 @@ function renderWithContext(state: Partial<ReviewState>) {
     baselineRunId: null,
     metrics: null,
     delta: null,
+    reviewFreshness: {
+      is_rerun: false,
+      baseline_run_id: null,
+      reviewed_head_sha: null,
+      current_head_sha: null,
+      head_changed_since_review: false,
+      rerun_trigger_source: null,
+      rerun_reason: null,
+      rerun_scope: null,
+    },
     contextPackSummary: null,
     localChecksSummary: null,
     platformMetadata: null,
@@ -197,6 +207,16 @@ describe("SummaryTab", () => {
         baselineRunId: null,
         metrics: null,
         delta: null,
+        reviewFreshness: {
+          is_rerun: false,
+          baseline_run_id: null,
+          reviewed_head_sha: null,
+          current_head_sha: null,
+          head_changed_since_review: false,
+          rerun_trigger_source: null,
+          rerun_reason: null,
+          rerun_scope: null,
+        },
         contextPackSummary: null,
         localChecksSummary: null,
         platformMetadata: null,
@@ -242,12 +262,12 @@ describe("SummaryTab", () => {
 
   it("renders Rerun button when status is ready", () => {
     renderWithContext({ status: "ready" });
-    expect(screen.getByRole("button", { name: /rerun/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rerun review/i })).toBeInTheDocument();
   });
 
   it("renders Rerun button when status is submitted", () => {
     renderWithContext({ status: "submitted" });
-    expect(screen.getByRole("button", { name: /rerun/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rerun review/i })).toBeInTheDocument();
   });
 
   it("does not render Rerun button when running", () => {
@@ -263,7 +283,10 @@ describe("SummaryTab", () => {
     renderWithContext({ status: "ready" });
 
     await user.click(screen.getByRole("button", { name: /rerun/i }));
-    expect(rerunReview).toHaveBeenCalledWith("run-1");
+    expect(rerunReview).toHaveBeenCalledWith("run-1", {
+      triggerSource: "workspace",
+      reason: "manual",
+    });
   });
 
   it("renders provider scorecard when metrics are present", () => {
@@ -298,18 +321,40 @@ describe("SummaryTab", () => {
 
   it("renders delta summary for reruns", () => {
     renderWithContext({
+      baselineRunId: "run-0",
+      reviewFreshness: {
+        is_rerun: true,
+        baseline_run_id: "run-0",
+        reviewed_head_sha: "sha-1",
+        current_head_sha: "sha-2",
+        head_changed_since_review: true,
+        rerun_trigger_source: "workspace",
+        rerun_reason: "manual",
+        rerun_scope: "full_pr",
+      },
       delta: {
         changed_files: ["src/main.rs"],
         changed_hunks_by_file: {},
         counts: { new: 3, unchanged: 2, stale: 1, resolved: 4 },
-        resolved: [],
+        resolved: [
+          {
+            id: "resolved-1",
+            title: "Resolved issue",
+            file_path: "src/main.rs",
+            agent_type: "security",
+            severity: "warning",
+          },
+        ],
       },
     });
     expect(screen.getByText("Changes since last run")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("new")).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();
-    expect(screen.getByText("resolved")).toBeInTheDocument();
+    expect(screen.getAllByText("resolved").length).toBeGreaterThan(0);
+    expect(screen.getByText("Resolved issue")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Rerun review/i })).toBeInTheDocument();
+    expect(screen.getByText(/latest changes/i)).toBeInTheDocument();
   });
 
   it("does not show scorecard when metrics is null", () => {
@@ -317,7 +362,7 @@ describe("SummaryTab", () => {
     expect(screen.queryByText("Provider scorecard")).not.toBeInTheDocument();
   });
 
-  // ---- Phase 5: Platform metadata tests ----
+  // ---- Platform metadata tests ----
 
   it("renders GitHub metadata section with requested reviewers", () => {
     renderWithContext({

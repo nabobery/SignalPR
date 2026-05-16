@@ -71,12 +71,21 @@ export function SummaryTab() {
   const failedLanes = state.laneStatuses.filter(
     (l) => l.status === "failed" || l.status === "timed_out",
   ).length;
+  const isRerun = state.reviewFreshness.is_rerun;
+  const rerunSupportingCopy = isRerun
+    ? state.reviewFreshness.head_changed_since_review
+      ? "This rerun reviews the latest changes since the last run."
+      : "This rerun refreshes findings on the current head."
+    : null;
 
   const handleRerun = async () => {
     setRerunning(true);
     setRerunError(null);
     try {
-      const newRunId = await rerunReview(state.runId);
+      const newRunId = await rerunReview(state.runId, {
+        triggerSource: "workspace",
+        reason: "manual",
+      });
       navigate(`/review/${newRunId}`);
     } catch (err) {
       setRerunError(parseError(err).message);
@@ -135,10 +144,11 @@ export function SummaryTab() {
             className="flex items-center gap-1.5 text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 px-2.5 py-1 rounded transition-colors disabled:opacity-50 ml-auto"
           >
             <RefreshCw className={`w-3 h-3 ${rerunning ? "animate-spin" : ""}`} />
-            {rerunning ? "Rerunning..." : "Rerun"}
+            {rerunning ? "Rerunning..." : "Rerun review"}
           </button>
         )}
       </div>
+      {rerunSupportingCopy && <p className="text-xs text-zinc-500">{rerunSupportingCopy}</p>}
       {rerunError && (
         <p className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded">{rerunError}</p>
       )}
@@ -288,8 +298,36 @@ export function SummaryTab() {
           {state.delta.changed_files.length > 0 && (
             <p className="text-xs text-zinc-500 mt-2">
               {state.delta.changed_files.length} file
-              {state.delta.changed_files.length !== 1 ? "s" : ""} changed since baseline
+              {state.delta.changed_files.length !== 1 ? "s" : ""} changed since the last review
             </p>
+          )}
+          {state.delta.resolved.length > 0 && (
+            <div className="mt-3 space-y-2">
+              <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                Resolved findings
+              </h4>
+              <div className="space-y-1.5">
+                {state.delta.resolved.map((finding) => (
+                  <div
+                    key={finding.id}
+                    className="rounded-lg border border-zinc-800/50 bg-zinc-900/50 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs rounded bg-blue-900/20 px-1.5 py-0.5 text-blue-400">
+                        resolved
+                      </span>
+                      <span className="text-sm text-zinc-100">{finding.title}</span>
+                      <span className="text-xs text-zinc-500 ml-auto capitalize">
+                        {finding.severity}
+                      </span>
+                    </div>
+                    {finding.file_path && (
+                      <code className="mt-1 block text-xs text-zinc-500">{finding.file_path}</code>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </section>
       )}

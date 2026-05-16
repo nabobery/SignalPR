@@ -52,6 +52,10 @@ pub struct ReviewRun {
     // Context and local check artifacts
     pub context_pack_json: Option<String>,
     pub local_checks_json: Option<String>,
+    // Rerun metadata
+    pub rerun_trigger_source: Option<String>,
+    pub rerun_reason: Option<String>,
+    pub rerun_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +218,15 @@ pub struct InboxSubmissionHealth {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxReviewFreshness {
+    pub state: String,
+    pub reviewed_at: Option<String>,
+    pub reviewed_head_sha: Option<String>,
+    pub current_head_sha: Option<String>,
+    pub has_unreviewed_updates: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxReviewRow {
     pub run_id: String,
     pub pr_id: String,
@@ -235,6 +248,7 @@ pub struct InboxReviewRow {
     pub draft: bool,
     pub has_saved_review_draft: bool,
     pub metadata_freshness: InboxMetadataFreshness,
+    pub review_freshness: InboxReviewFreshness,
     pub reviewer_signal: InboxReviewerSignal,
     pub lane_health: InboxLaneHealth,
     pub submission_health: InboxSubmissionHealth,

@@ -72,6 +72,16 @@ function SignalBoardHarness() {
       baselineRunId: null,
       metrics: null,
       delta: null,
+      reviewFreshness: {
+        is_rerun: false,
+        baseline_run_id: null,
+        reviewed_head_sha: null,
+        current_head_sha: null,
+        head_changed_since_review: false,
+        rerun_trigger_source: null,
+        rerun_reason: null,
+        rerun_scope: null,
+      },
       contextPackSummary: null,
       localChecksSummary: null,
       platformMetadata: null,
@@ -115,5 +125,80 @@ describe("SignalBoard", () => {
     await waitFor(() => {
       expect(screen.getByText("Suppressed finding")).toBeInTheDocument();
     });
+  });
+
+  it("defaults reruns to Fresh risk and hides unchanged findings", async () => {
+    const findings = [
+      makeFinding({ id: "new-1", title: "New risk", delta_state: "new" }),
+      makeFinding({ id: "stale-1", title: "Stale risk", delta_state: "stale" }),
+      makeFinding({
+        id: "unchanged-1",
+        title: "Existing unchanged risk",
+        delta_state: "unchanged",
+      }),
+    ];
+
+    const state: ReviewState = {
+      runId: "run-2",
+      prId: "pr-1",
+      status: "ready",
+      prTitle: "Rerun PR",
+      prNumber: 42,
+      prUrl: "",
+      diffText: null,
+      changedFiles: ["src/main.rs"],
+      findings,
+      errorMessage: null,
+      laneStatuses: [],
+      clusters: [],
+      selectedFile: null,
+      focusedFindingId: null,
+      sessionDecisions: {},
+      baselineRunId: "run-1",
+      metrics: null,
+      delta: {
+        changed_files: ["src/main.rs"],
+        changed_hunks_by_file: {},
+        counts: { new: 1, unchanged: 1, stale: 1, resolved: 0 },
+        resolved: [],
+      },
+      reviewFreshness: {
+        is_rerun: true,
+        baseline_run_id: "run-1",
+        reviewed_head_sha: "sha-1",
+        current_head_sha: "sha-2",
+        head_changed_since_review: true,
+        rerun_trigger_source: "workspace",
+        rerun_reason: "manual",
+        rerun_scope: "full_pr",
+      },
+      contextPackSummary: null,
+      localChecksSummary: null,
+      platformMetadata: null,
+      platformMetadataFetchedAt: null,
+    };
+
+    const ctx: ReviewContextType = {
+      state,
+      setSelectedFile: vi.fn(),
+      setSessionDecision: vi.fn(),
+      refreshSnapshot: vi.fn(),
+      revealFinding: vi.fn(),
+    };
+
+    const user = userEvent.setup();
+    render(
+      <ReviewContext.Provider value={ctx}>
+        <SignalBoard />
+      </ReviewContext.Provider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Fresh risk" })).toHaveClass("bg-zinc-700");
+    expect(screen.getByText("New risk")).toBeInTheDocument();
+    expect(screen.getByText("Stale risk")).toBeInTheDocument();
+    expect(screen.queryByText("Existing unchanged risk")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Unchanged" }));
+    expect(screen.getByText("Existing unchanged risk")).toBeInTheDocument();
   });
 });
