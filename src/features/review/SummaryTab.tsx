@@ -14,7 +14,11 @@ import {
 } from "lucide-react";
 import { useReviewContext } from "../../lib/store";
 import { rerunReview, refreshPrMetadata, parseError } from "../../lib/ipc";
-import type { RunScorecard } from "../../lib/types";
+import type {
+  ProviderControlPlaneSnapshot,
+  ProviderSelectionTrace,
+  RunScorecard,
+} from "../../lib/types";
 import { buildRunTrustOverview } from "../../lib/trust";
 
 const severityIcons: Record<string, typeof AlertTriangle> = {
@@ -365,6 +369,13 @@ export function SummaryTab() {
         />
       )}
 
+      {(state.providerSelection || state.providerControl) && (
+        <ProviderControlSection
+          selection={state.providerSelection}
+          control={state.providerControl}
+        />
+      )}
+
       {/* Provider scorecard */}
       {state.metrics && <ProviderScorecard scorecard={state.metrics} />}
     </div>
@@ -611,6 +622,122 @@ function formatMaybeDate(value: string | null): string | null {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
+function ProviderControlSection({
+  selection,
+  control,
+}: {
+  selection: ProviderSelectionTrace | null;
+  control: ProviderControlPlaneSnapshot | null;
+}) {
+  const providerRows =
+    control?.providers
+      .slice()
+      .sort((left, right) => {
+        if (left.recommended_default && !right.recommended_default) return -1;
+        if (!left.recommended_default && right.recommended_default) return 1;
+        return left.display_name.localeCompare(right.display_name);
+      })
+      .slice(0, 4) ?? [];
+
+  const hasFallback = selection?.selection_mode === "fallback" || selection?.warnings.length;
+  const degradedProviders =
+    control?.providers.filter((provider) => provider.status !== "ready") ?? [];
+
+  return (
+    <section>
+      <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+        Provider control
+      </h3>
+      <div className="space-y-3">
+        {selection && (
+          <div
+            className={`rounded-lg border px-3 py-3 ${
+              hasFallback
+                ? "border-amber-800/60 bg-amber-950/20"
+                : "border-zinc-800/50 bg-zinc-900/50"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-100">Why this provider was chosen</span>
+              <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                {selection.selection_mode}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-zinc-400">
+              Requested <span className="text-zinc-200">{selection.requested_provider}</span>,
+              selected <span className="text-zinc-200">{selection.selected_provider}</span>.
+            </p>
+            {selection.warnings.map((warning) => (
+              <p key={warning} className="mt-2 text-xs text-amber-300">
+                {warning}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {control?.recommendation_reason && (
+          <div className="rounded-lg border border-zinc-800/50 bg-zinc-900/50 px-3 py-3">
+            <div className="text-xs text-zinc-500">Recommended default</div>
+            <p className="mt-1 text-sm text-zinc-100">{control.recommendation_reason}</p>
+          </div>
+        )}
+
+        {degradedProviders.length > 0 && (
+          <div className="rounded-lg border border-red-900/40 bg-red-950/10 px-3 py-3">
+            <div className="text-xs text-red-300">Degraded provider warnings</div>
+            <div className="mt-2 space-y-1">
+              {degradedProviders.slice(0, 3).map((provider) => (
+                <p key={provider.provider_id} className="text-xs text-zinc-300">
+                  <span className="text-zinc-100">{provider.display_name}:</span>{" "}
+                  {provider.status_reason}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {providerRows.length > 0 && (
+          <div className="grid grid-cols-2 gap-3">
+            {providerRows.map((provider) => (
+              <div
+                key={provider.provider_id}
+                className="rounded-lg border border-zinc-800/50 bg-zinc-900/50 p-3"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="text-sm text-zinc-100">{provider.display_name}</div>
+                  {provider.recommended_default && (
+                    <span className="text-[10px] rounded bg-emerald-900/30 px-1.5 py-0.5 text-emerald-300">
+                      recommended
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] text-zinc-500 uppercase tracking-wide">
+                  {provider.status}
+                </div>
+                <div className="mt-2 flex gap-1.5 flex-wrap">
+                  <MetricChip
+                    label="trust"
+                    value={pctMaybe(provider.recent_metrics.avg_accept_rate)}
+                  />
+                  <MetricChip
+                    label="latency"
+                    value={secondsMaybe(provider.recent_metrics.avg_latency_ms)}
+                  />
+                  <MetricChip
+                    label="cost"
+                    value={costMaybe(provider.recent_metrics.avg_cost_usd)}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-zinc-400 line-clamp-3">{provider.fit_narrative}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ProviderScorecard({ scorecard }: { scorecard: RunScorecard }) {
   return (
     <section>
@@ -694,4 +821,24 @@ function ProviderScorecard({ scorecard }: { scorecard: RunScorecard }) {
 function pct(value: number): string {
   if (value === 0) return "0%";
   return `${Math.round(value * 100)}%`;
+}
+
+function pctMaybe(value: number | null): string {
+  return value == null ? "—" : pct(value);
+}
+
+function secondsMaybe(value: number | null): string {
+  return value == null ? "—" : `${(value / 1000).toFixed(1)}s`;
+}
+
+function costMaybe(value: number | null): string {
+  return value == null ? "—" : `$${value.toFixed(2)}`;
+}
+
+function MetricChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="text-[10px] rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">
+      {label}: {value}
+    </span>
+  );
 }

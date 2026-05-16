@@ -62,6 +62,7 @@ function renderWithContext(state: Partial<ReviewState>) {
   const fullState: ReviewState = {
     runId: "run-1",
     prId: "pr-1",
+    workspaceId: "ws-1",
     status: "ready",
     prTitle: "Test PR",
     prNumber: 42,
@@ -94,6 +95,8 @@ function renderWithContext(state: Partial<ReviewState>) {
     platformMetadataFetchedAt: null,
     platformCapabilities: null,
     platformCapabilitiesFetchedAt: null,
+    providerSelection: null,
+    providerControl: null,
     ...state,
   };
 
@@ -189,6 +192,7 @@ describe("SummaryTab", () => {
       state: {
         runId: "run-1",
         prId: "pr-1",
+        workspaceId: "ws-1",
         status: "ready",
         prTitle: "Test PR",
         prNumber: 42,
@@ -225,6 +229,8 @@ describe("SummaryTab", () => {
         platformMetadataFetchedAt: null,
         platformCapabilities: null,
         platformCapabilitiesFetchedAt: null,
+        providerSelection: null,
+        providerControl: null,
       },
       setSelectedFile,
       setSessionDecision: vi.fn(),
@@ -321,6 +327,69 @@ describe("SummaryTab", () => {
     expect(screen.getAllByText("80%").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Overall")).toBeInTheDocument();
     expect(screen.getByText("12.5s")).toBeInTheDocument();
+  });
+
+  it("renders provider-choice explanation when control data is present", () => {
+    renderWithContext({
+      providerSelection: {
+        requested_provider: "claude",
+        selected_provider: "codex",
+        selection_mode: "fallback",
+        checks: [],
+        warnings: ["Requested provider 'claude' was unavailable, so SignalPR selected 'codex'."],
+      },
+      providerControl: {
+        providers: [
+          {
+            provider_id: "codex",
+            display_name: "Codex CLI",
+            status: "ready",
+            status_reason: "Ready for review runs",
+            credential_source: null,
+            capabilities: {
+              provider_id: "codex",
+              display_name: "Codex CLI",
+              provider_family: "local_cli",
+              fit_tags: ["balanced"],
+              billing_risk: "included",
+              setup_complexity: "moderate",
+              opt_in_only: false,
+              in_auto_fallback: true,
+              credential_fields: [],
+              interactive_permissions: false,
+              default_governance_tier: "read_only",
+              supports_session_resume: false,
+              supports_checkpointing: false,
+              paid_eval_eligible: false,
+            },
+            recent_metrics: {
+              sample_count: 2,
+              avg_latency_ms: 950,
+              avg_accept_rate: 0.7,
+              avg_edit_rate: 0.1,
+              avg_suppress_rate: 0.1,
+              avg_anchor_validity: 1,
+              avg_cost_usd: null,
+            },
+            fit_narrative: "Ready now.",
+            recommended_default: true,
+            warnings: [],
+          },
+        ],
+        recommended_provider_id: "codex",
+        recommendation_reason: "Codex CLI is ready now.",
+        preferred_provider: "auto",
+        workspace_id: "ws-1",
+        recent_window_size: 20,
+        generated_at: "2026-05-16T10:00:00Z",
+      },
+    });
+
+    expect(screen.getByText("Why this provider was chosen")).toBeInTheDocument();
+    expect(
+      screen.getAllByText((content) => content.includes(", selected "))[0],
+    ).toBeInTheDocument();
+    expect(screen.getByText("Recommended default")).toBeInTheDocument();
   });
 
   it("renders review trust overview", () => {

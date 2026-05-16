@@ -216,6 +216,7 @@ export interface ReviewFreshnessSummary {
 export interface ReviewSnapshot {
   run_id: string;
   pr_id: string;
+  workspace_id: string;
   status: string;
   pr_title: string;
   pr_number: number;
@@ -239,6 +240,8 @@ export interface ReviewSnapshot {
   platform_metadata_fetched_at: string | null;
   platform_capabilities: PlatformCapabilities | null;
   platform_capabilities_fetched_at: string | null;
+  provider_selection: ProviderSelectionTrace | null;
+  provider_control: ProviderControlPlaneSnapshot | null;
 }
 
 export type PlatformId = "github" | "gitlab" | "bitbucket";
@@ -765,6 +768,10 @@ export type ToolGovernanceTier = "read_only" | "guarded_write" | "trusted_write"
 export interface ProviderCapabilities {
   provider_id: string;
   display_name: string;
+  provider_family: string;
+  fit_tags: string[];
+  billing_risk: string;
+  setup_complexity: string;
   opt_in_only: boolean;
   in_auto_fallback: boolean;
   credential_fields: { provider_id: string; field: string; env_var: string }[];
@@ -773,6 +780,54 @@ export interface ProviderCapabilities {
   supports_session_resume: boolean;
   supports_checkpointing: boolean;
   paid_eval_eligible: boolean;
+}
+
+export interface ProviderSelectionCheck {
+  provider_id: string;
+  available: boolean;
+  reason: string;
+  message: string | null;
+}
+
+export interface ProviderSelectionTrace {
+  requested_provider: string;
+  selected_provider: string;
+  selection_mode: "preferred" | "auto" | "fallback";
+  checks: ProviderSelectionCheck[];
+  warnings: string[];
+}
+
+export interface ProviderRecentMetrics {
+  sample_count: number;
+  avg_latency_ms: number | null;
+  avg_accept_rate: number | null;
+  avg_edit_rate: number | null;
+  avg_suppress_rate: number | null;
+  avg_anchor_validity: number | null;
+  avg_cost_usd: number | null;
+}
+
+export interface ProviderControlPlaneProvider {
+  provider_id: string;
+  display_name: string;
+  status: "ready" | "degraded" | "unavailable";
+  status_reason: string;
+  credential_source: CredentialSource | null;
+  capabilities: ProviderCapabilities;
+  recent_metrics: ProviderRecentMetrics;
+  fit_narrative: string;
+  recommended_default: boolean;
+  warnings: string[];
+}
+
+export interface ProviderControlPlaneSnapshot {
+  providers: ProviderControlPlaneProvider[];
+  recommended_provider_id: string | null;
+  recommendation_reason: string | null;
+  preferred_provider: string;
+  workspace_id: string | null;
+  recent_window_size: number;
+  generated_at: string;
 }
 
 // --- Session Metadata ---
@@ -791,4 +846,9 @@ export interface AgentRunMetadata {
   completed_at: string | null;
   status: string;
   finding_count: number;
+}
+
+export interface AgentRunMetadataResponse {
+  runs: AgentRunMetadata[];
+  provider_selection: ProviderSelectionTrace | null;
 }

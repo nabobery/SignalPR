@@ -19,6 +19,8 @@ import type {
   LocalChecksSummary,
   PlatformCapabilities,
   PlatformMetadata,
+  ProviderControlPlaneSnapshot,
+  ProviderSelectionTrace,
 } from "../../lib/types";
 import { getPlatformAuthDiagnostic, isPlatformAuthReady } from "../../lib/types";
 
@@ -38,6 +40,8 @@ interface DiagnosticsProps {
   platformMetadataFetchedAt?: string | null;
   platformCapabilities?: PlatformCapabilities | null;
   platformCapabilitiesFetchedAt?: string | null;
+  providerSelection?: ProviderSelectionTrace | null;
+  providerControl?: ProviderControlPlaneSnapshot | null;
 }
 
 export function DiagnosticsTab({
@@ -50,6 +54,8 @@ export function DiagnosticsTab({
   platformMetadataFetchedAt,
   platformCapabilities,
   platformCapabilitiesFetchedAt,
+  providerSelection,
+  providerControl,
 }: DiagnosticsProps) {
   const [events, setEvents] = useState<EventEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -157,6 +163,12 @@ export function DiagnosticsTab({
           environmentSummary={environmentSummary}
         />
       )}
+      {providerControl && (
+        <ProviderControlSection
+          providerControl={providerControl}
+          providerSelection={providerSelection ?? null}
+        />
+      )}
       {contextPackSummary && <ContextPackSection data={contextPackSummary} />}
       {contextPackSummary && <IssueContextSection items={contextPackSummary.items ?? []} />}
       {localChecksSummary && <LocalChecksSection data={localChecksSummary} />}
@@ -187,6 +199,70 @@ export function DiagnosticsTab({
       <div className="space-y-1">
         {filtered.map((event, i) => (
           <EventRow key={i} event={event} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProviderControlSection({
+  providerControl,
+  providerSelection,
+}: {
+  providerControl: ProviderControlPlaneSnapshot;
+  providerSelection: ProviderSelectionTrace | null;
+}) {
+  const noteworthySelection =
+    providerSelection &&
+    (providerSelection.selection_mode === "fallback" || providerSelection.warnings.length > 0);
+  const degradedProviders = providerControl.providers.filter(
+    (provider) => provider.status !== "ready",
+  );
+
+  if (!noteworthySelection && degradedProviders.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="border border-zinc-800 rounded-lg bg-zinc-900/50">
+      <div className="px-4 py-3 border-b border-zinc-800/60">
+        <div className="text-sm font-medium text-zinc-200">Provider control</div>
+        <p className="mt-1 text-xs text-zinc-500">
+          Routing caveats, degraded providers, and fallback details for this environment.
+        </p>
+      </div>
+      <div className="px-4 py-3 space-y-3">
+        {providerSelection && (
+          <div className="rounded-md border border-zinc-800/60 bg-zinc-950/40 px-3 py-2">
+            <div className="text-xs text-zinc-400">
+              Selected <span className="text-zinc-200">{providerSelection.selected_provider}</span>{" "}
+              via <span className="text-zinc-200">{providerSelection.selection_mode}</span>
+            </div>
+            {providerSelection.warnings.map((warning) => (
+              <p key={warning} className="mt-1 text-xs text-amber-300">
+                {warning}
+              </p>
+            ))}
+          </div>
+        )}
+        {degradedProviders.map((provider) => (
+          <div
+            key={provider.provider_id}
+            className="rounded-md border border-zinc-800/60 bg-zinc-950/40 px-3 py-2"
+          >
+            <div className="flex items-center gap-2">
+              <code className="text-[11px] text-zinc-300">{provider.provider_id}</code>
+              <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                {provider.status}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-zinc-400">{provider.status_reason}</p>
+            {provider.warnings.slice(0, 2).map((warning) => (
+              <p key={warning} className="mt-1 text-xs text-amber-300">
+                {warning}
+              </p>
+            ))}
+          </div>
         ))}
       </div>
     </div>

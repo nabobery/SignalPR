@@ -10,11 +10,14 @@ import type {
   LocalChecksSummary,
   PlatformMetadata,
   PlatformCapabilities,
+  ProviderSelectionTrace,
+  ProviderControlPlaneSnapshot,
 } from "./types";
 
 export interface ReviewState {
   runId: string;
   prId: string;
+  workspaceId: string;
   status: string;
   prTitle: string;
   prNumber: number;
@@ -38,6 +41,8 @@ export interface ReviewState {
   platformMetadataFetchedAt: string | null;
   platformCapabilities: PlatformCapabilities | null;
   platformCapabilitiesFetchedAt: string | null;
+  providerSelection: ProviderSelectionTrace | null;
+  providerControl: ProviderControlPlaneSnapshot | null;
 }
 
 export interface ReviewContextType {

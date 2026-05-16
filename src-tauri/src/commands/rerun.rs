@@ -101,8 +101,11 @@ pub async fn rerun_review(
         config::resolve_config(&conn, repo_config.as_ref(), Some(cwd_path.as_path()))
     };
 
-    let provider: Arc<dyn ReviewProvider> =
-        config::select_provider(&app, &resolved.preferred_provider).await;
+    let selected_provider =
+        config::select_provider_with_trace(&app, &resolved.preferred_provider).await;
+    let provider: Arc<dyn ReviewProvider> = selected_provider.provider.clone();
+    let provider_selection_json = serde_json::to_string(&selected_provider.trace)
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
 
     let lanes = {
         let conn =
@@ -145,6 +148,7 @@ pub async fn rerun_review(
                     .platform_capabilities_fetched_at
                     .as_deref(),
                 latest_head_sha: latest_snapshot.head_sha.as_deref(),
+                provider_selection_json: &provider_selection_json,
                 trigger_source: &trigger_source,
                 reason: &reason,
                 scope: "full_pr",
@@ -352,6 +356,7 @@ struct RerunRecordInput<'a> {
     latest_platform_capabilities_json: Option<&'a str>,
     latest_platform_capabilities_fetched_at: Option<&'a str>,
     latest_head_sha: Option<&'a str>,
+    provider_selection_json: &'a str,
     trigger_source: &'a str,
     reason: &'a str,
     scope: &'a str,
@@ -426,6 +431,7 @@ fn create_rerun_records(
             analysis_diff_text: Some(input.diff_text.to_string()),
             context_pack_json: None,
             local_checks_json: None,
+            provider_selection_json: Some(input.provider_selection_json.to_string()),
             rerun_trigger_source: Some(input.trigger_source.to_string()),
             rerun_reason: Some(input.reason.to_string()),
             rerun_scope: Some(input.scope.to_string()),
@@ -486,6 +492,7 @@ mod tests {
             analysis_diff_text: Some("diff --git a/src/a.rs b/src/a.rs".into()),
             context_pack_json: None,
             local_checks_json: None,
+            provider_selection_json: None,
             rerun_trigger_source: None,
             rerun_reason: None,
             rerun_scope: None,
@@ -547,6 +554,7 @@ index 222..333 100644
                 latest_platform_capabilities_json: None,
                 latest_platform_capabilities_fetched_at: None,
                 latest_head_sha: None,
+                provider_selection_json: "{}",
                 trigger_source: "workspace",
                 reason: "manual",
                 scope: "full_pr",
@@ -598,6 +606,7 @@ index 222..333 100644
                 latest_platform_capabilities_json: None,
                 latest_platform_capabilities_fetched_at: None,
                 latest_head_sha: None,
+                provider_selection_json: "{}",
                 trigger_source: "workspace",
                 reason: "manual",
                 scope: "full_pr",
@@ -647,6 +656,7 @@ index 222..333 100644
                 latest_platform_capabilities_json: None,
                 latest_platform_capabilities_fetched_at: None,
                 latest_head_sha: Some("sha-new"),
+                provider_selection_json: "{}",
                 trigger_source: "workspace",
                 reason: "manual",
                 scope: "full_pr",

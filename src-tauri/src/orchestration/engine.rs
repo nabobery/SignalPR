@@ -940,6 +940,7 @@ mod tests {
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                provider_selection_json: None,
                 rerun_trigger_source: None,
                 rerun_reason: None,
                 rerun_scope: None,

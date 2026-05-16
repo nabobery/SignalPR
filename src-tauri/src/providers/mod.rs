@@ -4,6 +4,7 @@ pub mod claude;
 pub mod claude_code;
 pub mod codex;
 pub mod codex_app_server;
+pub mod control_plane;
 pub mod copilot;
 pub mod cursor;
 pub mod gemini;

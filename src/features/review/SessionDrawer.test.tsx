@@ -1,0 +1,76 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { SessionDrawer } from "./SessionDrawer";
+
+vi.mock("../../lib/ipc", () => ({
+  getAgentRunMetadata: vi.fn(),
+  getProviderCapabilities: vi.fn(),
+  parseError: (err: unknown) => ({ code: "unknown", message: String(err) }),
+}));
+
+import { getAgentRunMetadata, getProviderCapabilities } from "../../lib/ipc";
+
+describe("SessionDrawer", () => {
+  beforeEach(() => {
+    vi.mocked(getAgentRunMetadata).mockResolvedValue({
+      runs: [
+        {
+          id: "agent-run-1",
+          review_run_id: "run-1",
+          lane_id: "security",
+          provider_name: "codex-app-server",
+          governance_tier_at_run: "guarded_write",
+          provider_session_id: "sess-123",
+          resume_cursor: null,
+          checkpoint_metadata_json: null,
+          cost_usd: 0.25,
+          started_at: "2026-05-16T10:00:00Z",
+          completed_at: "2026-05-16T10:01:00Z",
+          status: "completed",
+          finding_count: 2,
+        },
+      ],
+      provider_selection: {
+        requested_provider: "claude",
+        selected_provider: "codex_app_server",
+        selection_mode: "fallback",
+        checks: [],
+        warnings: [
+          "Requested provider 'claude' was unavailable, so SignalPR selected 'codex_app_server'.",
+        ],
+      },
+    });
+    vi.mocked(getProviderCapabilities).mockResolvedValue([
+      {
+        provider_id: "codex_app_server",
+        display_name: "Codex App Server",
+        provider_family: "managed_local_agent",
+        fit_tags: ["balanced"],
+        billing_risk: "included",
+        setup_complexity: "moderate",
+        opt_in_only: false,
+        in_auto_fallback: true,
+        credential_fields: [],
+        interactive_permissions: true,
+        default_governance_tier: "guarded_write",
+        supports_session_resume: false,
+        supports_checkpointing: false,
+        paid_eval_eligible: false,
+      },
+    ]);
+  });
+
+  it("shows provider selection trace inside the drawer", async () => {
+    const user = userEvent.setup();
+    render(<SessionDrawer runId="run-1" />);
+
+    await waitFor(() => expect(screen.getByText("Session Info")).toBeInTheDocument());
+    await user.click(screen.getByText("Session Info"));
+
+    expect(screen.getByText("Provider selection")).toBeInTheDocument();
+    expect(screen.getByText("claude")).toBeInTheDocument();
+    expect(screen.getByText("codex_app_server")).toBeInTheDocument();
+    expect(screen.getByText(/was unavailable/)).toBeInTheDocument();
+  });
+});

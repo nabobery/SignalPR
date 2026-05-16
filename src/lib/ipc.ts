@@ -10,11 +10,12 @@ import type {
   AppError,
   CredentialStatus,
   ProviderCapabilities,
-  AgentRunMetadata,
+  AgentRunMetadataResponse,
   InboxOverview,
   EnvironmentSummary,
   ReviewDraft,
   RefreshMetadataResult,
+  ProviderControlPlaneSnapshot,
 } from "./types";
 
 export function parseError(err: unknown): AppError {
@@ -265,9 +266,15 @@ export async function getProviderCapabilities(): Promise<ProviderCapabilities[]>
   return invoke("get_provider_capabilities");
 }
 
+export async function getProviderControlPlane(
+  workspaceId?: string,
+): Promise<ProviderControlPlaneSnapshot> {
+  return invoke("get_provider_control_plane", { workspaceId });
+}
+
 // --- Session Metadata ---
 
-export async function getAgentRunMetadata(runId: string): Promise<AgentRunMetadata[]> {
+export async function getAgentRunMetadata(runId: string): Promise<AgentRunMetadataResponse> {
   return invoke("get_agent_run_metadata", { runId });
 }
 

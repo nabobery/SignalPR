@@ -287,6 +287,11 @@ WHERE platform_review_id IS NULL
   AND gh_review_id IS NOT NULL;
 "#;
 
+const MIGRATION_V15: &str = r#"
+-- Persist explainable provider selection traces on review runs
+ALTER TABLE review_runs ADD COLUMN provider_selection_json TEXT;
+"#;
+
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version: i32 = conn
         .query_row(
@@ -404,6 +409,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V14)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (14)",
+            [],
+        )?;
+    }
+
+    if current_version < 15 {
+        conn.execute_batch(MIGRATION_V15)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (15)",
             [],
         )?;
     }

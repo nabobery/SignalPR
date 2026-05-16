@@ -42,6 +42,10 @@ pub struct CredentialFieldDescriptor {
 pub struct ProviderCapabilities {
     pub provider_id: String,
     pub display_name: String,
+    pub provider_family: String,
+    pub fit_tags: Vec<String>,
+    pub billing_risk: String,
+    pub setup_complexity: String,
     pub opt_in_only: bool,
     pub in_auto_fallback: bool,
     pub credential_fields: Vec<CredentialFieldDescriptor>,
@@ -58,6 +62,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "codex".into(),
             display_name: "Codex CLI".into(),
+            provider_family: "local_cli".into(),
+            fit_tags: vec!["balanced".into(), "fast_scan".into()],
+            billing_risk: "included".into(),
+            setup_complexity: "moderate".into(),
             opt_in_only: false,
             in_auto_fallback: true,
             credential_fields: vec![],
@@ -70,6 +78,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "codex_app_server".into(),
             display_name: "Codex App Server".into(),
+            provider_family: "managed_local_agent".into(),
+            fit_tags: vec!["balanced".into(), "interactive".into()],
+            billing_risk: "included".into(),
+            setup_complexity: "moderate".into(),
             opt_in_only: false,
             in_auto_fallback: true,
             credential_fields: vec![],
@@ -82,6 +94,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "claude".into(),
             display_name: "Claude (Direct API)".into(),
+            provider_family: "direct_api".into(),
+            fit_tags: vec!["deep_reasoning".into(), "safest_read_only".into()],
+            billing_risk: "paid_api".into(),
+            setup_complexity: "simple".into(),
             opt_in_only: false,
             in_auto_fallback: true,
             credential_fields: vec![CredentialFieldDescriptor {
@@ -98,6 +114,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "copilot".into(),
             display_name: "GitHub Copilot".into(),
+            provider_family: "connected_agent".into(),
+            fit_tags: vec!["interactive".into(), "balanced".into()],
+            billing_risk: "subscription".into(),
+            setup_complexity: "moderate".into(),
             opt_in_only: false,
             in_auto_fallback: true,
             credential_fields: vec![],
@@ -110,6 +130,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "opencode".into(),
             display_name: "OpenCode".into(),
+            provider_family: "connected_agent".into(),
+            fit_tags: vec!["interactive".into(), "experimental".into()],
+            billing_risk: "self_hosted".into(),
+            setup_complexity: "advanced".into(),
             opt_in_only: false,
             in_auto_fallback: true,
             credential_fields: vec![CredentialFieldDescriptor {
@@ -126,6 +150,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "gemini".into(),
             display_name: "Gemini CLI".into(),
+            provider_family: "cli_bridge".into(),
+            fit_tags: vec!["fast_scan".into(), "experimental".into()],
+            billing_risk: "paid_api".into(),
+            setup_complexity: "moderate".into(),
             opt_in_only: true,
             in_auto_fallback: false,
             credential_fields: vec![
@@ -149,6 +177,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "cursor".into(),
             display_name: "Cursor CLI".into(),
+            provider_family: "cli_bridge".into(),
+            fit_tags: vec!["interactive".into(), "experimental".into()],
+            billing_risk: "subscription".into(),
+            setup_complexity: "advanced".into(),
             opt_in_only: true,
             in_auto_fallback: false,
             credential_fields: vec![CredentialFieldDescriptor {
@@ -165,6 +197,10 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "pi".into(),
             display_name: "PI Agent".into(),
+            provider_family: "cli_bridge".into(),
+            fit_tags: vec!["experimental".into(), "safest_read_only".into()],
+            billing_risk: "custom".into(),
+            setup_complexity: "advanced".into(),
             opt_in_only: true,
             in_auto_fallback: false,
             credential_fields: vec![],
@@ -177,6 +213,14 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
         ProviderCapabilities {
             provider_id: "claude_code".into(),
             display_name: "Claude Code".into(),
+            provider_family: "managed_cli".into(),
+            fit_tags: vec![
+                "deep_reasoning".into(),
+                "resume".into(),
+                "experimental".into(),
+            ],
+            billing_risk: "paid_api".into(),
+            setup_complexity: "advanced".into(),
             opt_in_only: true,
             in_auto_fallback: false,
             credential_fields: vec![CredentialFieldDescriptor {
@@ -197,7 +241,22 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
 pub fn get_provider_caps(provider_id: &str) -> Option<ProviderCapabilities> {
     provider_registry()
         .into_iter()
-        .find(|p| p.provider_id == provider_id)
+        .find(|p| p.provider_id == canonical_provider_id(provider_id))
+}
+
+pub fn canonical_provider_id(provider_id: &str) -> &str {
+    match provider_id {
+        "codex_app_server" | "codex-app-server" => "codex_app_server",
+        "codex_exec" | "codex" => "codex",
+        "copilot_sdk" | "copilot" => "copilot",
+        "opencode_sdk" | "opencode" => "opencode",
+        "gemini_cli" | "gemini" => "gemini",
+        "cursor_cli" | "cursor" => "cursor",
+        "pi_cli" | "pi" => "pi",
+        "claude_code" => "claude_code",
+        "claude" => "claude",
+        other => other,
+    }
 }
 
 #[cfg(test)]

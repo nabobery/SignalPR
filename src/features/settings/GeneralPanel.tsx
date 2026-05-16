@@ -5,10 +5,11 @@ import {
   updateSetting,
   parseError,
   getProviderCredentialStatuses,
+  getProviderControlPlane,
   storeProviderSecret,
   deleteProviderSecret,
 } from "../../lib/ipc";
-import type { CredentialStatus } from "../../lib/types";
+import type { CredentialStatus, ProviderControlPlaneSnapshot } from "../../lib/types";
 
 interface SettingsForm {
   max_surface_findings: string;
@@ -35,13 +36,19 @@ export function GeneralPanel() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [providerControl, setProviderControl] = useState<ProviderControlPlaneSnapshot | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadProviderControl = async () => {
+    const snapshot = await getProviderControlPlane();
+    setProviderControl(snapshot);
+  };
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const settings = await getSettings();
+        const [settings, control] = await Promise.all([getSettings(), getProviderControlPlane()]);
         if (cancelled) return;
         const loaded: SettingsForm = {
           max_surface_findings: settings.max_surface_findings ?? DEFAULTS.max_surface_findings,
@@ -53,6 +60,7 @@ export function GeneralPanel() {
         };
         setForm(loaded);
         setInitial(loaded);
+        setProviderControl(control);
       } catch (err) {
         if (!cancelled) setError(parseError(err).message);
       } finally {
@@ -79,6 +87,7 @@ export function GeneralPanel() {
         }
       }
       setInitial({ ...form });
+      await loadProviderControl();
       setSaved(true);
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setSaved(false), 2000);
@@ -134,6 +143,12 @@ export function GeneralPanel() {
 
       <div>
         <label className="text-zinc-400 text-xs block mb-1">Preferred Provider</label>
+        {providerControl && (
+          <ProviderControlSection
+            control={providerControl}
+            selectedProvider={form.preferred_provider}
+          />
+        )}
         <select
           value={form.preferred_provider}
           onChange={(e) => handleChange("preferred_provider", e.target.value)}
@@ -287,9 +302,113 @@ export function GeneralPanel() {
         {saved && <span className="text-emerald-400 text-sm">Saved!</span>}
       </div>
 
-      <ProviderCredentialsSection />
+      <ProviderCredentialsSection onCredentialsChanged={loadProviderControl} />
     </div>
   );
+}
+
+function ProviderControlSection({
+  control,
+  selectedProvider,
+}: {
+  control: ProviderControlPlaneSnapshot;
+  selectedProvider: string;
+}) {
+  return (
+    <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-3">
+      {control.recommended_provider_id && (
+        <div className="rounded-md border border-emerald-900/40 bg-emerald-950/10 px-3 py-2">
+          <div className="text-xs text-emerald-300">Recommended default</div>
+          <p className="mt-1 text-sm text-zinc-100">{control.recommendation_reason}</p>
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-zinc-800 text-zinc-500">
+              <th className="text-left py-1.5 pr-3 font-medium">Provider</th>
+              <th className="text-left py-1.5 px-2 font-medium">Status</th>
+              <th className="text-left py-1.5 px-2 font-medium">Auth</th>
+              <th className="text-left py-1.5 px-2 font-medium">Trust</th>
+              <th className="text-left py-1.5 px-2 font-medium">Latency</th>
+              <th className="text-left py-1.5 px-2 font-medium">Cost</th>
+              <th className="text-left py-1.5 px-2 font-medium">Fit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {control.providers.map((provider) => (
+              <tr key={provider.provider_id} className="border-b border-zinc-800/40 align-top">
+                <td className="py-2 pr-3">
+                  <div className="text-zinc-200">{provider.display_name}</div>
+                  <div className="mt-1 flex gap-1.5 flex-wrap">
+                    {provider.provider_id === selectedProvider && (
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                        selected
+                      </span>
+                    )}
+                    {provider.recommended_default && (
+                      <span className="rounded bg-emerald-900/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                        recommended
+                      </span>
+                    )}
+                    {!provider.capabilities.in_auto_fallback && (
+                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
+                        opt-in
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="py-2 px-2">
+                  <div className="text-zinc-300">{provider.status}</div>
+                  <div className="mt-1 text-[11px] text-zinc-500">{provider.status_reason}</div>
+                </td>
+                <td className="py-2 px-2 text-zinc-400">{provider.credential_source ?? "none"}</td>
+                <td className="py-2 px-2 text-zinc-400">
+                  {percentMaybe(provider.recent_metrics.avg_accept_rate)}
+                </td>
+                <td className="py-2 px-2 text-zinc-400">
+                  {secondsMaybe(provider.recent_metrics.avg_latency_ms)}
+                </td>
+                <td className="py-2 px-2 text-zinc-400">
+                  {costMaybe(provider.recent_metrics.avg_cost_usd)}
+                </td>
+                <td className="py-2 pl-2">
+                  <div className="flex gap-1.5 flex-wrap">
+                    {provider.capabilities.fit_tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300"
+                      >
+                        {tag.split("_").join(" ")}
+                      </span>
+                    ))}
+                  </div>
+                  {provider.warnings.slice(0, 1).map((warning) => (
+                    <div key={warning} className="mt-1 text-[11px] text-amber-300">
+                      {warning}
+                    </div>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function percentMaybe(value: number | null) {
+  return value == null ? "—" : `${Math.round(value * 100)}%`;
+}
+
+function secondsMaybe(value: number | null) {
+  return value == null ? "—" : `${(value / 1000).toFixed(1)}s`;
+}
+
+function costMaybe(value: number | null) {
+  return value == null ? "—" : `$${value.toFixed(2)}`;
 }
 
 const CREDENTIAL_LABELS: Record<string, { label: string; placeholder: string }> = {
@@ -317,7 +436,11 @@ function fieldToProviderAndField(field: string): { providerId: string; field: st
   }
 }
 
-function ProviderCredentialsSection() {
+function ProviderCredentialsSection({
+  onCredentialsChanged,
+}: {
+  onCredentialsChanged?: () => Promise<void> | void;
+}) {
   const [statuses, setStatuses] = useState<CredentialStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
@@ -349,6 +472,7 @@ function ProviderCredentialsSection() {
       await storeProviderSecret(providerId, fieldName, value.trim());
       setSecretInputs((prev) => ({ ...prev, [field]: "" }));
       await loadStatuses();
+      await onCredentialsChanged?.();
     } catch (err) {
       setCredError(parseError(err).message);
     } finally {
@@ -363,6 +487,7 @@ function ProviderCredentialsSection() {
     try {
       await deleteProviderSecret(providerId, fieldName);
       await loadStatuses();
+      await onCredentialsChanged?.();
     } catch (err) {
       setCredError(parseError(err).message);
     } finally {

@@ -12,12 +12,16 @@ use tauri::{AppHandle, Manager};
 use crate::agents::definition::AgentDefinition;
 use crate::agents::registry::AgentRegistry;
 use crate::cleaner::CleanerConfig;
+use crate::providers::capabilities::canonical_provider_id;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::claude_code::manager::ClaudeCodeManager;
 use crate::providers::claude_code::provider::ClaudeCodeProvider;
 use crate::providers::codex::{CodexProvider, MockProvider};
 use crate::providers::codex_app_server::manager::CodexAppServerManager;
 use crate::providers::codex_app_server::provider::CodexAppServerProvider;
+use crate::providers::control_plane::{
+    build_selection_trace, ProviderSelectionCheck, ProviderSelectionTrace,
+};
 use crate::providers::copilot::manager::CopilotManager;
 use crate::providers::copilot::provider::CopilotProvider;
 use crate::providers::cursor::manager::CursorManager;
@@ -234,147 +238,263 @@ pub fn resolve_config(
 ///
 /// The `codex` preference now means "Codex App Server" (managed child process).
 /// Use `codex_exec` for the legacy one-shot `codex exec` provider.
+pub struct SelectedProvider {
+    pub provider: Arc<dyn ReviewProvider>,
+    pub trace: ProviderSelectionTrace,
+}
+
 pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn ReviewProvider> {
-    match preference {
-        "codex" | "codex_app_server" => {
+    select_provider_with_trace(app, preference).await.provider
+}
+
+pub async fn select_provider_with_trace(app: &AppHandle, preference: &str) -> SelectedProvider {
+    let mut checks = Vec::new();
+    let canonical_preference = canonical_provider_id(preference).to_string();
+
+    if preference != "auto" {
+        if let Some(selected) = try_select_named_provider(app, preference, &mut checks).await {
+            let selected_provider_id =
+                canonical_provider_id(selected.provider.provider_name()).to_string();
+            return SelectedProvider {
+                provider: selected.provider,
+                trace: build_selection_trace(&canonical_preference, &selected_provider_id, checks),
+            };
+        }
+    }
+
+    let auto_chain = ["codex_app_server", "codex", "claude", "copilot", "opencode"];
+    for provider_id in auto_chain {
+        if let Some(selected) = try_select_named_provider(app, provider_id, &mut checks).await {
+            return SelectedProvider {
+                provider: selected.provider,
+                trace: build_selection_trace(&canonical_preference, provider_id, checks),
+            };
+        }
+    }
+
+    checks.push(ProviderSelectionCheck {
+        provider_id: "mock".into(),
+        available: true,
+        reason: "fallback".into(),
+        message: Some("No configured providers were healthy, using mock provider".into()),
+    });
+    SelectedProvider {
+        provider: Arc::new(MockProvider::with_default_fixture()),
+        trace: build_selection_trace(&canonical_preference, "mock", checks),
+    }
+}
+
+struct SelectedProviderInternal {
+    provider: Arc<dyn ReviewProvider>,
+}
+
+async fn try_select_named_provider(
+    app: &AppHandle,
+    provider_id: &str,
+    checks: &mut Vec<ProviderSelectionCheck>,
+) -> Option<SelectedProviderInternal> {
+    match canonical_provider_id(provider_id) {
+        "codex_app_server" => {
             let manager = app.state::<Arc<CodexAppServerManager>>().inner().clone();
             let provider = CodexAppServerProvider::new(manager);
-            if provider.health_check().await.available {
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "codex_app_server".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
                 tracing::info!("Using Codex App Server provider");
-                return Arc::new(provider);
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("Codex App Server preferred but unavailable, trying codex exec");
-            // Fall through to codex exec
-            let codex = CodexProvider::new(app.clone());
-            if codex.health_check().await.available {
-                return Arc::new(codex);
-            }
-            tracing::warn!("Codex exec also unavailable, trying Claude");
         }
-        "codex_exec" => {
-            let codex = CodexProvider::new(app.clone());
-            if codex.health_check().await.available {
-                return Arc::new(codex);
+        "codex" => {
+            let provider = CodexProvider::new(app.clone());
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "codex".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
+                tracing::info!("Using Codex exec provider");
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("Codex exec preferred but unavailable, trying Claude");
         }
         "claude" => {
-            let claude = ClaudeProvider::new();
-            if claude.health_check().await.available {
-                return Arc::new(claude);
+            let provider = ClaudeProvider::new();
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "claude".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("Claude preferred but unavailable, trying Codex");
         }
-        "copilot" | "copilot_sdk" => {
+        "copilot" => {
             let manager = app.state::<Arc<CopilotManager>>().inner().clone();
             let provider = CopilotProvider::new(manager, None);
-            if provider.health_check().await.available {
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "copilot".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
                 tracing::info!("Using Copilot provider");
-                return Arc::new(provider);
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("Copilot preferred but unavailable, trying fallback");
         }
-        "opencode" | "opencode_sdk" => {
+        "opencode" => {
             let manager = app.state::<Arc<OpenCodeManager>>().inner().clone();
             let provider = OpenCodeProvider::new(manager, None);
-            if provider.health_check().await.available {
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "opencode".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
                 tracing::info!("Using OpenCode provider");
-                return Arc::new(provider);
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("OpenCode preferred but unavailable, trying fallback");
         }
-        "gemini" | "gemini_cli" => {
-            // Gemini is opt-in only. It requires a paid API key (no auto-detect),
-            // and is deliberately excluded from the "auto" fallback chain to avoid
-            // silently picking a provider that incurs user billing.
+        "gemini" => {
             let manager = app.state::<Arc<GeminiManager>>().inner().clone();
             let provider = GeminiProvider::new(manager, None);
-            if provider.health_check().await.available {
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "gemini".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
                 tracing::info!("Using Gemini provider");
-                return Arc::new(provider);
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("Gemini preferred but unavailable, trying fallback");
         }
-        "cursor" | "cursor_cli" => {
-            // Cursor is opt-in only. It requires a paid Cursor subscription
-            // and a CURSOR_API_KEY; deliberately excluded from the "auto"
-            // fallback chain to avoid silently picking a provider that
-            // incurs user billing.
+        "cursor" => {
             let manager = app.state::<Arc<CursorManager>>().inner().clone();
             let provider = CursorProvider::new(manager, None);
-            if provider.health_check().await.available {
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "cursor".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
                 tracing::info!("Using Cursor provider");
-                return Arc::new(provider);
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("Cursor preferred but unavailable, trying fallback");
         }
-        "pi" | "pi_cli" => {
-            // PI is opt-in only. It requires the `pi` CLI to be installed
-            // (`npm i -g @mariozechner/pi-coding-agent`) and API keys
-            // configured in PI's own config; deliberately excluded from
-            // the "auto" fallback chain.
+        "pi" => {
             let manager = app.state::<Arc<PiManager>>().inner().clone();
             let provider = PiProvider::new(manager, None);
-            if provider.health_check().await.available {
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "pi".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
                 tracing::info!("Using PI provider");
-                return Arc::new(provider);
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("PI preferred but unavailable, trying fallback");
         }
         "claude_code" => {
-            // Claude Code is opt-in only. It requires the sidecar binary
-            // (compiled from the Node bridge) and ANTHROPIC_API_KEY;
-            // deliberately excluded from the "auto" fallback chain to avoid
-            // silently consuming a paid API key.
             let manager = app.state::<Arc<ClaudeCodeManager>>().inner().clone();
             let app_data_dir = app.path().app_data_dir().unwrap_or_default();
             let sidecar_path = resolve_sidecar_path("claude-code-bridge");
             let provider = ClaudeCodeProvider::new(manager, sidecar_path, app_data_dir);
-            if provider.health_check().await.available {
+            let health = provider.health_check().await;
+            checks.push(ProviderSelectionCheck {
+                provider_id: "claude_code".into(),
+                available: health.available,
+                reason: if health.available {
+                    "selected"
+                } else {
+                    "health_check"
+                }
+                .into(),
+                message: health.message.clone(),
+            });
+            if health.available {
                 tracing::info!("Using Claude Code provider");
-                return Arc::new(provider);
+                return Some(SelectedProviderInternal {
+                    provider: Arc::new(provider),
+                });
             }
-            tracing::warn!("Claude Code preferred but unavailable, trying fallback");
         }
-        _ => {} // "auto" — try all in order
+        _ => {}
     }
 
-    // Auto fallback chain: codex app-server → codex exec → claude → mock
-    let manager = app.state::<Arc<CodexAppServerManager>>().inner().clone();
-    let app_server = CodexAppServerProvider::new(manager);
-    if app_server.health_check().await.available {
-        tracing::info!("Using Codex App Server provider (auto-detected)");
-        return Arc::new(app_server);
-    }
-
-    let codex = CodexProvider::new(app.clone());
-    if codex.health_check().await.available {
-        tracing::info!("Using Codex exec provider");
-        return Arc::new(codex);
-    }
-
-    let claude = ClaudeProvider::new();
-    if claude.health_check().await.available {
-        tracing::info!("Codex not available, using Claude provider");
-        return Arc::new(claude);
-    }
-
-    let copilot_mgr = app.state::<Arc<CopilotManager>>().inner().clone();
-    let copilot = CopilotProvider::new(copilot_mgr, None);
-    if copilot.health_check().await.available {
-        tracing::info!("Using Copilot provider (auto-detected)");
-        return Arc::new(copilot);
-    }
-
-    let opencode_mgr = app.state::<Arc<OpenCodeManager>>().inner().clone();
-    let opencode = OpenCodeProvider::new(opencode_mgr, None);
-    if opencode.health_check().await.available {
-        tracing::info!("Using OpenCode provider (auto-detected)");
-        return Arc::new(opencode);
-    }
-
-    tracing::info!("No providers available, using mock provider");
-    Arc::new(MockProvider::with_default_fixture())
+    None
 }
 
 /// Repo-level config loaded from `.signalpr.yml` at workspace root.

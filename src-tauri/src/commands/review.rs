@@ -21,6 +21,10 @@ use crate::local_checks::{self, LocalChecksRunner};
 use crate::orchestration::engine;
 use crate::orchestration::lane::{AgentLaneConfig, LaneSnapshot};
 use crate::preferences::scoring;
+use crate::providers::control_plane::{
+    build_provider_control_plane_snapshot, load_provider_control_inputs,
+    ProviderControlPlaneSnapshot, ProviderSelectionTrace,
+};
 use crate::providers::github::{
     resolve_api_from_app, GitHubApiError, MAX_ISSUES, MAX_ISSUE_BODY_EXCERPT_BYTES,
     MAX_ISSUE_CONTEXT_BYTES_TOTAL,
@@ -46,6 +50,7 @@ pub struct FindingSnapshot {
 pub struct ReviewSnapshot {
     pub run_id: String,
     pub pr_id: String,
+    pub workspace_id: String,
     pub status: String,
     pub pr_title: String,
     pub pr_number: i32,
@@ -67,6 +72,8 @@ pub struct ReviewSnapshot {
     pub platform_metadata_fetched_at: Option<String>,
     pub platform_capabilities: Option<serde_json::Value>,
     pub platform_capabilities_fetched_at: Option<String>,
+    pub provider_selection: Option<ProviderSelectionTrace>,
+    pub provider_control: Option<ProviderControlPlaneSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -199,9 +206,12 @@ pub async fn start_review(
         config::resolve_config(&conn, repo_config.as_ref(), Some(Path::new(&cwd)))
     };
 
-    // Choose provider based on preference
-    let provider: Arc<dyn ReviewProvider> =
-        config::select_provider(&app, &resolved.preferred_provider).await;
+    // Choose the provider from the resolved preference and persist the selection trace.
+    let selected_provider =
+        config::select_provider_with_trace(&app, &resolved.preferred_provider).await;
+    let provider: Arc<dyn ReviewProvider> = selected_provider.provider.clone();
+    let provider_selection_json = serde_json::to_string(&selected_provider.trace)
+        .map_err(|e| AppError::InvalidInput(e.to_string()))?;
 
     let cwd_path = PathBuf::from(&cwd);
 
@@ -238,6 +248,7 @@ pub async fn start_review(
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                provider_selection_json: Some(provider_selection_json),
                 rerun_trigger_source: None,
                 rerun_reason: None,
                 rerun_scope: None,
@@ -533,72 +544,117 @@ pub async fn cancel_review(
 #[tauri::command]
 pub async fn get_review_snapshot(
     run_id: String,
+    app: AppHandle,
     db: tauri::State<'_, AppDb>,
 ) -> Result<ReviewSnapshot, crate::errors::AppError> {
     use crate::errors::AppError;
 
-    let conn =
-        db.0.lock()
-            .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+    let (
+        run,
+        pr,
+        provider_selection,
+        changed_files,
+        lane_statuses,
+        clusters,
+        metrics,
+        decisions_by_finding_id,
+        review_freshness,
+        provider_control_inputs,
+        finding_snapshots,
+        delta,
+    ) = {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
 
-    let run = queries::get_review_run(&conn, &run_id)?
-        .ok_or_else(|| AppError::NotFound("Review run not found".into()))?;
+        let run = queries::get_review_run(&conn, &run_id)?
+            .ok_or_else(|| AppError::NotFound("Review run not found".into()))?;
 
-    let pr = queries::get_pull_request(&conn, &run.pr_id)?
-        .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        let pr = queries::get_pull_request(&conn, &run.pr_id)?
+            .ok_or_else(|| AppError::NotFound("PR not found".into()))?;
+        let provider_selection = run
+            .provider_selection_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<ProviderSelectionTrace>(s).ok());
 
-    let mut findings = queries::get_findings_for_run(&conn, &run_id)?;
-    for finding in &mut findings {
-        if finding.fingerprint.is_none() {
-            finding.fingerprint = Some(review_delta::compute_finding_fingerprint(finding));
+        let mut findings = queries::get_findings_for_run(&conn, &run_id)?;
+        for finding in &mut findings {
+            if finding.fingerprint.is_none() {
+                finding.fingerprint = Some(review_delta::compute_finding_fingerprint(finding));
+            }
         }
-    }
 
-    let changed_files: Vec<String> = pr
-        .changed_files
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_default();
+        let changed_files: Vec<String> = pr
+            .changed_files
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
 
-    // Build lane statuses from agent_runs
-    let agent_runs = queries::get_agent_runs_for_review(&conn, &run_id)?;
-    let lane_statuses: Vec<LaneSnapshot> = agent_runs
-        .iter()
-        .map(|ar| LaneSnapshot {
-            lane_id: ar.lane_id.clone(),
-            status: ar.status.clone(),
-            finding_count: ar.finding_count as usize,
-            provider_name: ar.provider_name.clone(),
-            error_message: ar.error_message.clone(),
-        })
-        .collect();
+        let agent_runs = queries::get_agent_runs_for_review(&conn, &run_id)?;
+        let lane_statuses: Vec<LaneSnapshot> = agent_runs
+            .iter()
+            .map(|ar| LaneSnapshot {
+                lane_id: ar.lane_id.clone(),
+                status: ar.status.clone(),
+                finding_count: ar.finding_count as usize,
+                provider_name: ar.provider_name.clone(),
+                error_message: ar.error_message.clone(),
+            })
+            .collect();
 
-    let clusters = queries::get_clusters_for_run(&conn, &run_id)?;
+        let clusters = queries::get_clusters_for_run(&conn, &run_id)?;
+        let metrics: Option<crate::metrics::RunScorecard> = run
+            .metrics_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
+        let decisions_by_finding_id =
+            latest_decisions_by_finding(&queries::get_decisions_for_run(&conn, &run_id)?);
+        let review_freshness = build_review_freshness_summary(&conn, &run, &pr)?;
+        let provider_control_inputs =
+            load_provider_control_inputs(&conn, Some(&pr.workspace_id)).ok();
 
-    // Deserialize cached metrics
-    let metrics: Option<crate::metrics::RunScorecard> = run
-        .metrics_json
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok());
+        let mut finding_snapshots: Vec<FindingSnapshot> = findings
+            .into_iter()
+            .map(|finding| FindingSnapshot {
+                finding,
+                delta_state: None,
+                baseline_finding_id: None,
+                baseline_decision: None,
+            })
+            .collect();
 
-    // Build the latest decision map for each finding
-    let decisions_by_finding_id =
-        latest_decisions_by_finding(&queries::get_decisions_for_run(&conn, &run_id)?);
-    let review_freshness = build_review_freshness_summary(&conn, &run, &pr)?;
+        let delta = if let Some(baseline_run_id) = run.baseline_run_id.as_deref() {
+            compute_delta_for_snapshot(&conn, baseline_run_id, &run, &pr, &mut finding_snapshots)?
+        } else {
+            None
+        };
 
-    let mut finding_snapshots: Vec<FindingSnapshot> = findings
-        .into_iter()
-        .map(|finding| FindingSnapshot {
-            finding,
-            delta_state: None,
-            baseline_finding_id: None,
-            baseline_decision: None,
-        })
-        .collect();
+        (
+            run,
+            pr,
+            provider_selection,
+            changed_files,
+            lane_statuses,
+            clusters,
+            metrics,
+            decisions_by_finding_id,
+            review_freshness,
+            provider_control_inputs,
+            finding_snapshots,
+            delta,
+        )
+    };
 
-    // Compute finding deltas for reruns with a previous reviewed run
-    let delta = if let Some(baseline_run_id) = run.baseline_run_id.as_deref() {
-        compute_delta_for_snapshot(&conn, baseline_run_id, &run, &pr, &mut finding_snapshots)?
+    let provider_control = if let Some((preferred_provider, recent_runs)) = provider_control_inputs
+    {
+        build_provider_control_plane_snapshot(
+            &app,
+            preferred_provider,
+            recent_runs,
+            Some(pr.workspace_id.clone()),
+        )
+        .await
+        .ok()
     } else {
         None
     };
@@ -606,6 +662,7 @@ pub async fn get_review_snapshot(
     Ok(ReviewSnapshot {
         run_id: run.id,
         pr_id: run.pr_id,
+        workspace_id: pr.workspace_id.clone(),
         status: run.status,
         pr_title: pr.title,
         pr_number: pr.pr_number,
@@ -639,6 +696,8 @@ pub async fn get_review_snapshot(
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         platform_capabilities_fetched_at: pr.platform_capabilities_fetched_at,
+        provider_selection,
+        provider_control,
     })
 }
 
@@ -2193,6 +2252,7 @@ pub async fn resume_review(
                 analysis_diff_text: None,
                 context_pack_json: None,
                 local_checks_json: None,
+                provider_selection_json: None,
                 rerun_trigger_source: None,
                 rerun_reason: None,
                 rerun_scope: None,
@@ -2546,6 +2606,7 @@ mod tests {
             analysis_diff_text: Some(baseline_diff.into()),
             context_pack_json: None,
             local_checks_json: None,
+            provider_selection_json: None,
             rerun_trigger_source: None,
             rerun_reason: None,
             rerun_scope: None,
@@ -2566,6 +2627,7 @@ mod tests {
             analysis_diff_text: Some(baseline_diff.into()),
             context_pack_json: None,
             local_checks_json: None,
+            provider_selection_json: None,
             rerun_trigger_source: None,
             rerun_reason: None,
             rerun_scope: None,
@@ -2780,6 +2842,7 @@ mod tests {
             analysis_diff_text: Some("diff".into()),
             context_pack_json: None,
             local_checks_json: None,
+            provider_selection_json: None,
             rerun_trigger_source: None,
             rerun_reason: None,
             rerun_scope: None,

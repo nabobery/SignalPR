@@ -57,6 +57,7 @@ function renderDraft(stateOverrides: Partial<ReviewState> = {}, onSubmitted = vi
   const state: ReviewState = {
     runId: "run-1",
     prId: "pr-1",
+    workspaceId: "ws-1",
     status: "ready",
     prTitle: "Test PR",
     prNumber: 42,
@@ -122,6 +123,8 @@ function renderDraft(stateOverrides: Partial<ReviewState> = {}, onSubmitted = vi
       ],
     },
     platformCapabilitiesFetchedAt: "2026-05-16T10:00:00Z",
+    providerSelection: null,
+    providerControl: null,
     ...stateOverrides,
   };
 

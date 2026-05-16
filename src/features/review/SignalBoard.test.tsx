@@ -56,6 +56,7 @@ function SignalBoardHarness() {
     () => ({
       runId: "run-1",
       prId: "pr-1",
+      workspaceId: "ws-1",
       status: "ready",
       prTitle: "Test PR",
       prNumber: 42,
@@ -88,6 +89,8 @@ function SignalBoardHarness() {
       platformMetadataFetchedAt: null,
       platformCapabilities: null,
       platformCapabilitiesFetchedAt: null,
+      providerSelection: null,
+      providerControl: null,
     }),
     [findings],
   );
@@ -143,6 +146,7 @@ describe("SignalBoard", () => {
     const state: ReviewState = {
       runId: "run-2",
       prId: "pr-1",
+      workspaceId: "ws-1",
       status: "ready",
       prTitle: "Rerun PR",
       prNumber: 42,
@@ -180,6 +184,8 @@ describe("SignalBoard", () => {
       platformMetadataFetchedAt: null,
       platformCapabilities: null,
       platformCapabilitiesFetchedAt: null,
+      providerSelection: null,
+      providerControl: null,
     };
 
     const ctx: ReviewContextType = {

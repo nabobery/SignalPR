@@ -54,6 +54,7 @@ pub struct ReviewRun {
     // Context and local check artifacts
     pub context_pack_json: Option<String>,
     pub local_checks_json: Option<String>,
+    pub provider_selection_json: Option<String>,
     // Rerun metadata
     pub rerun_trigger_source: Option<String>,
     pub rerun_reason: Option<String>,

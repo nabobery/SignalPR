@@ -774,6 +774,7 @@ pub fn run() {
             commands::providers::store_provider_secret,
             commands::providers::delete_provider_secret,
             commands::providers::get_provider_capabilities,
+            commands::providers::get_provider_control_plane,
             commands::providers::get_agent_run_metadata,
             commands::inbox::get_inbox_overview,
             commands::drafts::get_review_draft,

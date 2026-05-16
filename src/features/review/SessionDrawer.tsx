@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { Database, Clock, DollarSign, ChevronDown, ChevronRight } from "lucide-react";
 import { getAgentRunMetadata, getProviderCapabilities, parseError } from "../../lib/ipc";
-import type { AgentRunMetadata, ProviderCapabilities } from "../../lib/types";
+import type {
+  AgentRunMetadata,
+  AgentRunMetadataResponse,
+  ProviderCapabilities,
+  ProviderSelectionTrace,
+} from "../../lib/types";
 
 interface Props {
   runId: string;
@@ -10,6 +15,7 @@ interface Props {
 export function SessionDrawer({ runId }: Props) {
   const [runs, setRuns] = useState<AgentRunMetadata[]>([]);
   const [caps, setCaps] = useState<ProviderCapabilities[]>([]);
+  const [selection, setSelection] = useState<ProviderSelectionTrace | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,7 +28,9 @@ export function SessionDrawer({ runId }: Props) {
           getProviderCapabilities(),
         ]);
         if (cancelled) return;
-        setRuns(metadata);
+        const response = metadata as AgentRunMetadataResponse;
+        setRuns(response.runs);
+        setSelection(response.provider_selection ?? null);
         setCaps(capabilities);
       } catch (err) {
         if (!cancelled) setError(parseError(err).message);
@@ -55,8 +63,28 @@ export function SessionDrawer({ runId }: Props) {
 
       {expanded && (
         <div className="px-3 pb-3 space-y-2">
+          {selection && (
+            <div className="bg-zinc-900 rounded-lg p-2 text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-300 font-medium">Provider selection</span>
+                <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                  {selection.selection_mode}
+                </span>
+              </div>
+              <p className="text-zinc-500">
+                Requested <span className="text-zinc-300">{selection.requested_provider}</span>,
+                selected <span className="text-zinc-300">{selection.selected_provider}</span>
+              </p>
+              {selection.warnings.map((warning) => (
+                <p key={warning} className="text-amber-400 text-[10px]">
+                  {warning}
+                </p>
+              ))}
+            </div>
+          )}
           {runs.map((run) => {
-            const providerCaps = caps.find((c) => c.provider_id === run.provider_name);
+            const providerKey = normalizeProviderId(run.provider_name);
+            const providerCaps = caps.find((c) => c.provider_id === providerKey);
             return (
               <div key={run.id} className="bg-zinc-900 rounded-lg p-2 text-xs space-y-1">
                 <div className="flex items-center justify-between">
@@ -120,4 +148,13 @@ export function SessionDrawer({ runId }: Props) {
       )}
     </div>
   );
+}
+
+function normalizeProviderId(value: string) {
+  switch (value) {
+    case "codex-app-server":
+      return "codex_app_server";
+    default:
+      return value;
+  }
 }

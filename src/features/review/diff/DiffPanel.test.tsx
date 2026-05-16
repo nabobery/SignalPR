@@ -19,6 +19,7 @@ function makeState(overrides: Partial<ReviewState> = {}): ReviewState {
   return {
     runId: "run-1",
     prId: "pr-1",
+    workspaceId: "ws-1",
     status: "ready",
     prTitle: "Test PR",
     prNumber: 1,
@@ -60,6 +61,8 @@ index abc..def 100644
     platformMetadataFetchedAt: null,
     platformCapabilities: null,
     platformCapabilitiesFetchedAt: null,
+    providerSelection: null,
+    providerControl: null,
     ...overrides,
   };
 }
