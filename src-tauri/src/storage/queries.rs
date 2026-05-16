@@ -1,7 +1,32 @@
 #![allow(dead_code)]
-use rusqlite::{params, Connection};
+use std::collections::{HashMap, HashSet};
+
+use rusqlite::{params, params_from_iter, Connection};
 
 use super::models::*;
+
+#[derive(Debug, Clone)]
+pub struct InboxPrCandidate {
+    pub pr_id: String,
+    pub workspace_id: String,
+    pub workspace_path: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub remote_host: String,
+    pub pr_number: i32,
+    pub title: String,
+    pub author: Option<String>,
+    pub pr_url: String,
+    pub platform_metadata_json: Option<String>,
+    pub platform_metadata_fetched_at: Option<String>,
+    pub last_activity_at: String,
+}
+
+fn sql_placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 // --- Workspaces ---
 
@@ -117,8 +142,8 @@ pub fn update_pull_request_metadata(
 
 pub fn insert_review_run(conn: &Connection, run: &ReviewRun) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO review_runs (id, pr_id, status, started_at, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![run.id, run.pr_id, run.status, run.started_at, run.baseline_run_id, run.metrics_json, run.analysis_diff_hash, run.analysis_diff_text, run.context_pack_json, run.local_checks_json],
+        "INSERT INTO review_runs (id, pr_id, status, started_at, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![run.id, run.pr_id, run.status, run.started_at, run.head_sha_at_run, run.baseline_run_id, run.metrics_json, run.analysis_diff_hash, run.analysis_diff_text, run.context_pack_json, run.local_checks_json],
     )?;
     Ok(())
 }
@@ -148,7 +173,7 @@ pub fn get_review_run(
     run_id: &str,
 ) -> Result<Option<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE id = ?1",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map(params![run_id], |row| {
         Ok(ReviewRun {
@@ -158,12 +183,13 @@ pub fn get_review_run(
             started_at: row.get(3)?,
             completed_at: row.get(4)?,
             error_message: row.get(5)?,
-            baseline_run_id: row.get(6)?,
-            metrics_json: row.get(7)?,
-            analysis_diff_hash: row.get(8)?,
-            analysis_diff_text: row.get(9)?,
-            context_pack_json: row.get(10)?,
-            local_checks_json: row.get(11)?,
+            head_sha_at_run: row.get(6)?,
+            baseline_run_id: row.get(7)?,
+            metrics_json: row.get(8)?,
+            analysis_diff_hash: row.get(9)?,
+            analysis_diff_text: row.get(10)?,
+            context_pack_json: row.get(11)?,
+            local_checks_json: row.get(12)?,
         })
     })?;
     match rows.next() {
@@ -174,7 +200,7 @@ pub fn get_review_run(
 
 pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_id, status, started_at, completed_at, error_message, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json FROM review_runs WHERE status NOT IN ('ready', 'submitted', 'failed') ORDER BY started_at DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(ReviewRun {
@@ -184,12 +210,13 @@ pub fn get_incomplete_review_runs(conn: &Connection) -> Result<Vec<ReviewRun>, r
             started_at: row.get(3)?,
             completed_at: row.get(4)?,
             error_message: row.get(5)?,
-            baseline_run_id: row.get(6)?,
-            metrics_json: row.get(7)?,
-            analysis_diff_hash: row.get(8)?,
-            analysis_diff_text: row.get(9)?,
-            context_pack_json: row.get(10)?,
-            local_checks_json: row.get(11)?,
+            head_sha_at_run: row.get(6)?,
+            baseline_run_id: row.get(7)?,
+            metrics_json: row.get(8)?,
+            analysis_diff_hash: row.get(9)?,
+            analysis_diff_text: row.get(10)?,
+            context_pack_json: row.get(11)?,
+            local_checks_json: row.get(12)?,
         })
     })?;
     rows.collect()
@@ -473,8 +500,8 @@ pub fn get_settings_by_prefix(
 
 pub fn insert_submission(conn: &Connection, sub: &SubmissionRecord) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![sub.id, sub.review_run_id, sub.review_action, sub.submitted_at, sub.status, sub.gh_review_id, sub.error_message, sub.idempotency_key, sub.attempt_count, sub.last_attempt_at],
+        "INSERT INTO submission_records (id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![sub.id, sub.review_run_id, sub.review_action, sub.submitted_at, sub.status, sub.commit_id_at_submission, sub.gh_review_id, sub.error_message, sub.idempotency_key, sub.attempt_count, sub.last_attempt_at],
     )?;
     Ok(())
 }
@@ -506,7 +533,7 @@ pub fn get_submission_for_run(
     review_run_id: &str,
 ) -> Result<Option<SubmissionRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 AND status = 'submitted' LIMIT 1",
+        "SELECT id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 AND status = 'submitted' LIMIT 1",
     )?;
     let mut rows = stmt.query_map(params![review_run_id], |row| {
         Ok(SubmissionRecord {
@@ -515,11 +542,12 @@ pub fn get_submission_for_run(
             review_action: row.get(2)?,
             submitted_at: row.get(3)?,
             status: row.get(4)?,
-            gh_review_id: row.get(5)?,
-            error_message: row.get(6)?,
-            idempotency_key: row.get(7)?,
-            attempt_count: row.get(8)?,
-            last_attempt_at: row.get(9)?,
+            commit_id_at_submission: row.get(5)?,
+            gh_review_id: row.get(6)?,
+            error_message: row.get(7)?,
+            idempotency_key: row.get(8)?,
+            attempt_count: row.get(9)?,
+            last_attempt_at: row.get(10)?,
         })
     })?;
     match rows.next() {
@@ -533,7 +561,7 @@ pub fn get_submission_history(
     review_run_id: &str,
 ) -> Result<Vec<SubmissionRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, review_run_id, review_action, submitted_at, status, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 ORDER BY COALESCE(last_attempt_at, submitted_at) DESC",
+        "SELECT id, review_run_id, review_action, submitted_at, status, commit_id_at_submission, gh_review_id, error_message, idempotency_key, attempt_count, last_attempt_at FROM submission_records WHERE review_run_id = ?1 ORDER BY COALESCE(last_attempt_at, submitted_at) DESC",
     )?;
     let rows = stmt.query_map(params![review_run_id], |row| {
         Ok(SubmissionRecord {
@@ -542,11 +570,12 @@ pub fn get_submission_history(
             review_action: row.get(2)?,
             submitted_at: row.get(3)?,
             status: row.get(4)?,
-            gh_review_id: row.get(5)?,
-            error_message: row.get(6)?,
-            idempotency_key: row.get(7)?,
-            attempt_count: row.get(8)?,
-            last_attempt_at: row.get(9)?,
+            commit_id_at_submission: row.get(5)?,
+            gh_review_id: row.get(6)?,
+            error_message: row.get(7)?,
+            idempotency_key: row.get(8)?,
+            attempt_count: row.get(9)?,
+            last_attempt_at: row.get(10)?,
         })
     })?;
     rows.collect()
@@ -708,6 +737,355 @@ pub fn save_review_draft(
 
 // --- Inbox Overview Queries ---
 
+pub fn list_inbox_pr_candidates(
+    conn: &Connection,
+    limit: i32,
+) -> Result<Vec<InboxPrCandidate>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            p.id,
+            p.workspace_id,
+            w.local_path,
+            w.remote_owner,
+            w.remote_repo,
+            w.remote_host,
+            p.pr_number,
+            p.title,
+            p.author,
+            p.url,
+            p.platform_metadata_json,
+            p.platform_metadata_fetched_at,
+            COALESCE(
+              (
+                SELECT MAX(COALESCE(sr.last_attempt_at, sr.submitted_at))
+                FROM submission_records sr
+                JOIN review_runs rr ON rr.id = sr.review_run_id
+                WHERE rr.pr_id = p.id
+              ),
+              (
+                SELECT MAX(COALESCE(rr.completed_at, rr.started_at))
+                FROM review_runs rr
+                WHERE rr.pr_id = p.id
+              ),
+              p.fetched_at
+            ) AS last_activity_at
+         FROM pull_requests p
+         JOIN workspaces w ON w.id = p.workspace_id
+         WHERE EXISTS (SELECT 1 FROM review_runs rr WHERE rr.pr_id = p.id)
+         ORDER BY last_activity_at DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        Ok(InboxPrCandidate {
+            pr_id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            workspace_path: row.get(2)?,
+            repo_owner: row.get(3)?,
+            repo_name: row.get(4)?,
+            remote_host: row.get(5)?,
+            pr_number: row.get(6)?,
+            title: row.get(7)?,
+            author: row.get(8)?,
+            pr_url: row.get(9)?,
+            platform_metadata_json: row.get(10)?,
+            platform_metadata_fetched_at: row.get(11)?,
+            last_activity_at: row.get(12)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_latest_review_run_for_pr(
+    conn: &Connection,
+    pr_id: &str,
+) -> Result<Option<ReviewRun>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json
+         FROM review_runs
+         WHERE pr_id = ?1
+         ORDER BY COALESCE(completed_at, started_at) DESC, id DESC
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![pr_id], |row| {
+        Ok(ReviewRun {
+            id: row.get(0)?,
+            pr_id: row.get(1)?,
+            status: row.get(2)?,
+            started_at: row.get(3)?,
+            completed_at: row.get(4)?,
+            error_message: row.get(5)?,
+            head_sha_at_run: row.get(6)?,
+            baseline_run_id: row.get(7)?,
+            metrics_json: row.get(8)?,
+            analysis_diff_hash: row.get(9)?,
+            analysis_diff_text: row.get(10)?,
+            context_pack_json: row.get(11)?,
+            local_checks_json: row.get(12)?,
+        })
+    })?;
+    match rows.next() {
+        Some(result) => Ok(Some(result?)),
+        None => Ok(None),
+    }
+}
+
+pub fn list_latest_review_runs_for_prs(
+    conn: &Connection,
+    pr_ids: &[String],
+) -> Result<HashMap<String, ReviewRun>, rusqlite::Error> {
+    if pr_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let sql = format!(
+        "SELECT id, pr_id, status, started_at, completed_at, error_message, head_sha_at_run, baseline_run_id, metrics_json, analysis_diff_hash, analysis_diff_text, context_pack_json, local_checks_json
+         FROM review_runs
+         WHERE pr_id IN ({})
+         ORDER BY pr_id ASC, COALESCE(completed_at, started_at) DESC, id DESC",
+        sql_placeholders(pr_ids.len())
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(pr_ids.iter()), |row| {
+        Ok(ReviewRun {
+            id: row.get(0)?,
+            pr_id: row.get(1)?,
+            status: row.get(2)?,
+            started_at: row.get(3)?,
+            completed_at: row.get(4)?,
+            error_message: row.get(5)?,
+            head_sha_at_run: row.get(6)?,
+            baseline_run_id: row.get(7)?,
+            metrics_json: row.get(8)?,
+            analysis_diff_hash: row.get(9)?,
+            analysis_diff_text: row.get(10)?,
+            context_pack_json: row.get(11)?,
+            local_checks_json: row.get(12)?,
+        })
+    })?;
+
+    let mut latest_by_pr = HashMap::new();
+    for row in rows {
+        let run = row?;
+        latest_by_pr.entry(run.pr_id.clone()).or_insert(run);
+    }
+
+    Ok(latest_by_pr)
+}
+
+pub fn get_submission_history_for_pr(
+    conn: &Connection,
+    pr_id: &str,
+) -> Result<Vec<SubmissionRecord>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT sr.id, sr.review_run_id, sr.review_action, sr.submitted_at, sr.status, sr.commit_id_at_submission, sr.gh_review_id, sr.error_message, sr.idempotency_key, sr.attempt_count, sr.last_attempt_at
+         FROM submission_records sr
+         JOIN review_runs rr ON rr.id = sr.review_run_id
+         WHERE rr.pr_id = ?1
+         ORDER BY COALESCE(sr.last_attempt_at, sr.submitted_at) DESC, sr.id DESC",
+    )?;
+    let rows = stmt.query_map(params![pr_id], |row| {
+        Ok(SubmissionRecord {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            review_action: row.get(2)?,
+            submitted_at: row.get(3)?,
+            status: row.get(4)?,
+            commit_id_at_submission: row.get(5)?,
+            gh_review_id: row.get(6)?,
+            error_message: row.get(7)?,
+            idempotency_key: row.get(8)?,
+            attempt_count: row.get(9)?,
+            last_attempt_at: row.get(10)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_submission_history_for_prs(
+    conn: &Connection,
+    pr_ids: &[String],
+) -> Result<HashMap<String, Vec<SubmissionRecord>>, rusqlite::Error> {
+    if pr_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let sql = format!(
+        "SELECT rr.pr_id, sr.id, sr.review_run_id, sr.review_action, sr.submitted_at, sr.status, sr.commit_id_at_submission, sr.gh_review_id, sr.error_message, sr.idempotency_key, sr.attempt_count, sr.last_attempt_at
+         FROM submission_records sr
+         JOIN review_runs rr ON rr.id = sr.review_run_id
+         WHERE rr.pr_id IN ({})
+         ORDER BY rr.pr_id ASC, COALESCE(sr.last_attempt_at, sr.submitted_at) DESC, sr.id DESC",
+        sql_placeholders(pr_ids.len())
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(pr_ids.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            SubmissionRecord {
+                id: row.get(1)?,
+                review_run_id: row.get(2)?,
+                review_action: row.get(3)?,
+                submitted_at: row.get(4)?,
+                status: row.get(5)?,
+                commit_id_at_submission: row.get(6)?,
+                gh_review_id: row.get(7)?,
+                error_message: row.get(8)?,
+                idempotency_key: row.get(9)?,
+                attempt_count: row.get(10)?,
+                last_attempt_at: row.get(11)?,
+            },
+        ))
+    })?;
+
+    let mut submissions_by_pr: HashMap<String, Vec<SubmissionRecord>> = HashMap::new();
+    for row in rows {
+        let (pr_id, submission) = row?;
+        submissions_by_pr.entry(pr_id).or_default().push(submission);
+    }
+
+    Ok(submissions_by_pr)
+}
+
+pub fn list_active_finding_counts_for_runs(
+    conn: &Connection,
+    run_ids: &[String],
+) -> Result<HashMap<String, i32>, rusqlite::Error> {
+    if run_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let sql = format!(
+        "SELECT review_run_id, COUNT(*)
+         FROM findings
+         WHERE status = 'active' AND review_run_id IN ({})
+         GROUP BY review_run_id",
+        sql_placeholders(run_ids.len())
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(run_ids.iter()), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+    })?;
+
+    let mut counts = HashMap::new();
+    for row in rows {
+        let (run_id, count) = row?;
+        counts.insert(run_id, count);
+    }
+
+    Ok(counts)
+}
+
+pub fn list_agent_runs_for_reviews(
+    conn: &Connection,
+    run_ids: &[String],
+) -> Result<HashMap<String, Vec<AgentRun>>, rusqlite::Error> {
+    if run_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let sql = format!(
+        "SELECT id, review_run_id, lane_id, provider_name, status, started_at, completed_at, finding_count, error_message, governance_tier_at_run, provider_session_id, resume_cursor, checkpoint_metadata_json, cost_usd
+         FROM agent_runs
+         WHERE review_run_id IN ({})
+         ORDER BY review_run_id ASC, started_at ASC, lane_id ASC",
+        sql_placeholders(run_ids.len())
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(run_ids.iter()), |row| {
+        Ok(AgentRun {
+            id: row.get(0)?,
+            review_run_id: row.get(1)?,
+            lane_id: row.get(2)?,
+            provider_name: row.get(3)?,
+            status: row.get(4)?,
+            started_at: row.get(5)?,
+            completed_at: row.get(6)?,
+            finding_count: row.get(7)?,
+            error_message: row.get(8)?,
+            governance_tier_at_run: row.get(9)?,
+            provider_session_id: row.get(10)?,
+            resume_cursor: row.get(11)?,
+            checkpoint_metadata_json: row.get(12)?,
+            cost_usd: row.get(13)?,
+        })
+    })?;
+
+    let mut agent_runs_by_review: HashMap<String, Vec<AgentRun>> = HashMap::new();
+    for row in rows {
+        let agent_run = row?;
+        agent_runs_by_review
+            .entry(agent_run.review_run_id.clone())
+            .or_default()
+            .push(agent_run);
+    }
+
+    Ok(agent_runs_by_review)
+}
+
+pub fn list_review_draft_run_ids(
+    conn: &Connection,
+    run_ids: &[String],
+) -> Result<HashSet<String>, rusqlite::Error> {
+    if run_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let sql = format!(
+        "SELECT run_id
+         FROM review_drafts
+         WHERE run_id IN ({})",
+        sql_placeholders(run_ids.len())
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(run_ids.iter()), |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    let mut draft_run_ids = HashSet::new();
+    for row in rows {
+        draft_run_ids.insert(row?);
+    }
+
+    Ok(draft_run_ids)
+}
+
+fn empty_inbox_metadata_freshness() -> InboxMetadataFreshness {
+    InboxMetadataFreshness {
+        fetched_at: None,
+        is_stale: false,
+    }
+}
+
+fn empty_inbox_reviewer_signal() -> InboxReviewerSignal {
+    InboxReviewerSignal {
+        has_signal: false,
+        label: "No reviewer signal".into(),
+        precision: "none".into(),
+        requested_reviewers: Vec::new(),
+        requested_teams: Vec::new(),
+    }
+}
+
+fn empty_inbox_lane_health() -> InboxLaneHealth {
+    InboxLaneHealth {
+        state: "unknown".into(),
+        failed_count: 0,
+        timed_out_count: 0,
+        running_count: 0,
+        completed_count: 0,
+    }
+}
+
+fn empty_inbox_submission_health() -> InboxSubmissionHealth {
+    InboxSubmissionHealth {
+        state: "none".into(),
+        submitted_at: None,
+        review_action: None,
+        commit_id: None,
+        error_message: None,
+    }
+}
+
 pub fn list_recent_review_runs(
     conn: &Connection,
     limit: i32,
@@ -750,6 +1128,21 @@ pub fn list_recent_review_runs(
             last_updated: row.get(7)?,
             active_finding_count: row.get(8)?,
             providers_used,
+            queue_state: "submitted_recently".into(),
+            platform: "unknown".into(),
+            repo_owner: String::new(),
+            repo_name: String::new(),
+            remote_host: "github.com".into(),
+            workspace_id: String::new(),
+            workspace_path: String::new(),
+            draft: false,
+            has_saved_review_draft: false,
+            metadata_freshness: empty_inbox_metadata_freshness(),
+            reviewer_signal: empty_inbox_reviewer_signal(),
+            lane_health: empty_inbox_lane_health(),
+            submission_health: empty_inbox_submission_health(),
+            attention_reasons: Vec::new(),
+            allowed_actions: vec!["open".into()],
         })
     })?;
     rows.collect()
@@ -797,6 +1190,21 @@ pub fn list_incomplete_review_runs_enriched(
             last_updated: row.get(7)?,
             active_finding_count: row.get(8)?,
             providers_used,
+            queue_state: "in_progress".into(),
+            platform: "unknown".into(),
+            repo_owner: String::new(),
+            repo_name: String::new(),
+            remote_host: "github.com".into(),
+            workspace_id: String::new(),
+            workspace_path: String::new(),
+            draft: false,
+            has_saved_review_draft: false,
+            metadata_freshness: empty_inbox_metadata_freshness(),
+            reviewer_signal: empty_inbox_reviewer_signal(),
+            lane_health: empty_inbox_lane_health(),
+            submission_health: empty_inbox_submission_health(),
+            attention_reasons: Vec::new(),
+            allowed_actions: vec!["open".into(), "resume".into()],
         })
     })?;
     rows.collect()
@@ -895,7 +1303,7 @@ pub fn update_review_run_analysis_diff(
     Ok(())
 }
 
-// --- Review Run Artifacts (Phase 3) ---
+// --- Review Run Artifacts ---
 
 pub fn update_review_run_context_pack(
     conn: &Connection,
@@ -1129,6 +1537,7 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00".into()),
             completed_at: None,
             error_message: None,
+            head_sha_at_run: None,
             baseline_run_id: None,
             metrics_json: None,
             analysis_diff_hash: None,
@@ -1193,6 +1602,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                head_sha_at_run: None,
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,
@@ -1302,6 +1712,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                head_sha_at_run: None,
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,
@@ -1435,6 +1846,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                head_sha_at_run: None,
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,
@@ -1453,6 +1865,7 @@ mod tests {
                 review_action: "comment".into(),
                 submitted_at: None,
                 status: "pending".into(),
+                commit_id_at_submission: None,
                 gh_review_id: None,
                 error_message: None,
                 idempotency_key: Some("k".into()),
@@ -1537,6 +1950,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 error_message: None,
+                head_sha_at_run: None,
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,
@@ -1683,6 +2097,7 @@ mod tests {
                 started_at: Some("2026-01-01T00:00:00".into()),
                 completed_at: Some("2026-01-01T00:01:00".into()),
                 error_message: None,
+                head_sha_at_run: None,
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,
@@ -1746,6 +2161,7 @@ mod tests {
                 started_at: Some("2026-01-02T00:00:00".into()),
                 completed_at: None,
                 error_message: None,
+                head_sha_at_run: None,
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,

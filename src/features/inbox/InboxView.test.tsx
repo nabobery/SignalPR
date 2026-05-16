@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
@@ -15,14 +15,65 @@ vi.mock("../intake/IntakeQuickAction", () => ({
 
 const mockGetInboxOverview = vi.fn();
 const mockResumeReview = vi.fn();
+const mockRefreshPrMetadata = vi.fn();
 vi.mock("../../lib/ipc", () => ({
   getInboxOverview: (...args: unknown[]) => mockGetInboxOverview(...args),
   resumeReview: (...args: unknown[]) => mockResumeReview(...args),
+  refreshPrMetadata: (...args: unknown[]) => mockRefreshPrMetadata(...args),
   parseError: (err: unknown) => ({ code: "unknown", message: String(err) }),
 }));
 
 import { InboxView } from "./InboxView";
-import type { InboxOverview } from "../../lib/types";
+import type { InboxOverview, InboxReviewRow } from "../../lib/types";
+
+function makeRow(overrides: Partial<InboxReviewRow> = {}): InboxReviewRow {
+  return {
+    run_id: "run-1",
+    pr_id: "pr-1",
+    pr_number: 42,
+    title: "Tighten auth guards",
+    author: "alice",
+    pr_url: "https://github.com/octo/signal/pull/42",
+    status: "ready",
+    last_updated: "2026-01-15T12:00:00Z",
+    active_finding_count: 3,
+    providers_used: ["codex"],
+    queue_state: "ready_to_submit",
+    platform: "github",
+    repo_owner: "octo",
+    repo_name: "signal",
+    remote_host: "github.com",
+    workspace_id: "ws-1",
+    workspace_path: "/Users/test/signal",
+    draft: false,
+    has_saved_review_draft: false,
+    metadata_freshness: { fetched_at: "2026-01-15T12:00:00Z", is_stale: false },
+    reviewer_signal: {
+      has_signal: true,
+      label: "Needs your review",
+      precision: "exact",
+      requested_reviewers: ["mona"],
+      requested_teams: [],
+    },
+    lane_health: {
+      state: "healthy",
+      failed_count: 0,
+      timed_out_count: 0,
+      running_count: 0,
+      completed_count: 3,
+    },
+    submission_health: {
+      state: "none",
+      submitted_at: null,
+      review_action: null,
+      commit_id: null,
+      error_message: null,
+    },
+    attention_reasons: [],
+    allowed_actions: ["open", "refresh_metadata"],
+    ...overrides,
+  };
+}
 
 function makeOverview(overrides: Partial<InboxOverview> = {}): InboxOverview {
   return {
@@ -33,8 +84,20 @@ function makeOverview(overrides: Partial<InboxOverview> = {}): InboxOverview {
       warnings: [],
       tools: [{ tool_name: "gh", status: "ready", version: "2.0", message: null, checked_at: "" }],
     },
-    incomplete_reviews: [],
-    recent_reviews: [],
+    attention_summary: {
+      total_items: 0,
+      failed_runs: 0,
+      failed_submissions: 0,
+      stale_metadata: 0,
+      degraded_runs: 0,
+    },
+    sections: [
+      {
+        id: "ready_to_submit",
+        title: "Ready to submit",
+        items: [makeRow()],
+      },
+    ],
     recent_workspaces: [],
     ...overrides,
   };
@@ -45,7 +108,7 @@ describe("InboxView", () => {
     vi.clearAllMocks();
   });
 
-  it("shows loading spinner then renders overview", async () => {
+  it("renders readiness banner and queue sections", async () => {
     mockGetInboxOverview.mockResolvedValue(makeOverview());
 
     render(
@@ -58,37 +121,31 @@ describe("InboxView", () => {
     await waitFor(() => {
       expect(screen.getByText("Ready to review")).toBeInTheDocument();
     });
+    expect(screen.getAllByText("Ready to submit").length).toBeGreaterThan(0);
+    expect(screen.getByText("Tighten auth guards")).toBeInTheDocument();
   });
 
-  it("shows error when fetch fails", async () => {
-    mockGetInboxOverview.mockRejectedValue("network error");
-
-    render(
-      <MemoryRouter>
-        <InboxView />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("network error")).toBeInTheDocument();
-    });
-  });
-
-  it("renders incomplete reviews with Restart and Open buttons", async () => {
+  it("distinguishes PR draft from saved review draft badges", async () => {
     mockGetInboxOverview.mockResolvedValue(
       makeOverview({
-        incomplete_reviews: [
+        sections: [
           {
-            run_id: "run-1",
-            pr_id: "pr-1",
-            pr_number: 42,
-            title: "Fix auth bug",
-            author: "alice",
-            pr_url: "https://github.com/org/repo/pull/42",
-            status: "running_agents",
-            last_updated: "2026-05-04T00:00:00Z",
-            active_finding_count: 3,
-            providers_used: ["codex"],
+            id: "review_requested",
+            title: "Review requested",
+            items: [
+              makeRow({
+                pr_id: "pr-1",
+                draft: true,
+                has_saved_review_draft: false,
+              }),
+              makeRow({
+                pr_id: "pr-2",
+                run_id: "run-2",
+                title: "Saved review only",
+                draft: false,
+                has_saved_review_draft: true,
+              }),
+            ],
           },
         ],
       }),
@@ -101,35 +158,70 @@ describe("InboxView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Fix auth bug")).toBeInTheDocument();
+      expect(screen.getByText("PR draft")).toBeInTheDocument();
     });
-    expect(screen.getByText("#42")).toBeInTheDocument();
-    expect(screen.getByText("alice")).toBeInTheDocument();
-    expect(screen.getByText("3 findings")).toBeInTheDocument();
-    expect(screen.getByText("Restart")).toBeInTheDocument();
-    expect(screen.getByText("Open")).toBeInTheDocument();
+    expect(screen.getByText("Review draft")).toBeInTheDocument();
   });
 
-  it("renders recent reviews without Restart button", async () => {
+  it("shows queue/setup attention banner details", async () => {
     mockGetInboxOverview.mockResolvedValue(
       makeOverview({
-        recent_reviews: [
+        environment_summary: {
+          can_review: false,
+          can_submit: false,
+          available_providers: [],
+          warnings: ["gh CLI not found"],
+          tools: [
+            { tool_name: "gh", status: "missing", version: null, message: null, checked_at: "" },
+          ],
+        },
+        attention_summary: {
+          total_items: 2,
+          failed_runs: 1,
+          failed_submissions: 1,
+          stale_metadata: 0,
+          degraded_runs: 0,
+        },
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <InboxView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Queue or setup needs attention")).toBeInTheDocument();
+    });
+    expect(screen.getByText("gh CLI not found")).toBeInTheDocument();
+    expect(screen.getByText("2 PRs need attention")).toBeInTheDocument();
+  });
+
+  it("filters queue rows by search text", async () => {
+    mockGetInboxOverview.mockResolvedValue(
+      makeOverview({
+        sections: [
           {
-            run_id: "run-2",
-            pr_id: "pr-2",
-            pr_number: 99,
-            title: "Add caching layer",
-            author: "bob",
-            pr_url: "https://github.com/org/repo/pull/99",
-            status: "submitted",
-            last_updated: "2026-05-03T00:00:00Z",
-            active_finding_count: 0,
-            providers_used: [],
+            id: "review_queue",
+            title: "Review requested",
+            items: [
+              makeRow({ pr_id: "pr-1", title: "Tighten auth guards" }),
+              makeRow({
+                pr_id: "pr-2",
+                run_id: "run-2",
+                pr_number: 7,
+                title: "Add caching layer",
+                repo_name: "api",
+                repo_owner: "octo",
+              }),
+            ],
           },
         ],
       }),
     );
 
+    const user = userEvent.setup();
     render(
       <MemoryRouter>
         <InboxView />
@@ -139,25 +231,71 @@ describe("InboxView", () => {
     await waitFor(() => {
       expect(screen.getByText("Add caching layer")).toBeInTheDocument();
     });
-    expect(screen.queryByText("Restart")).not.toBeInTheDocument();
-    expect(screen.getByText("Open")).toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText("Search PR, author, repo, workspace..."),
+      "caching",
+    );
+
+    expect(screen.queryByText("Tighten auth guards")).not.toBeInTheDocument();
+    expect(screen.getByText("Add caching layer")).toBeInTheDocument();
   });
 
-  it("clicking Restart calls resumeReview and navigates", async () => {
+  it("filters queue rows by repo and provider", async () => {
     mockGetInboxOverview.mockResolvedValue(
       makeOverview({
-        incomplete_reviews: [
+        sections: [
           {
-            run_id: "run-1",
-            pr_id: "pr-1",
-            pr_number: 42,
-            title: "Fix auth bug",
-            author: "alice",
-            pr_url: "",
-            status: "running_agents",
-            last_updated: "",
-            active_finding_count: 0,
-            providers_used: [],
+            id: "review_queue",
+            title: "Review requested",
+            items: [
+              makeRow({ pr_id: "pr-1", repo_name: "signal", providers_used: ["codex"] }),
+              makeRow({
+                pr_id: "pr-2",
+                run_id: "run-2",
+                repo_name: "api",
+                title: "Add billing hooks",
+                providers_used: ["copilot"],
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InboxView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Add billing hooks")).toBeInTheDocument();
+    });
+
+    const selects = screen.getAllByRole("combobox");
+    await user.selectOptions(selects[0], "octo/api");
+    await user.selectOptions(selects[2], "copilot");
+
+    expect(screen.queryByText("Tighten auth guards")).not.toBeInTheDocument();
+    expect(screen.getByText("Add billing hooks")).toBeInTheDocument();
+  });
+
+  it("clicking Resume calls resumeReview and navigates", async () => {
+    mockGetInboxOverview.mockResolvedValue(
+      makeOverview({
+        sections: [
+          {
+            id: "in_progress",
+            title: "In progress",
+            items: [
+              makeRow({
+                queue_state: "in_progress",
+                status: "running_agents",
+                allowed_actions: ["open", "resume"],
+              }),
+            ],
           },
         ],
       }),
@@ -172,10 +310,10 @@ describe("InboxView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Restart")).toBeInTheDocument();
+      expect(screen.getByText("Resume")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Restart"));
+    await user.click(screen.getByText("Resume"));
 
     await waitFor(() => {
       expect(mockResumeReview).toHaveBeenCalledWith("run-1");
@@ -183,25 +321,27 @@ describe("InboxView", () => {
     });
   });
 
-  it("clicking Open navigates to review", async () => {
-    mockGetInboxOverview.mockResolvedValue(
-      makeOverview({
-        recent_reviews: [
-          {
-            run_id: "run-2",
-            pr_id: "pr-2",
-            pr_number: 99,
-            title: "Add caching layer",
-            author: null,
-            pr_url: "",
-            status: "ready",
-            last_updated: "",
-            active_finding_count: 0,
-            providers_used: [],
-          },
-        ],
-      }),
-    );
+  it("clicking Refresh metadata refreshes the row data", async () => {
+    mockGetInboxOverview
+      .mockResolvedValueOnce(
+        makeOverview({
+          sections: [
+            {
+              id: "attention_needed",
+              title: "Attention needed",
+              items: [
+                makeRow({
+                  metadata_freshness: { fetched_at: "2026-05-14T12:00:00Z", is_stale: true },
+                  attention_reasons: ["Platform metadata is stale"],
+                  queue_state: "attention_needed",
+                }),
+              ],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(makeOverview());
+    mockRefreshPrMetadata.mockResolvedValue(undefined);
 
     const user = userEvent.setup();
     render(
@@ -211,16 +351,21 @@ describe("InboxView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Open")).toBeInTheDocument();
+      expect(screen.getByText("Metadata stale")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Open"));
-    expect(mockNavigate).toHaveBeenCalledWith("/review/run-2");
+    await user.click(screen.getByText("Refresh"));
+
+    await waitFor(() => {
+      expect(mockRefreshPrMetadata).toHaveBeenCalledWith("pr-1");
+      expect(mockGetInboxOverview).toHaveBeenCalledTimes(2);
+    });
   });
 
-  it("shows empty state when no reviews exist", async () => {
+  it("shows empty filtered state when nothing matches", async () => {
     mockGetInboxOverview.mockResolvedValue(makeOverview());
 
+    const user = userEvent.setup();
     render(
       <MemoryRouter>
         <InboxView />
@@ -228,61 +373,11 @@ describe("InboxView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/No reviews yet/)).toBeInTheDocument();
+      expect(screen.getByText("Tighten auth guards")).toBeInTheDocument();
     });
-  });
 
-  it("renders recent workspaces when present", async () => {
-    mockGetInboxOverview.mockResolvedValue(
-      makeOverview({
-        recent_workspaces: [
-          {
-            workspace_id: "ws-1",
-            local_path: "/Users/test/repo",
-            remote_owner: "org",
-            remote_repo: "repo",
-            last_reviewed_at: "2026-05-03T00:00:00Z",
-          },
-        ],
-      }),
-    );
+    await user.type(screen.getByPlaceholderText("Search PR, author, repo, workspace..."), "nope");
 
-    render(
-      <MemoryRouter>
-        <InboxView />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("org/repo")).toBeInTheDocument();
-      expect(screen.getByText("/Users/test/repo")).toBeInTheDocument();
-    });
-  });
-
-  it("shows readiness warnings when tools are missing", async () => {
-    mockGetInboxOverview.mockResolvedValue(
-      makeOverview({
-        environment_summary: {
-          can_review: false,
-          can_submit: false,
-          available_providers: [],
-          warnings: ["gh CLI not found"],
-          tools: [
-            { tool_name: "gh", status: "missing", version: null, message: null, checked_at: "" },
-          ],
-        },
-      }),
-    );
-
-    render(
-      <MemoryRouter>
-        <InboxView />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Setup needed")).toBeInTheDocument();
-      expect(screen.getByText("gh CLI not found")).toBeInTheDocument();
-    });
+    expect(screen.getByText("No queue items match the current filters.")).toBeInTheDocument();
   });
 });

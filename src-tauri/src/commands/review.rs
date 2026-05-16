@@ -79,6 +79,21 @@ fn require_non_empty_diff(diff: Option<String>) -> Result<String, crate::errors:
     Ok(diff)
 }
 
+fn extract_head_sha_from_pr(pr: &Option<PullRequest>) -> Option<String> {
+    let pr = pr.as_ref()?;
+    let json = pr.platform_metadata_json.as_deref()?;
+    if let Ok(meta) = serde_json::from_str::<crate::platform::adapter::PlatformMetadata>(json) {
+        return match meta {
+            crate::platform::adapter::PlatformMetadata::GitHub(g) => Some(g.head_sha),
+            crate::platform::adapter::PlatformMetadata::GitLab(g) => Some(g.head_sha),
+            crate::platform::adapter::PlatformMetadata::Bitbucket(b) => Some(b.head_sha),
+        };
+    }
+    serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(json)
+        .ok()
+        .map(|meta| meta.head_sha)
+}
+
 #[tauri::command]
 pub async fn start_review(
     app: AppHandle,
@@ -151,6 +166,9 @@ pub async fn start_review(
                 started_at: Some(chrono::Utc::now().to_rfc3339()),
                 completed_at: None,
                 error_message: None,
+                head_sha_at_run: extract_head_sha_from_pr(&queries::get_pull_request(
+                    &conn, &pr_id,
+                )?),
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,
@@ -2093,6 +2111,9 @@ pub async fn resume_review(
                 started_at: Some(chrono::Utc::now().to_rfc3339()),
                 completed_at: None,
                 error_message: None,
+                head_sha_at_run: extract_head_sha_from_pr(&queries::get_pull_request(
+                    &conn, &pr_id,
+                )?),
                 baseline_run_id: None,
                 metrics_json: None,
                 analysis_diff_hash: None,
@@ -2438,6 +2459,7 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00Z".into()),
             completed_at: Some("2026-01-01T00:01:00Z".into()),
             error_message: None,
+            head_sha_at_run: None,
             baseline_run_id: None,
             metrics_json: None,
             analysis_diff_hash: None,
@@ -2454,6 +2476,7 @@ mod tests {
             started_at: Some("2026-01-02T00:00:00Z".into()),
             completed_at: Some("2026-01-02T00:01:00Z".into()),
             error_message: None,
+            head_sha_at_run: None,
             baseline_run_id: Some(baseline_run.id.clone()),
             metrics_json: None,
             analysis_diff_hash: None,

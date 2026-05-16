@@ -168,44 +168,7 @@ pub async fn submit_review(
     // Format review body with optional reviewer summary prepended
     let body = format_review_body(&active_findings, review_summary_markdown.as_deref());
 
-    let idempotency_key = sha256_hex(&format!("{}|{}|{}", run_id, action, body));
-
-    // Create submission record
-    let sub_id = uuid::Uuid::new_v4().to_string();
-    {
-        let conn =
-            db.0.lock()
-                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-        let history = queries::get_submission_history(&conn, &run_id).unwrap_or_default();
-        let attempt = next_attempt_count(&history);
-        queries::insert_submission(
-            &conn,
-            &SubmissionRecord {
-                id: sub_id.clone(),
-                review_run_id: run_id.clone(),
-                review_action: action.clone(),
-                submitted_at: None,
-                status: "pending".into(),
-                gh_review_id: None,
-                error_message: None,
-                idempotency_key: Some(idempotency_key),
-                attempt_count: Some(attempt),
-                last_attempt_at: Some(chrono::Utc::now().to_rfc3339()),
-            },
-        )?;
-    }
-
-    // Log submission started event
-    let _ = event_log.append(
-        &run_id,
-        "submission_started",
-        serde_json::json!({
-            "action": action,
-            "finding_count": active_findings.len(),
-        }),
-    );
-
-    // Resolve head SHA from metadata for coherent review submission
+    // Resolve head SHA from metadata for coherent review submission and queue state tracking.
     let (head_sha, is_gitlab, is_bitbucket) = {
         let conn =
             db.0.lock()
@@ -241,6 +204,44 @@ pub async fn submit_review(
         );
         (sha, is_gl, is_bb)
     };
+
+    let idempotency_key = sha256_hex(&format!("{}|{}|{}", run_id, action, body));
+
+    // Create submission record
+    let sub_id = uuid::Uuid::new_v4().to_string();
+    {
+        let conn =
+            db.0.lock()
+                .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+        let history = queries::get_submission_history(&conn, &run_id).unwrap_or_default();
+        let attempt = next_attempt_count(&history);
+        queries::insert_submission(
+            &conn,
+            &SubmissionRecord {
+                id: sub_id.clone(),
+                review_run_id: run_id.clone(),
+                review_action: action.clone(),
+                submitted_at: None,
+                status: "pending".into(),
+                commit_id_at_submission: head_sha.clone(),
+                gh_review_id: None,
+                error_message: None,
+                idempotency_key: Some(idempotency_key),
+                attempt_count: Some(attempt),
+                last_attempt_at: Some(chrono::Utc::now().to_rfc3339()),
+            },
+        )?;
+    }
+
+    // Log submission started event
+    let _ = event_log.append(
+        &run_id,
+        "submission_started",
+        serde_json::json!({
+            "action": action,
+            "finding_count": active_findings.len(),
+        }),
+    );
 
     // Route submission by platform
     let (gh_review_id, used_native) = if is_gitlab || is_bitbucket {
@@ -1033,6 +1034,7 @@ mod tests {
                 review_action: "comment".into(),
                 submitted_at: None,
                 status: "failed".into(),
+                commit_id_at_submission: None,
                 gh_review_id: None,
                 error_message: None,
                 idempotency_key: None,
@@ -1045,6 +1047,7 @@ mod tests {
                 review_action: "comment".into(),
                 submitted_at: None,
                 status: "failed".into(),
+                commit_id_at_submission: None,
                 gh_review_id: None,
                 error_message: None,
                 idempotency_key: None,

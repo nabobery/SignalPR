@@ -61,18 +61,18 @@ export interface Finding {
   fix_replace: string | null;
   fix_explanation: string | null;
   fix_status: FixStatus | null;
-  // Phase 2: fingerprint + delta state
+  // Stable identity and rerun state
   fingerprint: string | null;
   delta_state?: "new" | "unchanged" | "stale";
   baseline_finding_id?: string | null;
   baseline_decision?: "accept" | "reject" | "edit" | "skip" | null;
-  // Phase 3: hybrid analysis provenance + explainability
+  // Analysis provenance and explainability
   source_kind: string | null;
   source_id: string | null;
   explain_json: string | null;
 }
 
-// Phase 3: Explainability payload stored per finding
+// Explainability payload stored per finding
 export interface FindingExplanation {
   origin: {
     source_kind: string;
@@ -100,7 +100,7 @@ export interface FindingExplanation {
   };
 }
 
-// Phase 3: Context pack summary stored on review run
+// Context pack summary stored on review run
 export interface ContextPackSummary {
   total_bytes: number;
   item_count: number;
@@ -119,7 +119,7 @@ export interface ContextPackItem {
   confidence?: string;
 }
 
-// Phase 3: Local checks summary stored on review run
+// Local checks summary stored on review run
 export interface LocalChecksSummary {
   total_errors: number;
   included_count: number;
@@ -164,7 +164,7 @@ export interface ReviewRun {
   baseline_run_id: string | null;
 }
 
-// Phase 2: Scorecard metrics
+// Scorecard metrics
 export interface LaneScorecard {
   lane_id: string;
   provider_name: string;
@@ -187,7 +187,7 @@ export interface RunScorecard {
   overall_suppress_rate: number;
 }
 
-// Phase 2: Rerun delta
+// Rerun delta
 export interface ReviewDeltaSnapshot {
   changed_files: string[];
   changed_hunks_by_file: Record<string, { new_start: number; new_count: number }[]>;
@@ -218,15 +218,15 @@ export interface ReviewSnapshot {
   metrics: RunScorecard | null;
   delta: ReviewDeltaSnapshot | null;
   decisions_by_finding_id: Record<string, string> | null;
-  // Phase 3: hybrid analysis artifacts
+  // Analysis artifacts
   context_pack_summary: ContextPackSummary | null;
   local_checks_summary: LocalChecksSummary | null;
-  // Phase 5: GitHub platform metadata
+  // Platform metadata
   platform_metadata: PlatformMetadata | null;
   platform_metadata_fetched_at: string | null;
 }
 
-// Platform metadata: discriminated union (Phase 6, extended Phase 7)
+// Platform metadata across supported review hosts
 export type PlatformMetadata = GitHubMetadata | GitLabMetadata | BitbucketMetadata;
 
 export interface GitHubMetadata {
@@ -385,7 +385,7 @@ export interface AppError {
   message: string;
 }
 
-// Phase 4: Codex App Server approval types
+// Codex App Server approval types
 export interface CodexApprovalRequest {
   request_id: unknown;
   method: string;
@@ -395,7 +395,7 @@ export interface CodexApprovalRequest {
   params: Record<string, unknown>;
 }
 
-// Phase 4: Codex App Server streaming delta event
+// Codex App Server streaming delta event
 export interface CodexLaneDelta {
   lane_id: string;
   delta: string;
@@ -512,6 +512,21 @@ export interface InboxReviewRow {
   last_updated: string;
   active_finding_count: number;
   providers_used: string[];
+  queue_state: string;
+  platform: string;
+  repo_owner: string;
+  repo_name: string;
+  remote_host: string;
+  workspace_id: string;
+  workspace_path: string;
+  draft: boolean;
+  has_saved_review_draft: boolean;
+  metadata_freshness: InboxMetadataFreshness;
+  reviewer_signal: InboxReviewerSignal;
+  lane_health: InboxLaneHealth;
+  submission_health: InboxSubmissionHealth;
+  attention_reasons: string[];
+  allowed_actions: string[];
 }
 
 export interface InboxWorkspaceRow {
@@ -530,10 +545,53 @@ export interface EnvironmentSummary {
   tools: ToolStatus[];
 }
 
+export interface InboxMetadataFreshness {
+  fetched_at: string | null;
+  is_stale: boolean;
+}
+
+export interface InboxReviewerSignal {
+  has_signal: boolean;
+  label: string;
+  precision: string;
+  requested_reviewers: string[];
+  requested_teams: string[];
+}
+
+export interface InboxLaneHealth {
+  state: string;
+  failed_count: number;
+  timed_out_count: number;
+  running_count: number;
+  completed_count: number;
+}
+
+export interface InboxSubmissionHealth {
+  state: string;
+  submitted_at: string | null;
+  review_action: string | null;
+  commit_id: string | null;
+  error_message: string | null;
+}
+
+export interface InboxSection {
+  id: string;
+  title: string;
+  items: InboxReviewRow[];
+}
+
+export interface InboxAttentionSummary {
+  total_items: number;
+  failed_runs: number;
+  failed_submissions: number;
+  stale_metadata: number;
+  degraded_runs: number;
+}
+
 export interface InboxOverview {
   environment_summary: EnvironmentSummary;
-  incomplete_reviews: InboxReviewRow[];
-  recent_reviews: InboxReviewRow[];
+  attention_summary: InboxAttentionSummary;
+  sections: InboxSection[];
   recent_workspaces: InboxWorkspaceRow[];
 }
 

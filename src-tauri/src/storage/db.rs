@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Add Phase 2 columns to findings (nullable for backward compat with V1 data)
+-- Add queueing and clustering columns to findings (nullable for backward compatibility)
 ALTER TABLE findings ADD COLUMN cluster_id TEXT REFERENCES finding_clusters(id);
 ALTER TABLE findings ADD COLUMN lane_id TEXT;
 ALTER TABLE findings ADD COLUMN provider_name TEXT;
@@ -153,7 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_findings_review_run ON findings(review_run_id);
 "#;
 
 const MIGRATION_V4: &str = r#"
--- Phase 4: Reviewer preference learning
+-- Reviewer preference learning
 CREATE TABLE IF NOT EXISTS reviewer_decisions (
   id TEXT PRIMARY KEY,
   finding_id TEXT NOT NULL REFERENCES findings(id),
@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS preference_summaries (
   UNIQUE(agent_type, category_tag)
 );
 
--- Phase 4: Auto-fix columns on findings
+-- Auto-fix columns on findings
 ALTER TABLE findings ADD COLUMN fix_search TEXT;
 ALTER TABLE findings ADD COLUMN fix_replace TEXT;
 ALTER TABLE findings ADD COLUMN fix_explanation TEXT;
@@ -186,7 +186,7 @@ ALTER TABLE findings ADD COLUMN fix_status TEXT DEFAULT 'none';
 "#;
 
 const MIGRATION_V5: &str = r#"
--- Phase 5: Provider session metadata and governance tracking
+-- Provider session metadata and governance tracking
 ALTER TABLE agent_runs ADD COLUMN governance_tier_at_run TEXT;
 ALTER TABLE agent_runs ADD COLUMN provider_session_id TEXT;
 ALTER TABLE agent_runs ADD COLUMN resume_cursor TEXT;
@@ -204,7 +204,7 @@ CREATE TABLE IF NOT EXISTS review_drafts (
 "#;
 
 const MIGRATION_V7: &str = r#"
--- Phase 2: Trust metrics + incremental rerun
+-- Review metrics and rerun comparison fields
 ALTER TABLE review_runs ADD COLUMN baseline_run_id TEXT;
 ALTER TABLE review_runs ADD COLUMN metrics_json TEXT;
 ALTER TABLE review_runs ADD COLUMN analysis_diff_hash TEXT;
@@ -217,7 +217,7 @@ CREATE INDEX IF NOT EXISTS idx_findings_run_fingerprint ON findings(review_run_i
 "#;
 
 const MIGRATION_V8: &str = r#"
--- Phase 3: Hybrid analysis + richer context
+-- Analysis context and explainability fields
 ALTER TABLE review_runs ADD COLUMN context_pack_json TEXT;
 ALTER TABLE review_runs ADD COLUMN local_checks_json TEXT;
 
@@ -229,18 +229,18 @@ CREATE INDEX IF NOT EXISTS idx_findings_source_kind ON findings(source_kind);
 "#;
 
 const MIGRATION_V9: &str = r#"
--- Phase 5: GitHub platform metadata snapshot on pull_requests
+-- Platform metadata snapshot on pull requests
 ALTER TABLE pull_requests ADD COLUMN platform_metadata_json TEXT;
 ALTER TABLE pull_requests ADD COLUMN platform_metadata_fetched_at TEXT;
 "#;
 
 const MIGRATION_V10: &str = r#"
--- Phase 6: Multi-platform support (GitLab adapter)
+-- Remote host support for multiple review platforms
 ALTER TABLE workspaces ADD COLUMN remote_host TEXT NOT NULL DEFAULT 'github.com';
 "#;
 
 const MIGRATION_V11: &str = r#"
--- Phase 8: Issue context cache for cross-platform issue resolvers
+-- Issue context cache for cross-platform issue resolvers
 CREATE TABLE IF NOT EXISTS issue_context_cache (
   cache_key TEXT PRIMARY KEY,
   tracker TEXT NOT NULL,
@@ -252,6 +252,17 @@ CREATE TABLE IF NOT EXISTS issue_context_cache (
   status TEXT NOT NULL DEFAULT 'ok'
 );
 CREATE INDEX IF NOT EXISTS idx_issue_cache_expires ON issue_context_cache(expires_at);
+"#;
+
+const MIGRATION_V12: &str = r#"
+-- Reviewer queue snapshot fields
+ALTER TABLE review_runs ADD COLUMN head_sha_at_run TEXT;
+ALTER TABLE submission_records ADD COLUMN commit_id_at_submission TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_review_runs_pr_started_at
+  ON review_runs(pr_id, started_at DESC, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_submission_records_run_status
+  ON submission_records(review_run_id, status, submitted_at DESC);
 "#;
 
 fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -347,6 +358,14 @@ fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(MIGRATION_V11)?;
         conn.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (11)",
+            [],
+        )?;
+    }
+
+    if current_version < 12 {
+        conn.execute_batch(MIGRATION_V12)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (version) VALUES (12)",
             [],
         )?;
     }
@@ -625,6 +644,61 @@ mod tests {
             .unwrap();
         assert!(json.is_none());
         assert!(fetched.is_none());
+    }
+
+    #[test]
+    fn test_v12_queue_columns_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+
+        conn.execute(
+            "INSERT INTO workspaces (id, local_path, remote_owner, remote_repo) VALUES ('ws', '/', 'o', 'r')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests (id, workspace_id, pr_number, title, url) VALUES ('pr', 'ws', 1, 't', 'u')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO review_runs (id, pr_id, status, head_sha_at_run) VALUES ('run', 'pr', 'ready', 'abc123')",
+            [],
+        )
+        .expect("V12 review_runs.head_sha_at_run should exist");
+        conn.execute(
+            "INSERT INTO submission_records (id, review_run_id, review_action, commit_id_at_submission) VALUES ('sub', 'run', 'comment', 'abc123')",
+            [],
+        )
+        .expect("V12 submission_records.commit_id_at_submission should exist");
+
+        let (run_sha, submission_sha): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT r.head_sha_at_run, s.commit_id_at_submission
+                 FROM review_runs r
+                 JOIN submission_records s ON s.review_run_id = r.id
+                 WHERE r.id = 'run'",
+                [],
+                |row| Ok((row.get(0).unwrap(), row.get(1).unwrap())),
+            )
+            .unwrap();
+        assert_eq!(run_sha.as_deref(), Some("abc123"));
+        assert_eq!(submission_sha.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_v12_indexes_exist() {
+        let db = init_db_in_memory().expect("Failed to init DB");
+        let conn = db.0.lock().unwrap();
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(indexes.contains(&"idx_review_runs_pr_started_at".to_string()));
+        assert!(indexes.contains(&"idx_submission_records_run_status".to_string()));
     }
 
     #[test]

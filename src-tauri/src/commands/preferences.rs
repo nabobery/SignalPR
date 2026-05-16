@@ -103,6 +103,7 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00Z".into()),
             completed_at: Some("2026-01-01T00:01:00Z".into()),
             error_message: None,
+            head_sha_at_run: None,
             baseline_run_id: None,
             metrics_json: None,
             analysis_diff_hash: None,

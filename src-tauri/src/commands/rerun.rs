@@ -19,6 +19,19 @@ use crate::storage::queries;
 
 use super::review::ActiveReviews;
 
+fn extract_head_sha_from_metadata_json(json: &str) -> Option<String> {
+    if let Ok(meta) = serde_json::from_str::<crate::platform::adapter::PlatformMetadata>(json) {
+        return match meta {
+            crate::platform::adapter::PlatformMetadata::GitHub(g) => Some(g.head_sha),
+            crate::platform::adapter::PlatformMetadata::GitLab(g) => Some(g.head_sha),
+            crate::platform::adapter::PlatformMetadata::Bitbucket(b) => Some(b.head_sha),
+        };
+    }
+    serde_json::from_str::<crate::providers::github::PlatformMetadataSnapshot>(json)
+        .ok()
+        .map(|meta| meta.head_sha)
+}
+
 /// Start an incremental rerun linked to a baseline review run.
 /// Fetches the latest diff from GitHub, creates a new PR snapshot and review run,
 /// then spawns the review pipeline.
@@ -332,6 +345,11 @@ fn create_rerun_records(
             started_at: Some(input.now.to_string()),
             completed_at: None,
             error_message: None,
+            head_sha_at_run: input
+                .baseline_pr
+                .platform_metadata_json
+                .as_deref()
+                .and_then(extract_head_sha_from_metadata_json),
             baseline_run_id: Some(input.baseline_run_id.to_string()),
             metrics_json: None,
             analysis_diff_hash: Some(input.diff_hash.to_string()),
@@ -386,6 +404,7 @@ mod tests {
             started_at: Some("2026-01-01T00:00:00Z".into()),
             completed_at: Some("2026-01-01T00:01:00Z".into()),
             error_message: None,
+            head_sha_at_run: None,
             baseline_run_id: None,
             metrics_json: None,
             analysis_diff_hash: Some("basehash".into()),

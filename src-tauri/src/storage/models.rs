@@ -30,7 +30,7 @@ pub struct PullRequest {
     pub fetched_at: String,
     // V3 fields
     pub diff_hash: Option<String>,
-    // V9 fields: Phase 5 GitHub platform metadata
+    // Platform metadata snapshot
     pub platform_metadata_json: Option<String>,
     pub platform_metadata_fetched_at: Option<String>,
 }
@@ -43,12 +43,13 @@ pub struct ReviewRun {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub error_message: Option<String>,
-    // V7 fields: trust metrics + incremental rerun
+    pub head_sha_at_run: Option<String>,
+    // Review metrics and rerun comparison fields
     pub baseline_run_id: Option<String>,
     pub metrics_json: Option<String>,
     pub analysis_diff_hash: Option<String>,
     pub analysis_diff_text: Option<String>,
-    // V8 fields: hybrid analysis context/checks artifacts
+    // Context and local check artifacts
     pub context_pack_json: Option<String>,
     pub local_checks_json: Option<String>,
 }
@@ -71,7 +72,7 @@ pub struct Finding {
     pub user_severity_override: Option<String>,
     pub is_anchored: bool,
     pub created_at: String,
-    // V2 fields (nullable for backward compat with Phase 1 data)
+    // Queueing and clustering fields kept nullable for backward compatibility
     pub cluster_id: Option<String>,
     pub lane_id: Option<String>,
     pub provider_name: Option<String>,
@@ -82,9 +83,9 @@ pub struct Finding {
     pub fix_replace: Option<String>,
     pub fix_explanation: Option<String>,
     pub fix_status: Option<String>,
-    // V7 field: stable identity across reruns
+    // Stable identity across reruns
     pub fingerprint: Option<String>,
-    // V8 fields: hybrid analysis provenance + explainability
+    // Analysis provenance and explainability
     pub source_kind: Option<String>,
     pub source_id: Option<String>,
     pub explain_json: Option<String>,
@@ -126,6 +127,7 @@ pub struct SubmissionRecord {
     pub review_action: String,
     pub submitted_at: Option<String>,
     pub status: String,
+    pub commit_id_at_submission: Option<String>,
     pub gh_review_id: Option<String>,
     pub error_message: Option<String>,
     // V3 fields
@@ -179,6 +181,39 @@ pub struct ReviewDraft {
 
 // Inbox enriched review row (not persisted; composed in queries)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxMetadataFreshness {
+    pub fetched_at: Option<String>,
+    pub is_stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxReviewerSignal {
+    pub has_signal: bool,
+    pub label: String,
+    pub precision: String,
+    pub requested_reviewers: Vec<String>,
+    pub requested_teams: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxLaneHealth {
+    pub state: String,
+    pub failed_count: i32,
+    pub timed_out_count: i32,
+    pub running_count: i32,
+    pub completed_count: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxSubmissionHealth {
+    pub state: String,
+    pub submitted_at: Option<String>,
+    pub review_action: Option<String>,
+    pub commit_id: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxReviewRow {
     pub run_id: String,
     pub pr_id: String,
@@ -190,6 +225,21 @@ pub struct InboxReviewRow {
     pub last_updated: String,
     pub active_finding_count: i32,
     pub providers_used: Vec<String>,
+    pub queue_state: String,
+    pub platform: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub remote_host: String,
+    pub workspace_id: String,
+    pub workspace_path: String,
+    pub draft: bool,
+    pub has_saved_review_draft: bool,
+    pub metadata_freshness: InboxMetadataFreshness,
+    pub reviewer_signal: InboxReviewerSignal,
+    pub lane_health: InboxLaneHealth,
+    pub submission_health: InboxSubmissionHealth,
+    pub attention_reasons: Vec<String>,
+    pub allowed_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,4 +249,20 @@ pub struct InboxWorkspaceRow {
     pub remote_owner: String,
     pub remote_repo: String,
     pub last_reviewed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxSection {
+    pub id: String,
+    pub title: String,
+    pub items: Vec<InboxReviewRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxAttentionSummary {
+    pub total_items: i32,
+    pub failed_runs: i32,
+    pub failed_submissions: i32,
+    pub stale_metadata: i32,
+    pub degraded_runs: i32,
 }
