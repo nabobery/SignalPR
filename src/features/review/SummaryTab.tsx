@@ -15,6 +15,7 @@ import {
 import { useReviewContext } from "../../lib/store";
 import { rerunReview, refreshPrMetadata, parseError } from "../../lib/ipc";
 import type { RunScorecard } from "../../lib/types";
+import { buildRunTrustOverview } from "../../lib/trust";
 
 const severityIcons: Record<string, typeof AlertTriangle> = {
   blocker: ShieldAlert,
@@ -77,6 +78,25 @@ export function SummaryTab() {
       ? "This rerun reviews the latest changes since the last run."
       : "This rerun refreshes findings on the current head."
     : null;
+  const trustOverview = useMemo(
+    () =>
+      buildRunTrustOverview({
+        findings: state.findings,
+        localChecksSummary: state.localChecksSummary,
+        contextPackSummary: state.contextPackSummary,
+        platformMetadata: state.platformMetadata,
+        platformMetadataFetchedAt: state.platformMetadataFetchedAt,
+        reviewFreshness: state.reviewFreshness,
+      }),
+    [
+      state.findings,
+      state.localChecksSummary,
+      state.contextPackSummary,
+      state.platformMetadata,
+      state.platformMetadataFetchedAt,
+      state.reviewFreshness,
+    ],
+  );
 
   const handleRerun = async () => {
     setRerunning(true);
@@ -332,6 +352,8 @@ export function SummaryTab() {
         </section>
       )}
 
+      <TrustOverviewSection trustOverview={trustOverview} />
+
       {/* GitHub metadata */}
       {state.platformMetadata && (
         <PlatformMetadataSection
@@ -346,6 +368,71 @@ export function SummaryTab() {
       {/* Provider scorecard */}
       {state.metrics && <ProviderScorecard scorecard={state.metrics} />}
     </div>
+  );
+}
+
+function TrustOverviewSection({
+  trustOverview,
+}: {
+  trustOverview: ReturnType<typeof buildRunTrustOverview>;
+}) {
+  return (
+    <section>
+      <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+        Review trust overview
+      </h3>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-lg p-3 space-y-2">
+          <div className="text-xs text-zinc-500">Provenance</div>
+          <div className="flex gap-1.5 flex-wrap">
+            {trustOverview.sourceCounts.length === 0 && (
+              <span className="text-xs text-zinc-500">No surfaced findings yet</span>
+            )}
+            {trustOverview.sourceCounts.map((source) => (
+              <span
+                key={source.key}
+                className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300"
+              >
+                {source.label}: {source.count}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-lg p-3 space-y-2">
+          <div className="text-xs text-zinc-500">Deterministic inputs</div>
+          <div className="flex gap-1.5 flex-wrap">
+            <span className="text-xs px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-300">
+              Evidence: {trustOverview.findingsWithEvidence}
+            </span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-300">
+              Issue context: {trustOverview.findingsWithIssueContext}
+            </span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-300">
+              Owners: {trustOverview.findingsWithOwnership}
+            </span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-300">
+              Supported findings: {trustOverview.findingsWithDeterministicSupport}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex gap-1.5 flex-wrap">
+        <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+          Local checks: {trustOverview.localChecksIncluded}
+          {trustOverview.localCheckTools.length > 0 &&
+            ` via ${trustOverview.localCheckTools.join(", ")}`}
+        </span>
+        <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+          Platform context: {trustOverview.hasPlatformMetadata ? "available" : "not available"}
+          {trustOverview.platformFreshnessLabel ? `, ${trustOverview.platformFreshnessLabel}` : ""}
+        </span>
+        {trustOverview.reviewFreshnessLabel && (
+          <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+            Review freshness: {trustOverview.reviewFreshnessLabel}
+          </span>
+        )}
+      </div>
+    </section>
   );
 }
 

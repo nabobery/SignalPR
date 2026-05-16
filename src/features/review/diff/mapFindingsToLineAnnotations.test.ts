@@ -111,6 +111,48 @@ describe("mapFindingsToLineAnnotations", () => {
     expect(result[0].metadata!.findings).toHaveLength(2);
   });
 
+  it("includes trust metadata in annotation payloads", () => {
+    const findings = [
+      makeFinding({
+        source_kind: "local_check",
+        source_id: "oxlint:no-unused-vars",
+        evidence: "unused variable",
+      }),
+    ];
+    const result = mapFindingsToLineAnnotations(findings, "src/utils/math.ts");
+
+    expect(result[0].metadata?.provenanceLabel).toContain("Local check");
+    expect(result[0].metadata?.supportLabels).toContain("Evidence");
+    expect(result[0].metadata?.supportLabels).toContain("Deterministic");
+  });
+
+  it("aggregates trust metadata across grouped findings on the same line", () => {
+    const findings = [
+      makeFinding({
+        id: "f-local",
+        diff_new_line: 5,
+        source_kind: "local_check",
+        source_id: "oxlint:no-unused-vars",
+        evidence: "unused variable",
+      }),
+      makeFinding({
+        id: "f-ai",
+        diff_new_line: 5,
+        source_kind: "ai_provider",
+        evidence: null,
+        title: "Model-only concern",
+      }),
+    ];
+
+    const result = mapFindingsToLineAnnotations(findings, "src/utils/math.ts");
+
+    expect(result).toHaveLength(1);
+    expect(result[0].metadata?.provenanceLabel).toContain("Local check");
+    expect(result[0].metadata?.provenanceLabel).toContain("AI review");
+    expect(result[0].metadata?.supportLabels).toContain("Deterministic");
+    expect(result[0].metadata?.warningLabels).toContain("AI inference only");
+  });
+
   it("filters findings by file path", () => {
     const findings = [
       makeFinding({

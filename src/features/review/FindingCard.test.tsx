@@ -228,10 +228,10 @@ describe("FindingCard", () => {
       <FindingCard finding={makeFinding({ evidence: "Stack trace here" })} onUpdated={onUpdated} />,
     );
 
-    expect(screen.getByText("Evidence")).toBeInTheDocument();
+    expect(screen.getAllByText("Evidence").length).toBeGreaterThan(0);
     expect(screen.queryByText("Stack trace here")).not.toBeInTheDocument();
 
-    await user.click(screen.getByText("Evidence"));
+    await user.click(screen.getByRole("button", { name: "Evidence" }));
     expect(screen.getByText("Stack trace here")).toBeInTheDocument();
   });
 
@@ -270,10 +270,11 @@ describe("FindingCard", () => {
         onUpdated={onUpdated}
       />,
     );
-    expect(screen.getByText("local")).toBeInTheDocument();
+    expect(screen.getByText("Local check")).toBeInTheDocument();
+    expect(screen.getByText("Deterministic")).toBeInTheDocument();
   });
 
-  it("does not render provenance chip when source_kind is ai_provider", () => {
+  it("renders AI review provenance when source_kind is ai_provider", () => {
     render(
       <FindingCard
         finding={makeFinding({
@@ -283,7 +284,7 @@ describe("FindingCard", () => {
         onUpdated={onUpdated}
       />,
     );
-    expect(screen.queryByText("ai_provider")).not.toBeInTheDocument();
+    expect(screen.getByText("AI review")).toBeInTheDocument();
   });
 
   it("renders Why? button and explanation panel when explain_json is set", async () => {
@@ -308,6 +309,7 @@ describe("FindingCard", () => {
     await user.click(screen.getByText("Why?"));
 
     expect(screen.getByText("Why this finding was surfaced")).toBeInTheDocument();
+    expect(screen.getByText("Origin")).toBeInTheDocument();
     expect(screen.getByText(/Source: ai_provider/)).toBeInTheDocument();
     expect(screen.getByText(/Lane: security/i)).toBeInTheDocument();
     expect(screen.getByText(/Provider: codex/)).toBeInTheDocument();

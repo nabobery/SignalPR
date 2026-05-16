@@ -187,6 +187,7 @@ export function SignalBoard() {
               focused={state.focusedFindingId === finding.id}
               sessionDecision={state.sessionDecisions[finding.id] ?? null}
               onDecision={handleDecision}
+              platformMetadata={state.platformMetadata}
             />
           ))}
         </div>

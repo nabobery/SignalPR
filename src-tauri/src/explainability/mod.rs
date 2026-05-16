@@ -4,6 +4,8 @@ use crate::storage::models::Finding;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FindingExplanation {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u8,
     pub origin: OriginInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ranking: Option<RankingInfo>,
@@ -13,6 +15,10 @@ pub struct FindingExplanation {
     pub ownership: Option<OwnershipInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issue_context: Option<IssueContextInfo>,
+}
+
+fn default_schema_version() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +119,7 @@ pub fn build_explanation(finding: &Finding, ctx: &ExplainContext) -> FindingExpl
     };
 
     FindingExplanation {
+        schema_version: default_schema_version(),
         origin,
         ranking,
         preferences,
@@ -170,6 +177,7 @@ mod tests {
         let ctx = ExplainContext::default();
         let explain = build_explanation(&finding, &ctx);
 
+        assert_eq!(explain.schema_version, 1);
         assert_eq!(explain.origin.source_kind, "ai_provider");
         assert_eq!(explain.origin.lane_id, "security");
         assert!(explain.ranking.is_some());
@@ -297,5 +305,19 @@ mod tests {
         let parsed: FindingExplanation = serde_json::from_str(&json).unwrap();
         let ic = parsed.issue_context.unwrap();
         assert_eq!(ic.included_count, 2);
+    }
+
+    #[test]
+    fn test_legacy_json_without_schema_version_still_deserializes() {
+        let legacy_json = r#"{
+            "origin":{"source_kind":"ai_provider","source_id":null,"lane_id":"security","provider_name":"codex"},
+            "ranking":{"confidence_raw":0.85,"severity_raw":"critical"},
+            "ownership":{"owners":["@team-security"]}
+        }"#;
+
+        let parsed: FindingExplanation = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(parsed.schema_version, 1);
+        assert_eq!(parsed.origin.lane_id, "security");
+        assert!(parsed.ownership.is_some());
     }
 }

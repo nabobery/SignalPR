@@ -319,6 +319,63 @@ describe("SummaryTab", () => {
     expect(screen.getByText("12.5s")).toBeInTheDocument();
   });
 
+  it("renders review trust overview", () => {
+    renderWithContext({
+      findings: [
+        makeFinding({
+          source_kind: "local_check",
+          source_id: "oxlint:no-unused-vars",
+          evidence: "unused variable",
+          explain_json: JSON.stringify({
+            schema_version: 1,
+            origin: {
+              source_kind: "local_check",
+              source_id: "oxlint:no-unused-vars",
+              lane_id: "security",
+              provider_name: null,
+            },
+            issue_context: {
+              included_count: 1,
+              sources: ["github:issue:#42"],
+            },
+            ownership: {
+              owners: ["@team-core"],
+            },
+          }),
+        }),
+      ],
+      localChecksSummary: {
+        total_errors: 2,
+        included_count: 1,
+        tools_run: ["oxlint"],
+        items: [],
+      },
+      platformMetadata: {
+        platform: "github",
+        pr_body: null,
+        head_sha: "abc",
+        base_sha: "def",
+        base_ref: "main",
+        head_ref: "feature",
+        draft: false,
+        labels: ["backend"],
+        requested_reviewers: [],
+        requested_teams: [],
+        review_state_summary: [],
+        linked_issue_numbers: [],
+        text_issue_refs: [],
+      },
+      platformMetadataFetchedAt: new Date().toISOString(),
+    });
+
+    expect(screen.getByText("Review trust overview")).toBeInTheDocument();
+    expect(screen.getByText(/Local check: 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Evidence: 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Issue context: 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Owners: 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Local checks: 1 via oxlint/)).toBeInTheDocument();
+  });
+
   it("renders delta summary for reruns", () => {
     renderWithContext({
       baselineRunId: "run-0",

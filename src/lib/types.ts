@@ -50,13 +50,13 @@ export interface Finding {
   user_severity_override: string | null;
   is_anchored: boolean;
   created_at: string;
-  // V2 fields
+  // Review metadata
   cluster_id: string | null;
   lane_id: string | null;
   provider_name: string | null;
   diff_side: string | null;
   diff_new_line: number | null;
-  // V4 fields: auto-fix
+  // Suggested fix details
   fix_search: string | null;
   fix_replace: string | null;
   fix_explanation: string | null;
@@ -74,6 +74,7 @@ export interface Finding {
 
 // Explainability payload stored per finding
 export interface FindingExplanation {
+  schema_version?: number;
   origin: {
     source_kind: string;
     source_id: string | null;
@@ -414,7 +415,7 @@ export interface CodexLaneDelta {
   buffer: string;
 }
 
-// Copilot SDK v3 permission request
+// Copilot permission request
 export interface CopilotPermissionRequest {
   session_id: string;
   event_id: string;
@@ -424,7 +425,7 @@ export interface CopilotPermissionRequest {
   event: Record<string, unknown>;
 }
 
-// Copilot SDK streaming delta event
+// Copilot streaming delta event
 export interface CopilotLaneDelta {
   lane_id: string;
   delta: string;

@@ -201,6 +201,32 @@ describe("DraftReviewTab", () => {
     });
   });
 
+  it("shows trust chips in pending comment preview", async () => {
+    renderDraft({
+      findings: [
+        makeFinding({
+          source_kind: "local_check",
+          source_id: "oxlint:no-unused-vars",
+        }),
+      ],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Local check")).toBeInTheDocument();
+      expect(screen.getByText("Deterministic")).toBeInTheDocument();
+    });
+  });
+
+  it("warns when findings rely on AI inference only", async () => {
+    renderDraft({
+      findings: [makeFinding({ source_kind: "ai_provider", explain_json: null, evidence: null })],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI inference without deterministic support/i)).toBeInTheDocument();
+    });
+  });
+
   it("submits review with summary and action", async () => {
     const onSubmitted = vi.fn();
     const user = userEvent.setup();

@@ -106,6 +106,12 @@ export function DiagnosticsTab({
 
   return (
     <div className="overflow-y-auto p-4 space-y-4">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3">
+        <div className="text-sm font-medium text-zinc-200">Evidence trail</div>
+        <p className="mt-1 text-xs text-zinc-500">
+          Audit the deterministic inputs, platform context, and event history behind this review.
+        </p>
+      </div>
       {platformMetadata && (
         <PlatformMetadataSection
           data={platformMetadata}
@@ -202,7 +208,7 @@ function ContextPackSection({ data }: { data: ContextPackSummary }) {
         className="w-full text-left px-4 py-3 flex items-center gap-2 hover:bg-zinc-800/30 transition-colors"
       >
         <Package className="w-4 h-4 text-indigo-400" />
-        <span className="text-sm font-medium text-zinc-200">Context Pack</span>
+        <span className="text-sm font-medium text-zinc-200">Context pack evidence</span>
         <span className="text-xs text-zinc-500">
           {included.length} item{included.length !== 1 ? "s" : ""},{" "}
           {`${(data.total_bytes / 1024).toFixed(1)}KB`}
@@ -422,7 +428,7 @@ function IssueContextSection({ items }: { items: ContextPackItem[] }) {
         className="w-full text-left px-4 py-3 flex items-center gap-2 hover:bg-zinc-800/30 transition-colors"
       >
         <BookOpen className="w-4 h-4 text-sky-400" />
-        <span className="text-sm font-medium text-zinc-200">Issue Context</span>
+        <span className="text-sm font-medium text-zinc-200">Issue context evidence</span>
         <span className="text-xs text-zinc-500">
           {included.length} included
           {omitted.length > 0 && `, ${omitted.length} omitted`}
@@ -488,7 +494,7 @@ function LocalChecksSection({ data }: { data: LocalChecksSummary }) {
         className="w-full text-left px-4 py-3 flex items-center gap-2 hover:bg-zinc-800/30 transition-colors"
       >
         <ShieldCheck className="w-4 h-4 text-amber-400" />
-        <span className="text-sm font-medium text-zinc-200">Local Checks</span>
+        <span className="text-sm font-medium text-zinc-200">Local check evidence</span>
         <span className="text-xs text-zinc-500">
           {totalErrors} error{totalErrors !== 1 ? "s" : ""} via {toolsRun.join(", ") || "none"}
         </span>

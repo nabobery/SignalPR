@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   AlertTriangle,
   ShieldAlert,
@@ -14,7 +14,8 @@ import {
   HelpCircle,
 } from "lucide-react";
 import { updateFinding, recordDecision } from "../../lib/ipc";
-import type { Finding } from "../../lib/types";
+import type { Finding, PlatformMetadata } from "../../lib/types";
+import { buildFindingTrustViewModel } from "../../lib/trust";
 import { FixPreview } from "./FixPreview";
 
 const STANDARD_AGENT_TYPES = new Set(["security", "architecture", "performance"]);
@@ -33,12 +34,14 @@ export function FindingCard({
   focused = false,
   sessionDecision,
   onDecision,
+  platformMetadata = null,
 }: {
   finding: Finding;
   onUpdated: () => void;
   focused?: boolean;
   sessionDecision?: string | null;
   onDecision?: (findingId: string, decision: string) => void;
+  platformMetadata?: PlatformMetadata | null;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
@@ -54,15 +57,6 @@ export function FindingCard({
   const [showEvidence, setShowEvidence] = useState(false);
   const [showWhy, setShowWhy] = useState(false);
 
-  const explanation = useMemo(() => {
-    if (!finding.explain_json) return null;
-    try {
-      return JSON.parse(finding.explain_json);
-    } catch {
-      return null;
-    }
-  }, [finding.explain_json]);
-
   const hasPendingFix =
     finding.fix_status === "pending" && finding.fix_search !== null && finding.fix_replace !== null;
   const fixApplied = finding.fix_status === "applied" || finding.fix_status === "accepted";
@@ -72,6 +66,7 @@ export function FindingCard({
   const config = severityConfig[effectiveSeverity] ?? severityConfig.info;
   const Icon = config.icon;
   const displayBody = finding.user_edited_body ?? finding.body;
+  const trust = buildFindingTrustViewModel(finding, { platformMetadata });
 
   const handleSave = async () => {
     setSaving(true);
@@ -186,27 +181,6 @@ export function FindingCard({
             </span>
           </div>
 
-          {/* Provenance chips */}
-          {(finding.lane_id || finding.provider_name || finding.source_kind) && (
-            <div className="flex gap-1.5 mb-1 flex-wrap">
-              {finding.source_kind && finding.source_kind !== "ai_provider" && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-900/30 text-indigo-400">
-                  {finding.source_kind === "local_check" ? "local" : finding.source_kind}
-                </span>
-              )}
-              {finding.lane_id && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 capitalize">
-                  {finding.lane_id}
-                </span>
-              )}
-              {finding.provider_name && (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
-                  {finding.provider_name}
-                </span>
-              )}
-            </div>
-          )}
-
           {finding.file_path && (
             <code className="text-xs text-zinc-400 block mb-2">
               {finding.file_path}
@@ -220,6 +194,43 @@ export function FindingCard({
               )}
             </code>
           )}
+
+          <div className="space-y-1.5 mb-2">
+            <div className="flex gap-1.5 flex-wrap">
+              {trust.provenanceBadges.map((badge) => (
+                <span
+                  key={badge.key}
+                  className={`text-xs px-1.5 py-0.5 rounded ${
+                    badge.tone === "support"
+                      ? "bg-emerald-900/30 text-emerald-300"
+                      : "bg-zinc-800 text-zinc-400"
+                  }`}
+                >
+                  {badge.label}
+                </span>
+              ))}
+            </div>
+            {(trust.supportBadges.length > 0 || trust.warningBadges.length > 0) && (
+              <div className="flex gap-1.5 flex-wrap">
+                {trust.supportBadges.map((badge) => (
+                  <span
+                    key={badge.key}
+                    className="text-xs px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-300"
+                  >
+                    {badge.label}
+                  </span>
+                ))}
+                {trust.warningBadges.map((badge) => (
+                  <span
+                    key={badge.key}
+                    className="text-xs px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-300"
+                  >
+                    {badge.label}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
 
           {editing ? (
             <div className="space-y-2">
@@ -308,7 +319,7 @@ export function FindingCard({
                   {showEvidence ? "Hide evidence" : "Evidence"}
                 </button>
               )}
-              {explanation && (
+              {trust.explanation && (
                 <button
                   onClick={() => setShowWhy((v) => !v)}
                   className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
@@ -327,67 +338,79 @@ export function FindingCard({
             </div>
           )}
 
-          {showWhy && explanation && (
+          {showWhy && trust.explanation && (
             <div className="mt-2 p-2 rounded bg-zinc-800/50 border border-zinc-700 space-y-1.5">
               <div className="text-xs text-zinc-500 font-medium uppercase tracking-wider">
                 Why this finding was surfaced
               </div>
-              <div className="flex gap-1.5 flex-wrap text-xs">
-                <span className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300">
-                  Source: {explanation.origin?.source_kind ?? "unknown"}
-                </span>
-                {explanation.origin?.lane_id && (
-                  <span className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 capitalize">
-                    Lane: {explanation.origin.lane_id}
-                  </span>
-                )}
-                {explanation.origin?.provider_name && (
-                  <span className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300">
-                    Provider: {explanation.origin.provider_name}
-                  </span>
-                )}
-              </div>
-              {explanation.ranking && (
+              <TrustSection
+                label="Origin"
+                lines={[
+                  `Source: ${trust.explanation.origin.source_kind}`,
+                  trust.explanation.origin.lane_id
+                    ? `Lane: ${trust.explanation.origin.lane_id}`
+                    : null,
+                  trust.explanation.origin.provider_name
+                    ? `Provider: ${trust.explanation.origin.provider_name}`
+                    : null,
+                  trust.explanation.origin.source_id
+                    ? `Source ID: ${trust.explanation.origin.source_id}`
+                    : null,
+                ]}
+              />
+              {finding.evidence && (
+                <TrustSection label="Evidence" lines={["Attached evidence is available above."]} />
+              )}
+              {(trust.hasDeterministicSupport || trust.warningBadges.length > 0) && (
+                <TrustSection
+                  label="Deterministic inputs"
+                  lines={[
+                    trust.explanation.issue_context &&
+                    trust.explanation.issue_context.included_count > 0
+                      ? `${trust.explanation.issue_context.included_count} issue context item${trust.explanation.issue_context.included_count === 1 ? "" : "s"} included`
+                      : null,
+                    trust.explanation.issue_context?.sources?.length
+                      ? `Issue sources: ${trust.explanation.issue_context.sources.join(", ")}`
+                      : null,
+                    trust.hasOwnership ? "Owners mapped from repository context" : null,
+                    trust.hasPlatformContext ? "Platform context was available for this run" : null,
+                    trust.warningBadges.some((badge) => badge.key === "ai-only")
+                      ? "No deterministic support beyond model inference"
+                      : null,
+                  ]}
+                />
+              )}
+              {trust.explanation.preferences && (
+                <TrustSection
+                  label="Reviewer history"
+                  lines={[
+                    trust.explanation.preferences.category_tag
+                      ? `Category: ${trust.explanation.preferences.category_tag}`
+                      : null,
+                    trust.explanation.preferences.accept_rate != null
+                      ? `Accept rate: ${Math.round(trust.explanation.preferences.accept_rate * 100)}%`
+                      : null,
+                    trust.explanation.preferences.total_decisions != null
+                      ? `Decisions observed: ${trust.explanation.preferences.total_decisions}`
+                      : null,
+                    trust.explanation.preferences.override_action
+                      ? `Override: ${trust.explanation.preferences.override_action}`
+                      : null,
+                  ]}
+                />
+              )}
+              {trust.explanation.ownership && trust.explanation.ownership.owners.length > 0 && (
+                <TrustSection
+                  label="Ownership"
+                  lines={[`Owners: ${trust.explanation.ownership.owners.join(", ")}`]}
+                />
+              )}
+              {trust.explanation.ranking && (
                 <div className="text-xs text-zinc-400">
-                  Confidence: {Math.round(explanation.ranking.confidence_raw * 100)}%
-                  {explanation.ranking.suppressed_reason && (
+                  Confidence: {Math.round(trust.explanation.ranking.confidence_raw * 100)}%
+                  {trust.explanation.ranking.suppressed_reason && (
                     <span className="ml-2 text-yellow-500">
-                      Suppressed: {explanation.ranking.suppressed_reason}
-                    </span>
-                  )}
-                </div>
-              )}
-              {explanation.preferences && (
-                <div className="text-xs text-zinc-400">
-                  {explanation.preferences.category_tag && (
-                    <span>Category: {explanation.preferences.category_tag}</span>
-                  )}
-                  {explanation.preferences.accept_rate != null && (
-                    <span className="ml-2">
-                      Accept rate: {Math.round(explanation.preferences.accept_rate * 100)}%
-                      {explanation.preferences.total_decisions != null && (
-                        <span className="text-zinc-500">
-                          {" "}
-                          ({explanation.preferences.total_decisions} decisions)
-                        </span>
-                      )}
-                    </span>
-                  )}
-                </div>
-              )}
-              {explanation.ownership && explanation.ownership.owners?.length > 0 && (
-                <div className="text-xs text-zinc-400">
-                  Owners: {explanation.ownership.owners.join(", ")}
-                </div>
-              )}
-              {explanation.issue_context && explanation.issue_context.included_count > 0 && (
-                <div className="text-xs text-zinc-400">
-                  <span className="text-sky-400">Issue context:</span>{" "}
-                  {explanation.issue_context.included_count} issue
-                  {explanation.issue_context.included_count !== 1 ? "s" : ""} in prompt
-                  {explanation.issue_context.sources?.length > 0 && (
-                    <span className="text-zinc-500 ml-1">
-                      ({explanation.issue_context.sources.join(", ")})
+                      Suppressed: {trust.explanation.ranking.suppressed_reason}
                     </span>
                   )}
                 </div>
@@ -413,6 +436,22 @@ export function FindingCard({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function TrustSection({ label, lines }: { label: string; lines: Array<string | null> }) {
+  const visibleLines = lines.filter((line): line is string => Boolean(line));
+  if (visibleLines.length === 0) return null;
+
+  return (
+    <div className="space-y-0.5">
+      <div className="text-xs text-zinc-500">{label}</div>
+      {visibleLines.map((line) => (
+        <div key={line} className="text-xs text-zinc-300">
+          {line}
+        </div>
+      ))}
     </div>
   );
 }

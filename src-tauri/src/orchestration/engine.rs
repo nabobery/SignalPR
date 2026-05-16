@@ -16,7 +16,7 @@ use crate::providers::governance;
 use crate::providers::traits::{RawFinding, ReviewInput, ReviewProvider};
 use crate::storage::db::AppDb;
 use crate::storage::event_log::EventLog;
-use crate::storage::models::AgentRun;
+use crate::storage::models::{AgentRun, Finding};
 use crate::storage::queries;
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,7 +96,7 @@ pub async fn run_review_pipeline(
 ) -> Result<(), AppError> {
     let event_log = args.event_log.clone();
 
-    // Stage 1: Running agents
+    // Run provider lanes and collect raw findings.
     if args.cancel.is_cancelled() {
         fail_run(db, &args.run_id, "Cancelled by user", &mut emit)?;
         return Ok(());
@@ -229,7 +229,7 @@ pub async fn run_review_pipeline(
         all_findings.extend(args.extra_raw_findings);
     }
 
-    // Stage 2: Cleaner pipeline
+    // Normalize, deduplicate, rank, and verify findings before persistence.
     update_status(db, &args.run_id, "cleaning", &mut emit)?;
     log_event(
         &event_log,
@@ -254,7 +254,7 @@ pub async fn run_review_pipeline(
         }),
     );
 
-    // Stage 3: Persist clusters first (FK target), stamp cluster_id on findings, then persist findings
+    // Persist clusters first, then attach cluster metadata and explanations to findings.
     {
         let conn =
             db.0.lock()
@@ -286,27 +286,12 @@ pub async fn run_review_pipeline(
             if let Some(cid) = finding_cluster_map.get(&f.id) {
                 f.cluster_id = Some(cid.clone());
             }
-            f.fingerprint = Some(crate::review_delta::compute_finding_fingerprint(&f));
-
-            let owners = f
-                .file_path
-                .as_deref()
-                .and_then(|p| {
-                    let normalized = crate::context_pack::normalize_repo_path(p);
-                    args.owners_by_path
-                        .get(&normalized)
-                        .or_else(|| args.owners_by_path.get(p))
-                })
-                .cloned()
-                .unwrap_or_default();
-            let ctx = ExplainContext {
-                owners,
-                issue_context_included_count: args.issue_context_included_count,
-                issue_context_sources: args.issue_context_sources.clone(),
-                ..ExplainContext::default()
-            };
-            let explanation = explainability::build_explanation(&f, &ctx);
-            f.explain_json = explainability::to_json(&explanation);
+            f = stamp_finding_explanation(
+                f,
+                &args.owners_by_path,
+                args.issue_context_included_count,
+                &args.issue_context_sources,
+            );
 
             queries::insert_finding(&conn, &f)?;
         }
@@ -338,6 +323,36 @@ pub async fn run_review_pipeline(
     Ok(())
 }
 
+fn stamp_finding_explanation(
+    mut finding: Finding,
+    owners_by_path: &HashMap<String, Vec<String>>,
+    issue_context_included_count: usize,
+    issue_context_sources: &[String],
+) -> Finding {
+    finding.fingerprint = Some(crate::review_delta::compute_finding_fingerprint(&finding));
+
+    let owners = finding
+        .file_path
+        .as_deref()
+        .and_then(|path| {
+            let normalized = crate::context_pack::normalize_repo_path(path);
+            owners_by_path
+                .get(&normalized)
+                .or_else(|| owners_by_path.get(path))
+        })
+        .cloned()
+        .unwrap_or_default();
+    let ctx = ExplainContext {
+        owners,
+        issue_context_included_count,
+        issue_context_sources: issue_context_sources.to_vec(),
+        ..ExplainContext::default()
+    };
+    let explanation = explainability::build_explanation(&finding, &ctx);
+    finding.explain_json = explainability::to_json(&explanation);
+    finding
+}
+
 fn log_event(
     event_log: &Option<Arc<EventLog>>,
     run_id: &str,
@@ -358,6 +373,68 @@ fn governance_setting_key(provider_name: &str) -> Option<&'static str> {
         "opencode" => Some("opencode_governance_tier"),
         "claude_code" => Some("claude_code_governance_tier"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod explanation_tests {
+    use super::stamp_finding_explanation;
+    use std::collections::HashMap;
+
+    fn test_finding() -> crate::storage::models::Finding {
+        crate::storage::models::Finding {
+            id: "f1".into(),
+            review_run_id: "run1".into(),
+            agent_type: "security".into(),
+            file_path: Some("src/auth.rs".into()),
+            line_start: Some(10),
+            line_end: Some(10),
+            severity: "warning".into(),
+            confidence: 0.9,
+            title: "Potential issue".into(),
+            body: "Body".into(),
+            evidence: Some("evidence".into()),
+            status: "active".into(),
+            user_edited_body: None,
+            user_severity_override: None,
+            is_anchored: true,
+            created_at: "2026-05-01T00:00:00Z".into(),
+            cluster_id: None,
+            lane_id: Some("security".into()),
+            provider_name: Some("codex".into()),
+            diff_side: Some("RIGHT".into()),
+            diff_new_line: Some(10),
+            fix_search: None,
+            fix_replace: None,
+            fix_explanation: None,
+            fix_status: None,
+            fingerprint: None,
+            source_kind: Some("ai_provider".into()),
+            source_id: None,
+            explain_json: None,
+        }
+    }
+
+    #[test]
+    fn stamp_finding_explanation_adds_explain_json_and_fingerprint() {
+        let mut owners_by_path = HashMap::new();
+        owners_by_path.insert(
+            "src/auth.rs".to_string(),
+            vec!["@security-team".to_string()],
+        );
+
+        let finding = stamp_finding_explanation(
+            test_finding(),
+            &owners_by_path,
+            2,
+            &["github:issue:#1".to_string(), "jira:AUTH-42".to_string()],
+        );
+
+        assert!(finding.fingerprint.is_some());
+        let explain_json = finding.explain_json.expect("explain_json should be set");
+        assert!(explain_json.contains("\"schema_version\":1"));
+        assert!(explain_json.contains("issue_context"));
+        assert!(explain_json.contains("@security-team"));
     }
 }
 

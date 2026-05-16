@@ -111,7 +111,7 @@ describe("DiagnosticsTab", () => {
 
     render(<DiagnosticsTab runId="run-1" contextPackSummary={contextPack} />);
 
-    expect(await screen.findByText("Context Pack")).toBeInTheDocument();
+    expect(await screen.findByText("Context pack evidence")).toBeInTheDocument();
     expect(screen.getByText(/1 item, 2\.0KB/)).toBeInTheDocument();
   });
 
@@ -138,7 +138,7 @@ describe("DiagnosticsTab", () => {
 
     render(<DiagnosticsTab runId="run-1" localChecksSummary={localChecks} />);
 
-    expect(await screen.findByText("Local Checks")).toBeInTheDocument();
+    expect(await screen.findByText("Local check evidence")).toBeInTheDocument();
     expect(screen.getByText(/3 errors via oxlint/)).toBeInTheDocument();
   });
 
@@ -200,7 +200,7 @@ describe("DiagnosticsTab", () => {
 
     render(<DiagnosticsTab runId="run-1" contextPackSummary={contextPack} />);
 
-    expect(await screen.findByText("Issue Context")).toBeInTheDocument();
+    expect(await screen.findByText("Issue context evidence")).toBeInTheDocument();
     expect(screen.getByText(/2 included/)).toBeInTheDocument();
     expect(screen.getByText(/1 omitted/)).toBeInTheDocument();
   });
@@ -220,7 +220,16 @@ describe("DiagnosticsTab", () => {
 
     render(<DiagnosticsTab runId="run-1" contextPackSummary={contextPack} />);
 
-    await screen.findByText("Context Pack");
-    expect(screen.queryByText("Issue Context")).not.toBeInTheDocument();
+    await screen.findByText("Context pack evidence");
+    expect(screen.queryByText("Issue context evidence")).not.toBeInTheDocument();
+  });
+
+  it("renders evidence trail header", async () => {
+    const { getEventLog } = await import("../../lib/ipc");
+    (getEventLog as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    render(<DiagnosticsTab runId="run-1" />);
+
+    expect(await screen.findByText("Evidence trail")).toBeInTheDocument();
   });
 });

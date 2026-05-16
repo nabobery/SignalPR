@@ -3,6 +3,7 @@ import { Send, Loader2, AlertTriangle, FileText, MessageSquare } from "lucide-re
 import { getReviewDraft, saveReviewDraft, submitReview, parseError } from "../../lib/ipc";
 import { useReviewContext } from "../../lib/store";
 import type { ReviewAction } from "../../lib/types";
+import { buildFindingTrustViewModel } from "../../lib/trust";
 
 const AUTOSAVE_DELAY = 1500;
 
@@ -124,6 +125,11 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
     (l) => l.status === "failed" || l.status === "timed_out",
   );
   const hasStaleAnchors = includedFindings.some((f) => !f.is_anchored && f.file_path);
+  const hasAiOnlyFindings = includedFindings.some((finding) =>
+    buildFindingTrustViewModel(finding, {
+      platformMetadata: state.platformMetadata,
+    }).warningBadges.some((badge) => badge.key === "ai-only"),
+  );
   const canSubmit = summary.trim().length > 0 || includedFindings.length > 0;
 
   if (loadingDraft) {
@@ -180,13 +186,47 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                   <div className="space-y-1.5">
                     {findings.map((f) => {
                       const sev = (f.user_severity_override ?? f.severity).toUpperCase();
+                      const trust = buildFindingTrustViewModel(f, {
+                        platformMetadata: state.platformMetadata,
+                      });
                       return (
-                        <div key={f.id} className="flex items-start gap-2 text-xs">
-                          <span className="text-zinc-500 shrink-0 font-mono">
-                            {f.is_anchored && f.line_start ? `L${f.line_start}` : "—"}
-                          </span>
-                          <span className="text-zinc-400">[{sev}]</span>
-                          <span className="text-zinc-300 truncate">{f.title}</span>
+                        <div
+                          key={f.id}
+                          className="rounded border border-zinc-800/50 bg-zinc-950/30 p-2"
+                        >
+                          <div className="flex items-start gap-2 text-xs">
+                            <span className="text-zinc-500 shrink-0 font-mono">
+                              {f.is_anchored && f.line_start ? `L${f.line_start}` : "—"}
+                            </span>
+                            <span className="text-zinc-400">[{sev}]</span>
+                            <span className="text-zinc-300 truncate">{f.title}</span>
+                          </div>
+                          <div className="mt-1 flex gap-1.5 flex-wrap">
+                            {trust.provenanceBadges.map((badge) => (
+                              <span
+                                key={badge.key}
+                                className="text-[11px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300"
+                              >
+                                {badge.label}
+                              </span>
+                            ))}
+                            {trust.supportBadges.map((badge) => (
+                              <span
+                                key={badge.key}
+                                className="text-[11px] px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-300"
+                              >
+                                {badge.label}
+                              </span>
+                            ))}
+                            {trust.warningBadges.map((badge) => (
+                              <span
+                                key={badge.key}
+                                className="text-[11px] px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-300"
+                              >
+                                {badge.label}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       );
                     })}
@@ -198,7 +238,7 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
         </section>
 
         {/* Warnings */}
-        {(hasPartialLanes || hasStaleAnchors) && (
+        {(hasPartialLanes || hasStaleAnchors || hasAiOnlyFindings) && (
           <section className="space-y-2">
             {hasPartialLanes && (
               <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
@@ -210,6 +250,13 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
               <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 Some findings have stale line anchors and will appear as body text only.
+              </div>
+            )}
+            {hasAiOnlyFindings && (
+              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                Some findings rely on AI inference without deterministic support. Review the
+                evidence trail before submitting.
               </div>
             )}
           </section>

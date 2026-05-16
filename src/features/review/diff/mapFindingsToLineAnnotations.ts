@@ -1,10 +1,14 @@
 import type { DiffLineAnnotation } from "@pierre/diffs";
-import type { Finding, FindingCluster } from "../../../lib/types";
+import type { Finding, FindingCluster, PlatformMetadata } from "../../../lib/types";
+import { summarizeAnnotationTrust } from "../../../lib/trust";
 import { normalizeFilePath } from "./normalizeFilePath";
 
 export interface AnnotationPayload {
   findings: Finding[];
   highestSeverity: Finding["severity"];
+  provenanceLabel: string;
+  supportLabels: string[];
+  warningLabels: string[];
 }
 
 const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -27,6 +31,7 @@ export function mapFindingsToLineAnnotations(
   filePath: string,
   clusters?: FindingCluster[],
   knownFiles?: ReadonlySet<string>,
+  platformMetadata?: PlatformMetadata | null,
 ): DiffLineAnnotation<AnnotationPayload>[] {
   const representativeIds = new Set(
     (clusters ?? [])
@@ -66,6 +71,7 @@ export function mapFindingsToLineAnnotations(
 
   for (const [lineNumber, group] of grouped) {
     const sorted = [...group].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+    const trustSummary = summarizeAnnotationTrust(sorted, platformMetadata ?? null);
 
     annotations.push({
       side: "additions",
@@ -73,6 +79,9 @@ export function mapFindingsToLineAnnotations(
       metadata: {
         findings: sorted,
         highestSeverity: sorted[0].severity,
+        provenanceLabel: trustSummary.provenanceLabel,
+        supportLabels: trustSummary.supportLabels,
+        warningLabels: trustSummary.warningLabels,
       },
     });
   }

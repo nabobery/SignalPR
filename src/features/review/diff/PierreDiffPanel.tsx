@@ -63,6 +63,7 @@ export function PierreDiffPanel({ state, onRevealFinding }: PierreDiffPanelProps
         fd.name,
         state.clusters,
         knownFiles,
+        state.platformMetadata,
       );
       if (fd.prevName) {
         const prevAnnotations = mapFindingsToLineAnnotations(
@@ -70,6 +71,7 @@ export function PierreDiffPanel({ state, onRevealFinding }: PierreDiffPanelProps
           fd.prevName,
           state.clusters,
           knownFiles,
+          state.platformMetadata,
         );
         annotations.push(...prevAnnotations);
         annotations.sort((a, b) => a.lineNumber - b.lineNumber);
@@ -79,7 +81,7 @@ export function PierreDiffPanel({ state, onRevealFinding }: PierreDiffPanelProps
       }
     }
     return map;
-  }, [fileDiffs, findingsByFile, state.clusters, knownFiles]);
+  }, [fileDiffs, findingsByFile, state.clusters, knownFiles, state.platformMetadata]);
 
   /** Precomputed map: filePath → file-level (unanchored) findings */
   const fileLevelFindingsMap = useMemo(() => {
