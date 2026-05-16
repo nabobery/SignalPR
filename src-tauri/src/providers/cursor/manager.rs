@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::errors::ProviderError;
+use crate::providers::acp::shared::{normalize_request_id, pick_rejection_option_id};
 use crate::providers::jsonrpc::transport::JsonRpcTransport;
 use crate::providers::jsonrpc::types::{
     FramingMode, JsonRpcTransportError, ServerNotification, ServerRequest,
@@ -965,49 +966,13 @@ fn pick_cursor_auth_method(init_result: &Value) -> Option<String> {
 /// `"reject_always"`, then any option whose id contains "reject". Returns
 /// `None` when no rejection option is advertised — caller falls back to
 /// `{outcome: "cancelled"}` as a last resort.
-fn pick_rejection_option_id(options: &Value) -> Option<String> {
-    let arr = options.as_array()?;
-    for preferred in ["reject_once", "reject_always"] {
-        for opt in arr {
-            if opt.get("kind").and_then(|v| v.as_str()) == Some(preferred) {
-                if let Some(id) = opt.get("optionId").and_then(|v| v.as_str()) {
-                    return Some(id.to_string());
-                }
-            }
-        }
-    }
-    for opt in arr {
-        if let Some(id) = opt.get("optionId").and_then(|v| v.as_str()) {
-            if id.to_lowercase().contains("reject") {
-                return Some(id.to_string());
-            }
-        }
-    }
-    None
-}
-
 /// Parse the `modes` field from a `session/new` response, tolerating
 /// both the modern ACP shape `{currentModeId, availableModes: [...]}`
 /// (per <https://agentclientprotocol.com/protocol/session-modes.md>)
 /// and the pre-standard flat array `[{id, name}]` that some builds still
 /// return. Missing or unrecognised shapes yield an empty vec.
 fn extract_available_modes(result: &Value) -> Vec<String> {
-    let Some(modes) = result.get("modes") else {
-        return Vec::new();
-    };
-    if let Some(arr) = modes.get("availableModes").and_then(|v| v.as_array()) {
-        return arr
-            .iter()
-            .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
-            .collect();
-    }
-    if let Some(arr) = modes.as_array() {
-        return arr
-            .iter()
-            .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
-            .collect();
-    }
-    Vec::new()
+    crate::providers::acp::shared::extract_available_modes(result)
 }
 
 /// Slice a file's contents by `line` (1-based start) and `limit` (max
@@ -1046,15 +1011,6 @@ fn cap_utf8_bytes(s: &str, max_bytes: usize) -> String {
     out.push_str(&s[..cut]);
     out.push_str(MARKER);
     out
-}
-
-/// Normalize a JSON-RPC request id to a plain string.
-fn normalize_request_id(id: &Value) -> String {
-    match id {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        other => other.to_string(),
-    }
 }
 
 /// Map transport errors to `ProviderError::CursorFailed`.

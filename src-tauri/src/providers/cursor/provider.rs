@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::errors::ProviderError;
+use crate::providers::acp::shared::{build_review_prompt, parse_review_output};
 use crate::providers::traits::{CodexReviewOutput, ProviderHealth, ReviewInput, ReviewProvider};
 
 use super::manager::CursorManager;
@@ -45,34 +46,14 @@ impl CursorProvider {
 
     /// Build the full ACP prompt: system prompt + output-schema instruction + diff.
     fn build_prompt(input: &ReviewInput) -> String {
-        format!(
-            "{system}\n\n\
-             ## Output format\n\
-             You MUST respond with a single JSON object matching this schema. \
-             Do not include any prose before or after the JSON. Do not wrap it \
-             in markdown code fences. Output only the JSON object:\n\n\
-             {schema}\n\n\
-             ## Diff to review\n\
-             {diff}",
-            system = input.system_prompt,
-            schema = input.output_schema,
-            diff = input.diff
-        )
+        build_review_prompt(&input.system_prompt, &input.output_schema, &input.diff)
     }
 
     /// Extract a `CodexReviewOutput` from the accumulated agent message text.
     /// Tolerates markdown code fences and leading/trailing prose by locating
     /// the outermost JSON object.
     fn parse_output(raw: &str) -> Result<CodexReviewOutput, ProviderError> {
-        let trimmed = strip_code_fences(raw.trim());
-        let json_slice = locate_json_object(trimmed).unwrap_or(trimmed);
-        serde_json::from_str::<CodexReviewOutput>(json_slice).map_err(|e| {
-            ProviderError::CursorFailed(format!(
-                "Failed to parse review output as JSON: {} — raw text: {}",
-                e,
-                truncate_for_log(raw)
-            ))
-        })
+        parse_review_output(raw, "cursor")
     }
 }
 
@@ -208,39 +189,6 @@ impl ReviewProvider for CursorProvider {
     }
 }
 
-fn strip_code_fences(s: &str) -> &str {
-    let s = s.trim();
-    if let Some(rest) = s.strip_prefix("```json") {
-        return rest.trim().trim_end_matches("```").trim();
-    }
-    if let Some(rest) = s.strip_prefix("```") {
-        return rest.trim().trim_end_matches("```").trim();
-    }
-    s
-}
-
-fn locate_json_object(s: &str) -> Option<&str> {
-    let start = s.find('{')?;
-    let end = s.rfind('}')?;
-    if end > start {
-        Some(&s[start..=end])
-    } else {
-        None
-    }
-}
-
-fn truncate_for_log(s: &str) -> String {
-    const MAX: usize = 500;
-    if s.len() <= MAX {
-        return s.to_string();
-    }
-    let mut cut = MAX;
-    while cut > 0 && !s.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    format!("{}...(truncated)", &s[..cut])
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -248,6 +196,7 @@ fn truncate_for_log(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::acp::shared::{locate_json_object, strip_code_fences, truncate_for_log};
     use serde_json::json;
 
     #[test]

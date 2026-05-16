@@ -1,4 +1,8 @@
 use crate::errors::AppError;
+use crate::providers::acp::registry::{
+    build_provider_setup_catalog, probe_provider_setup as probe_provider_setup_impl,
+    ProviderSetupCatalogSnapshot, ProviderSetupProbeResult,
+};
 use crate::providers::capabilities::{self, ProviderCapabilities};
 use crate::providers::control_plane::{
     build_provider_control_plane_snapshot, load_provider_control_inputs, AgentRunMetadataResponse,
@@ -64,6 +68,24 @@ pub async fn get_provider_control_plane(
         load_provider_control_inputs(&conn, workspace_id.as_deref())?
     };
     build_provider_control_plane_snapshot(&app, preferred_provider, recent_runs, workspace_id).await
+}
+
+/// Returns the provider setup catalog, including ACP registry-derived metadata
+/// and SignalPR support/readiness status.
+#[tauri::command]
+pub async fn get_provider_setup_catalog(
+    app: tauri::AppHandle,
+) -> Result<ProviderSetupCatalogSnapshot, AppError> {
+    build_provider_setup_catalog(&app).await
+}
+
+/// Probe the current machine for a provider's install/auth readiness.
+#[tauri::command]
+pub async fn probe_provider_setup(
+    provider_id: String,
+    app: tauri::AppHandle,
+) -> Result<ProviderSetupProbeResult, AppError> {
+    probe_provider_setup_impl(&app, &provider_id).await
 }
 
 /// Returns agent run metadata (including session/checkpoint info) for a review run.

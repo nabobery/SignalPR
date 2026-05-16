@@ -27,9 +27,9 @@ settings/
 ## GENERAL PANEL NOTES
 
 - `preferred_provider` options: `auto | codex | claude | copilot | opencode | gemini | cursor | pi`
-- Selecting `gemini` renders an inline amber warning about API-key-only auth (`GEMINI_API_KEY` or Vertex `GOOGLE_*`); links to Gemini CLI ToS and auth guide
-- Selecting `cursor` renders inline instructions for obtaining `CURSOR_API_KEY` (Cloud Agents → User API Keys at cursor.com/dashboard)
-- Selecting `pi` renders health check status from `check_pi_health` IPC; install prompt if binary not found (`npm i -g @mariozechner/pi-coding-agent`)
+- Preferred provider setup details now come from the provider setup catalog instead of hard-coded per-provider warning blocks
+- Catalog fetch should enrich the panel opportunistically; primary settings and control-plane content should remain usable from local signals even if registry fetch is slow or offline
+- Curated providers can attach setup notes for guidance like Gemini API-key-only auth (`GEMINI_API_KEY` or Vertex `GOOGLE_*`) and Cursor key generation (Cloud Agents → User API Keys)
 
 ## CONVENTIONS
 

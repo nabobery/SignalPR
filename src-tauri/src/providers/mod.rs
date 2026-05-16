@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod bitbucket;
 pub mod capabilities;
 pub mod claude;
@@ -17,4 +18,5 @@ pub mod mock;
 pub mod opencode;
 pub mod pi;
 pub mod prompts;
+pub mod setup;
 pub mod traits;

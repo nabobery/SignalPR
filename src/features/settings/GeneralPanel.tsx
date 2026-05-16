@@ -1,15 +1,22 @@
-import { useState, useEffect, useRef } from "react";
-import { Loader2, KeyRound, Trash2, CheckCircle2 } from "lucide-react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Loader2, KeyRound, Trash2, CheckCircle2, ExternalLink, RefreshCw } from "lucide-react";
 import {
   getSettings,
   updateSetting,
   parseError,
   getProviderCredentialStatuses,
   getProviderControlPlane,
+  getProviderSetupCatalog,
   storeProviderSecret,
   deleteProviderSecret,
+  probeProviderSetup,
 } from "../../lib/ipc";
-import type { CredentialStatus, ProviderControlPlaneSnapshot } from "../../lib/types";
+import type {
+  CredentialStatus,
+  ProviderControlPlaneSnapshot,
+  ProviderSetupCatalogEntry,
+  ProviderSetupCatalogSnapshot,
+} from "../../lib/types";
 
 interface SettingsForm {
   max_surface_findings: string;
@@ -37,15 +44,40 @@ export function GeneralPanel() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providerControl, setProviderControl] = useState<ProviderControlPlaneSnapshot | null>(null);
+  const [providerCatalog, setProviderCatalog] = useState<ProviderSetupCatalogSnapshot | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadProviderControl = async () => {
-    const snapshot = await getProviderControlPlane();
-    setProviderControl(snapshot);
+    const control = await getProviderControlPlane();
+    setProviderControl(control);
+    return control;
+  };
+
+  const loadProviderCatalog = async () => {
+    const catalog = await getProviderSetupCatalog();
+    setProviderCatalog(catalog);
+    return catalog;
+  };
+
+  const refreshProviderSignals = async () => {
+    await loadProviderControl();
+    void loadProviderCatalog().catch((err) => {
+      setError((current) => current ?? parseError(err).message);
+    });
   };
 
   useEffect(() => {
     let cancelled = false;
+    const loadCatalogInBackground = async () => {
+      try {
+        const catalog = await getProviderSetupCatalog();
+        if (!cancelled) setProviderCatalog(catalog);
+      } catch (err) {
+        if (!cancelled) {
+          setError((current) => current ?? parseError(err).message);
+        }
+      }
+    };
     (async () => {
       try {
         const [settings, control] = await Promise.all([getSettings(), getProviderControlPlane()]);
@@ -67,6 +99,7 @@ export function GeneralPanel() {
         if (!cancelled) setLoading(false);
       }
     })();
+    void loadCatalogInBackground();
     return () => {
       cancelled = true;
     };
@@ -87,7 +120,7 @@ export function GeneralPanel() {
         }
       }
       setInitial({ ...form });
-      await loadProviderControl();
+      await refreshProviderSignals();
       setSaved(true);
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setSaved(false), 2000);
@@ -97,6 +130,14 @@ export function GeneralPanel() {
       setSaving(false);
     }
   };
+
+  const selectedProviderCatalogEntry = useMemo(
+    () =>
+      providerCatalog?.providers.find(
+        (provider) => provider.provider_id === form.preferred_provider,
+      ) ?? null,
+    [providerCatalog, form.preferred_provider],
+  );
 
   if (loading) {
     return (
@@ -165,87 +206,8 @@ export function GeneralPanel() {
           <option value="claude_code">Claude Code (opt-in, read-only)</option>
         </select>
         <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
-        {form.preferred_provider === "gemini" && (
-          <div className="text-amber-400 text-xs mt-2 space-y-1">
-            <p>
-              Gemini authenticates via API key only. Set{" "}
-              <code className="text-amber-300">GEMINI_API_KEY</code> (AI Studio) or a Vertex{" "}
-              <code className="text-amber-300">GOOGLE_*</code> env var, or store the key in Provider
-              Credentials below.
-            </p>
-            <p>
-              Google account OAuth is disabled to avoid third-party access risks described in{" "}
-              <a
-                href="https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-amber-300"
-              >
-                Gemini CLI's ToS notice
-              </a>
-              . See the{" "}
-              <a
-                href="https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/authentication.md"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-amber-300"
-              >
-                authentication guide
-              </a>{" "}
-              for setup. Review lanes run in plan mode with deny-by-default tool permissions.
-            </p>
-          </div>
-        )}
-        {form.preferred_provider === "cursor" && (
-          <div className="text-amber-400 text-xs mt-2 space-y-1">
-            <p>
-              Cursor authenticates via API key. Generate one from the Cursor Dashboard (Cloud Agents
-              → User API Keys) and export <code className="text-amber-300">CURSOR_API_KEY</code>, or
-              store it in Provider Credentials below.
-            </p>
-            <p>
-              Install the Cursor CLI with{" "}
-              <code className="text-amber-300">curl https://cursor.com/install -fsS | bash</code>.
-              SignalPR embeds Cursor via <code className="text-amber-300">agent acp</code> (an
-              advanced, hidden subcommand) and speaks the Agent Client Protocol over stdio. Review
-              lanes run in ask mode with deny-by-default tool permissions and filesystem reads
-              sandboxed to the PR worktree.
-            </p>
-            <p>
-              Docs:{" "}
-              <a
-                href="https://cursor.com/docs/cli/acp"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-amber-300"
-              >
-                Cursor ACP
-              </a>
-              {" · "}
-              <a
-                href="https://cursor.com/docs/cli/reference/authentication"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-amber-300"
-              >
-                Authentication
-              </a>
-            </p>
-          </div>
-        )}
-        {form.preferred_provider === "pi" && (
-          <div className="text-amber-400 text-xs mt-2 space-y-1">
-            <p>
-              PI authenticates through its own configuration. Install the CLI with{" "}
-              <code className="text-amber-300">npm i -g @mariozechner/pi-coding-agent</code> and
-              configure your API keys in PI's settings before launching SignalPR.
-            </p>
-            <p>
-              SignalPR embeds PI via <code className="text-amber-300">pi --mode rpc</code> with all
-              tools disabled (<code className="text-amber-300">--no-tools --no-session</code>). The
-              agent runs in read-only mode with no filesystem access.
-            </p>
-          </div>
+        {selectedProviderCatalogEntry && (
+          <SelectedProviderSetupDetails provider={selectedProviderCatalogEntry} />
         )}
       </div>
 
@@ -302,7 +264,8 @@ export function GeneralPanel() {
         {saved && <span className="text-emerald-400 text-sm">Saved!</span>}
       </div>
 
-      <ProviderCredentialsSection onCredentialsChanged={loadProviderControl} />
+      <ProviderCredentialsSection onCredentialsChanged={refreshProviderSignals} />
+      {providerCatalog && <ProviderCatalogSection catalog={providerCatalog} />}
     </div>
   );
 }
@@ -409,6 +372,250 @@ function secondsMaybe(value: number | null) {
 
 function costMaybe(value: number | null) {
   return value == null ? "—" : `$${value.toFixed(2)}`;
+}
+
+function humanizeToken(value: string) {
+  return value.split("_").join(" ");
+}
+
+function SelectedProviderSetupDetails({ provider }: { provider: ProviderSetupCatalogEntry }) {
+  const registry = provider.registry;
+
+  return (
+    <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 text-xs space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+          {humanizeToken(provider.provider_family)}
+        </span>
+        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+          {humanizeToken(provider.setup_state)}
+        </span>
+        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+          {humanizeToken(provider.capabilities.permission_model)}
+        </span>
+        {provider.currently_runnable && (
+          <span className="rounded bg-emerald-900/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
+            runnable
+          </span>
+        )}
+        {provider.execution_supported && !provider.currently_runnable && (
+          <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
+            setup needed
+          </span>
+        )}
+        {provider.execution_supported && !provider.release_gate_passed && (
+          <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+            validation pending
+          </span>
+        )}
+      </div>
+      <p className="text-zinc-300">{provider.readiness_reason}</p>
+      {provider.warnings.length > 0 && (
+        <div className="space-y-1">
+          {provider.warnings.map((warning) => (
+            <p key={warning} className="text-amber-300">
+              {warning}
+            </p>
+          ))}
+        </div>
+      )}
+      {registry?.install_command && (
+        <p className="text-zinc-400">
+          Install: <code className="text-zinc-200">{registry.install_command}</code>
+        </p>
+      )}
+      {provider.capabilities.supported_session_modes.length > 0 && (
+        <p className="text-zinc-400">
+          Modes: {provider.capabilities.supported_session_modes.join(", ")}
+        </p>
+      )}
+      {registry?.config_options.length ? (
+        <div className="space-y-1">
+          <div className="text-zinc-500">ACP config options</div>
+          <div className="flex flex-wrap gap-1.5">
+            {registry.config_options.map((option) => (
+              <span
+                key={option.id}
+                className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300"
+              >
+                {option.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {registry?.setup_notes.length ? (
+        <div className="space-y-1 text-zinc-400">
+          {registry.setup_notes.map((note) => (
+            <p key={note}>{note}</p>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex flex-wrap gap-3 text-zinc-400">
+        {registry?.docs_url && (
+          <a
+            href={registry.docs_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 hover:text-zinc-200"
+          >
+            Docs <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+        {registry?.auth_docs_url && (
+          <a
+            href={registry.auth_docs_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 hover:text-zinc-200"
+          >
+            Auth <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnapshot }) {
+  const [busyProviderId, setBusyProviderId] = useState<string | null>(null);
+  const [probeMessages, setProbeMessages] = useState<Record<string, string>>({});
+  const acpProviders = useMemo(
+    () =>
+      catalog.providers.filter(
+        (provider) =>
+          provider.registry !== null || provider.capabilities.install_source === "acp_registry",
+      ),
+    [catalog.providers],
+  );
+
+  const handleProbe = async (providerId: string) => {
+    setBusyProviderId(providerId);
+    try {
+      const result = await probeProviderSetup(providerId);
+      setProbeMessages((prev) => ({ ...prev, [providerId]: result.reason }));
+    } catch (err) {
+      setProbeMessages((prev) => ({ ...prev, [providerId]: parseError(err).message }));
+    } finally {
+      setBusyProviderId(null);
+    }
+  };
+
+  return (
+    <div className="border-t border-zinc-800 pt-6 mt-6">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <h3 className="text-zinc-200 text-sm font-medium">ACP Provider Catalog</h3>
+          <p className="text-zinc-500 text-xs mt-1">
+            Registry source: {catalog.registry_source}
+            {catalog.registry_fetched_at ? ` • fetched ${catalog.registry_fetched_at}` : ""}
+          </p>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {acpProviders.map((provider) => {
+          const verifyAction = provider.actions.find((action) => action.kind === "verify");
+          const verifyDisabled = !verifyAction?.enabled || busyProviderId === provider.provider_id;
+          return (
+            <div
+              key={provider.provider_id}
+              className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-2"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm text-zinc-100">{provider.display_name}</div>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                      {humanizeToken(provider.setup_state)}
+                    </span>
+                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                      {provider.support_tier}
+                    </span>
+                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                      {humanizeToken(provider.capabilities.transport_family)}
+                    </span>
+                    {provider.currently_runnable && (
+                      <span className="rounded bg-emerald-900/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                        runnable
+                      </span>
+                    )}
+                    {provider.execution_supported && !provider.release_gate_passed && (
+                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
+                        validation pending
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleProbe(provider.provider_id)}
+                  disabled={verifyDisabled}
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-500 disabled:opacity-50"
+                >
+                  {busyProviderId === provider.provider_id ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3 h-3" />
+                  )}
+                  Verify
+                </button>
+              </div>
+              <p className="text-xs text-zinc-400">{provider.readiness_reason}</p>
+              {provider.registry?.install_command && (
+                <p className="text-xs text-zinc-500">
+                  Install:{" "}
+                  <code className="text-zinc-300">{provider.registry.install_command}</code>
+                </p>
+              )}
+              {provider.registry?.config_options.length ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {provider.registry.config_options.map((option) => (
+                    <span
+                      key={`${provider.provider_id}-${option.id}`}
+                      className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300"
+                    >
+                      {option.name}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {provider.registry?.setup_notes.length ? (
+                <div className="space-y-1 text-xs text-zinc-500">
+                  {provider.registry.setup_notes.map((note) => (
+                    <p key={note}>{note}</p>
+                  ))}
+                </div>
+              ) : null}
+              {provider.warnings.length > 0 && (
+                <div className="space-y-1 text-xs text-amber-300">
+                  {provider.warnings.map((warning) => (
+                    <p key={warning}>{warning}</p>
+                  ))}
+                </div>
+              )}
+              <div className="flex flex-wrap gap-3 text-xs text-zinc-400">
+                {provider.actions
+                  .filter((action) => action.url)
+                  .map((action) => (
+                    <a
+                      key={action.id}
+                      href={action.url ?? "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 hover:text-zinc-200"
+                    >
+                      {action.label} <ExternalLink className="w-3 h-3" />
+                    </a>
+                  ))}
+              </div>
+              {probeMessages[provider.provider_id] && (
+                <p className="text-xs text-emerald-300">{probeMessages[provider.provider_id]}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 const CREDENTIAL_LABELS: Record<string, { label: string; placeholder: string }> = {

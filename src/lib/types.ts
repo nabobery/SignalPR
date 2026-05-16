@@ -769,17 +769,48 @@ export interface ProviderCapabilities {
   provider_id: string;
   display_name: string;
   provider_family: string;
+  transport_family: string;
   fit_tags: string[];
   billing_risk: string;
   setup_complexity: string;
+  install_source: string;
+  auth_mode: string;
+  permission_model: string;
   opt_in_only: boolean;
   in_auto_fallback: boolean;
+  execution_support_tier: "supported" | "discoverable_only" | "unsupported";
+  conformance_status: string;
+  eval_status: string;
   credential_fields: { provider_id: string; field: string; env_var: string }[];
   interactive_permissions: boolean;
   default_governance_tier: ToolGovernanceTier;
   supports_session_resume: boolean;
   supports_checkpointing: boolean;
   paid_eval_eligible: boolean;
+  supported_session_modes: string[];
+  supported_config_options: AcpConfigOptionDescriptor[];
+  session_capabilities: AcpSessionCapabilities;
+}
+
+export interface AcpConfigOptionValue {
+  value: string;
+  label: string;
+  description: string | null;
+}
+
+export interface AcpConfigOptionDescriptor {
+  id: string;
+  name: string;
+  option_type: string;
+  current_value: string | null;
+  options: AcpConfigOptionValue[];
+}
+
+export interface AcpSessionCapabilities {
+  list: boolean;
+  load: boolean;
+  resume: boolean;
+  close: boolean;
 }
 
 export interface ProviderSelectionCheck {
@@ -812,6 +843,10 @@ export interface ProviderControlPlaneProvider {
   display_name: string;
   status: "ready" | "degraded" | "unavailable";
   status_reason: string;
+  setup_state: ProviderSetupState;
+  execution_supported: boolean;
+  release_gate_passed: boolean;
+  currently_runnable: boolean;
   credential_source: CredentialSource | null;
   capabilities: ProviderCapabilities;
   recent_metrics: ProviderRecentMetrics;
@@ -828,6 +863,71 @@ export interface ProviderControlPlaneSnapshot {
   workspace_id: string | null;
   recent_window_size: number;
   generated_at: string;
+}
+
+export type ProviderSetupState =
+  | "ready"
+  | "needs_install"
+  | "needs_auth"
+  | "discoverable_only"
+  | "unsupported";
+
+export type ProviderSetupActionKind = "verify" | "open_docs" | "open_install" | "open_auth_docs";
+
+export interface ProviderSetupAction {
+  id: string;
+  label: string;
+  kind: ProviderSetupActionKind;
+  enabled: boolean;
+  command_preview: string | null;
+  url: string | null;
+}
+
+export interface ProviderRegistryMetadata {
+  registry_id: string | null;
+  latest_version: string | null;
+  install_source: string;
+  distribution_channel: string;
+  install_command: string | null;
+  install_url: string | null;
+  docs_url: string | null;
+  auth_docs_url: string | null;
+  config_options: AcpConfigOptionDescriptor[];
+  supported_modes: string[];
+  session_capabilities: AcpSessionCapabilities;
+  setup_notes: string[];
+}
+
+export interface ProviderSetupCatalogEntry {
+  provider_id: string;
+  display_name: string;
+  provider_family: string;
+  setup_state: ProviderSetupState;
+  readiness_reason: string;
+  support_tier: string;
+  execution_supported: boolean;
+  release_gate_passed: boolean;
+  currently_runnable: boolean;
+  credential_source: CredentialSource | null;
+  capabilities: ProviderCapabilities;
+  registry: ProviderRegistryMetadata | null;
+  actions: ProviderSetupAction[];
+  warnings: string[];
+}
+
+export interface ProviderSetupCatalogSnapshot {
+  providers: ProviderSetupCatalogEntry[];
+  registry_fetched_at: string | null;
+  registry_source: string;
+  generated_at: string;
+}
+
+export interface ProviderSetupProbeResult {
+  provider_id: string;
+  setup_state: ProviderSetupState;
+  ready: boolean;
+  reason: string;
+  checked_at: string;
 }
 
 // --- Session Metadata ---

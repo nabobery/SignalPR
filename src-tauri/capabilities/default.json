@@ -7,6 +7,40 @@
     "core:default",
     "opener:default",
     "notification:default",
-    "shell:default"
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "gh",
+          "cmd": "gh",
+          "args": true
+        },
+        {
+          "name": "git",
+          "cmd": "git",
+          "args": true
+        },
+        {
+          "name": "codex",
+          "cmd": "codex",
+          "args": true
+        },
+        {
+          "name": "gemini",
+          "cmd": "gemini",
+          "args": true
+        },
+        {
+          "name": "cursor-agent",
+          "cmd": "agent",
+          "args": true
+        },
+        {
+          "name": "opencode",
+          "cmd": "opencode",
+          "args": true
+        }
+      ]
+    }
   ]
 }

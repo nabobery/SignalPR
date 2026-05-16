@@ -28,6 +28,10 @@ use crate::providers::opencode::manager::OpenCodeManager;
 use crate::providers::opencode::provider::OpenCodeProvider;
 use crate::providers::pi::manager::PiManager;
 use crate::providers::pi::provider::PiProvider;
+use crate::providers::setup::{
+    currently_runnable, determine_setup_state, execution_supported, release_gate_passed,
+    ProviderSetupState,
+};
 use crate::providers::traits::{ProviderHealth, ReviewProvider};
 use crate::secrets::credentials::{self, CredentialSource};
 use crate::storage::models::ReviewRun;
@@ -77,6 +81,10 @@ pub struct ProviderControlPlaneProvider {
     pub display_name: String,
     pub status: String,
     pub status_reason: String,
+    pub setup_state: ProviderSetupState,
+    pub execution_supported: bool,
+    pub release_gate_passed: bool,
+    pub currently_runnable: bool,
     pub credential_source: Option<CredentialSource>,
     pub capabilities: ProviderCapabilities,
     pub recent_metrics: ProviderRecentMetrics,
@@ -249,8 +257,20 @@ fn build_status(
     caps: &ProviderCapabilities,
     health: &ProviderHealth,
     credential_source: Option<CredentialSource>,
-) -> (String, String, Vec<String>) {
+) -> (
+    String,
+    String,
+    ProviderSetupState,
+    bool,
+    bool,
+    bool,
+    Vec<String>,
+) {
     let mut warnings = Vec::new();
+    let setup_state = determine_setup_state(caps, health, credential_source);
+    let execution_supported = execution_supported(caps);
+    let release_gate_passed = release_gate_passed(caps);
+    let currently_runnable = currently_runnable(caps, &setup_state);
     let status_reason = if !health.available {
         health
             .message
@@ -269,6 +289,12 @@ fn build_status(
         {
             warnings.push("Credential-backed provider may be misconfigured.".to_string());
         }
+        if execution_supported && caps.conformance_status != "covered" {
+            warnings.push("Conformance coverage is still incomplete.".to_string());
+        }
+        if execution_supported && caps.eval_status != "covered" {
+            warnings.push("Eval coverage is still incomplete.".to_string());
+        }
         if caps.billing_risk == "paid_api" || caps.billing_risk == "subscription" {
             warnings.push("May incur paid usage.".to_string());
         }
@@ -277,9 +303,25 @@ fn build_status(
         } else {
             "ready".to_string()
         };
-        (status, status_reason, warnings)
+        (
+            status,
+            status_reason,
+            setup_state,
+            execution_supported,
+            release_gate_passed,
+            currently_runnable,
+            warnings,
+        )
     } else {
-        ("unavailable".to_string(), status_reason, warnings)
+        (
+            "unavailable".to_string(),
+            status_reason,
+            setup_state,
+            execution_supported,
+            release_gate_passed,
+            currently_runnable,
+            warnings,
+        )
     }
 }
 
@@ -427,7 +469,15 @@ pub async fn build_provider_control_plane_snapshot(
                 version: None,
                 message: Some("Provider health unavailable".to_string()),
             });
-        let (status, status_reason, warnings) = build_status(&caps, &health, credential_source);
+        let (
+            status,
+            status_reason,
+            setup_state,
+            execution_supported,
+            release_gate_passed,
+            currently_runnable,
+            warnings,
+        ) = build_status(&caps, &health, credential_source);
         let recent = recent_metrics
             .get(caps.provider_id.as_str())
             .cloned()
@@ -447,6 +497,10 @@ pub async fn build_provider_control_plane_snapshot(
             display_name: caps.display_name.clone(),
             status,
             status_reason,
+            setup_state,
+            execution_supported,
+            release_gate_passed,
+            currently_runnable,
             credential_source,
             capabilities: caps,
             recent_metrics: recent,

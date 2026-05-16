@@ -16,6 +16,8 @@ import type {
   ReviewDraft,
   RefreshMetadataResult,
   ProviderControlPlaneSnapshot,
+  ProviderSetupCatalogSnapshot,
+  ProviderSetupProbeResult,
 } from "./types";
 
 export function parseError(err: unknown): AppError {
@@ -270,6 +272,14 @@ export async function getProviderControlPlane(
   workspaceId?: string,
 ): Promise<ProviderControlPlaneSnapshot> {
   return invoke("get_provider_control_plane", { workspaceId });
+}
+
+export async function getProviderSetupCatalog(): Promise<ProviderSetupCatalogSnapshot> {
+  return invoke("get_provider_setup_catalog");
+}
+
+export async function probeProviderSetup(providerId: string): Promise<ProviderSetupProbeResult> {
+  return invoke("probe_provider_setup", { providerId });
 }
 
 // --- Session Metadata ---

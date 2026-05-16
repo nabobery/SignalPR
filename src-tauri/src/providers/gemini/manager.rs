@@ -11,6 +11,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::errors::ProviderError;
+use crate::providers::acp::shared::{
+    extract_available_modes, normalize_request_id, pick_rejection_option_id,
+};
 use crate::providers::jsonrpc::transport::JsonRpcTransport;
 use crate::providers::jsonrpc::types::{
     FramingMode, JsonRpcTransportError, ServerNotification, ServerRequest,
@@ -604,15 +607,7 @@ impl GeminiManager {
         // Extract modes.id[] from the session-new response if present. Plan
         // mode is gated by upstream `config.isPlanEnabled()`, so we cannot
         // assume it's always available.
-        let available_modes: Vec<String> = result
-            .get("modes")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let available_modes = extract_available_modes(&result);
 
         {
             let mut map = self.session_by_lane.lock().await;
@@ -821,38 +816,6 @@ impl GeminiManager {
 /// `"reject_always"`, then any option whose id contains "reject". Returns
 /// `None` when no rejection option is advertised — caller falls back to
 /// `{outcome: "cancelled"}` as a last resort.
-fn pick_rejection_option_id(options: &Value) -> Option<String> {
-    let arr = options.as_array()?;
-    for preferred in ["reject_once", "reject_always"] {
-        for opt in arr {
-            if opt.get("kind").and_then(|v| v.as_str()) == Some(preferred) {
-                if let Some(id) = opt.get("optionId").and_then(|v| v.as_str()) {
-                    return Some(id.to_string());
-                }
-            }
-        }
-    }
-    for opt in arr {
-        if let Some(id) = opt.get("optionId").and_then(|v| v.as_str()) {
-            if id.to_lowercase().contains("reject") {
-                return Some(id.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Normalize a JSON-RPC request id to a plain string. For `Value::String`,
-/// `serde_json::Value::to_string()` would yield `"\"abc\""` (with literal
-/// quotes); we want `abc`. For numbers, we use the canonical decimal form.
-fn normalize_request_id(id: &Value) -> String {
-    match id {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        other => other.to_string(),
-    }
-}
-
 /// Extract the id of an `authMethod` that corresponds to API-key auth
 /// (`AuthType.USE_GEMINI` upstream) from an ACP `initialize` response.
 ///

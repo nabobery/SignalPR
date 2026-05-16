@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::errors::ProviderError;
+use crate::providers::acp::shared::{build_review_prompt, parse_review_output};
 use crate::providers::traits::{CodexReviewOutput, ProviderHealth, ReviewInput, ReviewProvider};
 
 use super::manager::GeminiManager;
@@ -60,34 +61,14 @@ impl GeminiProvider {
     /// Claude's Messages API does, so we instruct the agent to respond with a
     /// single JSON object and parse that from the accumulated agent message text.
     fn build_prompt(input: &ReviewInput) -> String {
-        format!(
-            "{system}\n\n\
-             ## Output format\n\
-             You MUST respond with a single JSON object matching this schema. \
-             Do not include any prose before or after the JSON. Do not wrap it \
-             in markdown code fences. Output only the JSON object:\n\n\
-             {schema}\n\n\
-             ## Diff to review\n\
-             {diff}",
-            system = input.system_prompt,
-            schema = input.output_schema,
-            diff = input.diff
-        )
+        build_review_prompt(&input.system_prompt, &input.output_schema, &input.diff)
     }
 
     /// Extract a `CodexReviewOutput` from the accumulated agent message text.
     /// Tolerates markdown code fences and leading/trailing prose by locating
     /// the outermost JSON object.
     fn parse_output(raw: &str) -> Result<CodexReviewOutput, ProviderError> {
-        let trimmed = strip_code_fences(raw.trim());
-        let json_slice = locate_json_object(trimmed).unwrap_or(trimmed);
-        serde_json::from_str::<CodexReviewOutput>(json_slice).map_err(|e| {
-            ProviderError::GeminiFailed(format!(
-                "Failed to parse review output as JSON: {} — raw text: {}",
-                e,
-                truncate_for_log(raw)
-            ))
-        })
+        parse_review_output(raw, "gemini")
     }
 }
 
@@ -134,11 +115,10 @@ impl ReviewProvider for GeminiProvider {
         let handle = self.manager.create_session(&input.lane_id, cwd).await?;
         let session_id = handle.session_id.clone();
 
-        // P0.4: lock the session into ACP "plan" mode when available (upstream
-        // only lists `plan` when `config.isPlanEnabled()` is true). This is
-        // belt-and-braces with our deny-by-default permission handler —
-        // plan mode prevents file writes and shell execution at the agent
-        // policy level even if the permission gate ever falls through.
+        // Prefer ACP "plan" mode when it is available. Upstream only lists
+        // `plan` when `config.isPlanEnabled()` is true. This complements our
+        // deny-by-default permission handler because plan mode blocks file
+        // writes and shell execution at the agent policy layer too.
         if handle.available_modes.iter().any(|m| m == "plan") {
             if let Err(e) = self.manager.set_session_mode(&session_id, "plan").await {
                 warn!(
@@ -155,8 +135,8 @@ impl ReviewProvider for GeminiProvider {
             );
         }
 
-        // P0.2: actually send the selected model to the session. Tolerates
-        // `method not found` as non-fatal (some CLI builds disable the
+        // Send the selected model to the session. Tolerates `method not found`
+        // as non-fatal (some CLI builds disable the
         // unstable set_model call).
         if let Err(e) = self
             .manager
@@ -224,45 +204,6 @@ impl ReviewProvider for GeminiProvider {
     }
 }
 
-/// Strip ` ```json ... ``` ` or ` ``` ... ``` ` wrappers if present.
-fn strip_code_fences(s: &str) -> &str {
-    let s = s.trim();
-    if let Some(rest) = s.strip_prefix("```json") {
-        return rest.trim().trim_end_matches("```").trim();
-    }
-    if let Some(rest) = s.strip_prefix("```") {
-        return rest.trim().trim_end_matches("```").trim();
-    }
-    s
-}
-
-/// Locate the outermost JSON object (`{...}`) in a string, tolerating any
-/// prose before or after it.
-fn locate_json_object(s: &str) -> Option<&str> {
-    let start = s.find('{')?;
-    let end = s.rfind('}')?;
-    if end > start {
-        Some(&s[start..=end])
-    } else {
-        None
-    }
-}
-
-/// UTF-8-safe log truncation: drops back to the previous char boundary so
-/// we never split a codepoint. `&s[..500]` would panic on multi-byte input
-/// like CJK or emoji if byte 500 landed inside a sequence.
-fn truncate_for_log(s: &str) -> String {
-    const MAX: usize = 500;
-    if s.len() <= MAX {
-        return s.to_string();
-    }
-    let mut cut = MAX;
-    while cut > 0 && !s.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    format!("{}...(truncated)", &s[..cut])
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -270,6 +211,7 @@ fn truncate_for_log(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::acp::shared::{locate_json_object, strip_code_fences, truncate_for_log};
     use serde_json::json;
 
     #[test]
