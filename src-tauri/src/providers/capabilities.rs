@@ -31,6 +31,15 @@ impl ToolGovernanceTier {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderSelectionEligibility {
+    AutoAllowed,
+    ManualOnly,
+    CatalogOnly,
+    Unsupported,
+}
+
 /// Describes a credential field required by a provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialFieldDescriptor {
@@ -54,6 +63,7 @@ pub struct ProviderCapabilities {
     pub permission_model: String,
     pub opt_in_only: bool,
     pub in_auto_fallback: bool,
+    pub selection_eligibility: ProviderSelectionEligibility,
     pub execution_support_tier: String,
     pub conformance_status: String,
     pub eval_status: String,
@@ -84,6 +94,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "host_governed".into(),
             opt_in_only: false,
             in_auto_fallback: true,
+            selection_eligibility: ProviderSelectionEligibility::AutoAllowed,
             execution_support_tier: "supported".into(),
             conformance_status: "covered".into(),
             eval_status: "planned".into(),
@@ -110,6 +121,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "interactive_approval".into(),
             opt_in_only: false,
             in_auto_fallback: true,
+            selection_eligibility: ProviderSelectionEligibility::AutoAllowed,
             execution_support_tier: "supported".into(),
             conformance_status: "covered".into(),
             eval_status: "planned".into(),
@@ -136,6 +148,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "host_governed".into(),
             opt_in_only: false,
             in_auto_fallback: true,
+            selection_eligibility: ProviderSelectionEligibility::AutoAllowed,
             execution_support_tier: "supported".into(),
             conformance_status: "covered".into(),
             eval_status: "covered".into(),
@@ -166,6 +179,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "interactive_approval".into(),
             opt_in_only: false,
             in_auto_fallback: true,
+            selection_eligibility: ProviderSelectionEligibility::CatalogOnly,
             execution_support_tier: "discoverable_only".into(),
             conformance_status: "planned".into(),
             eval_status: "planned".into(),
@@ -192,6 +206,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "interactive_approval".into(),
             opt_in_only: false,
             in_auto_fallback: true,
+            selection_eligibility: ProviderSelectionEligibility::CatalogOnly,
             execution_support_tier: "discoverable_only".into(),
             conformance_status: "planned".into(),
             eval_status: "planned".into(),
@@ -222,6 +237,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "deny_by_default".into(),
             opt_in_only: true,
             in_auto_fallback: false,
+            selection_eligibility: ProviderSelectionEligibility::ManualOnly,
             execution_support_tier: "supported".into(),
             conformance_status: "covered".into(),
             eval_status: "planned".into(),
@@ -294,6 +310,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "deny_by_default".into(),
             opt_in_only: true,
             in_auto_fallback: false,
+            selection_eligibility: ProviderSelectionEligibility::ManualOnly,
             execution_support_tier: "supported".into(),
             conformance_status: "covered".into(),
             eval_status: "planned".into(),
@@ -354,6 +371,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "tools_disabled".into(),
             opt_in_only: true,
             in_auto_fallback: false,
+            selection_eligibility: ProviderSelectionEligibility::CatalogOnly,
             execution_support_tier: "discoverable_only".into(),
             conformance_status: "planned".into(),
             eval_status: "planned".into(),
@@ -384,6 +402,7 @@ pub fn provider_registry() -> Vec<ProviderCapabilities> {
             permission_model: "interactive_approval".into(),
             opt_in_only: true,
             in_auto_fallback: false,
+            selection_eligibility: ProviderSelectionEligibility::ManualOnly,
             execution_support_tier: "supported".into(),
             conformance_status: "covered".into(),
             eval_status: "planned".into(),
@@ -454,6 +473,10 @@ mod tests {
         let caps = get_provider_caps("claude_code").unwrap();
         assert!(caps.opt_in_only);
         assert!(!caps.in_auto_fallback);
+        assert_eq!(
+            caps.selection_eligibility,
+            ProviderSelectionEligibility::ManualOnly
+        );
     }
 
     #[test]
@@ -467,12 +490,20 @@ mod tests {
         let caps = get_provider_caps("gemini").unwrap();
         assert!(caps.opt_in_only);
         assert!(!caps.in_auto_fallback);
+        assert_eq!(
+            caps.selection_eligibility,
+            ProviderSelectionEligibility::ManualOnly
+        );
     }
 
     #[test]
     fn test_copilot_is_interactive() {
         let caps = get_provider_caps("copilot").unwrap();
         assert!(caps.interactive_permissions);
+        assert_eq!(
+            caps.selection_eligibility,
+            ProviderSelectionEligibility::CatalogOnly
+        );
         assert_eq!(
             caps.default_governance_tier,
             ToolGovernanceTier::GuardedWrite

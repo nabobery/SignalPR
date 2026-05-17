@@ -80,6 +80,21 @@ export function SessionDrawer({ runId }: Props) {
                   {warning}
                 </p>
               ))}
+              {selection.checks.some((check) => !check.available) && (
+                <div className="space-y-1 pt-1 border-t border-zinc-800/80">
+                  {selection.checks
+                    .filter((check) => !check.available)
+                    .map((check) => (
+                      <p
+                        key={`${check.provider_id}-${check.reason}`}
+                        className="text-[10px] text-zinc-500"
+                      >
+                        <span className="text-zinc-400">{check.provider_id}</span>:{" "}
+                        {describeSelectionCheck(check)}
+                      </p>
+                    ))}
+                </div>
+              )}
             </div>
           )}
           {runs.map((run) => {
@@ -156,5 +171,22 @@ function normalizeProviderId(value: string) {
       return "codex_app_server";
     default:
       return value;
+  }
+}
+
+function describeSelectionCheck(check: ProviderSelectionTrace["checks"][number]) {
+  switch (check.reason) {
+    case "discoverable_only":
+      return "catalog entry only";
+    case "gate_blocked":
+      return "blocked by readiness checks";
+    case "opt_in_only":
+      return "manual opt-in only";
+    case "unsupported":
+      return "not supported for review runs";
+    case "unhealthy":
+      return check.message ? `health check failed: ${check.message}` : "health check failed";
+    default:
+      return check.message ?? check.reason;
   }
 }

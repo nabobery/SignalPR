@@ -12,7 +12,7 @@ use crate::providers::capabilities::{provider_registry, ProviderCapabilities};
 use crate::providers::control_plane::provider_health_by_provider;
 use crate::providers::setup::{
     currently_runnable, determine_setup_state, execution_supported, release_gate_passed,
-    support_tier, ProviderSetupState,
+    release_gate_status, support_tier, ProviderReleaseGateStatus, ProviderSetupState,
 };
 use crate::providers::traits::ProviderHealth;
 use crate::secrets::credentials::{self, CredentialSource};
@@ -67,6 +67,7 @@ pub struct ProviderSetupCatalogEntry {
     pub readiness_reason: String,
     pub support_tier: String,
     pub execution_supported: bool,
+    pub release_gate_status: ProviderReleaseGateStatus,
     pub release_gate_passed: bool,
     pub currently_runnable: bool,
     pub credential_source: Option<CredentialSource>,
@@ -486,7 +487,8 @@ pub async fn build_provider_setup_catalog(
             })
         });
         let execution_supported = execution_supported(&capabilities);
-        let release_gate_passed = release_gate_passed(&capabilities);
+        let release_gate_status = release_gate_status(&capabilities, &setup_state);
+        let release_gate_passed = release_gate_passed(&capabilities, &setup_state);
         let currently_runnable = currently_runnable(&capabilities, &setup_state);
 
         let registry = seed.map(|seed| ProviderRegistryMetadata {
@@ -616,6 +618,7 @@ pub async fn build_provider_setup_catalog(
             readiness_reason,
             support_tier: support_tier(&capabilities).to_string(),
             execution_supported,
+            release_gate_status,
             release_gate_passed,
             currently_runnable,
             credential_source,

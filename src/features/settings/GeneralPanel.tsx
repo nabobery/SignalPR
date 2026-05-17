@@ -315,9 +315,14 @@ function ProviderControlSection({
                         recommended
                       </span>
                     )}
-                    {!provider.capabilities.in_auto_fallback && (
+                    {provider.capabilities.selection_eligibility === "manual_only" && (
                       <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
                         opt-in
+                      </span>
+                    )}
+                    {provider.capabilities.selection_eligibility === "catalog_only" && (
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                        catalog-only
                       </span>
                     )}
                   </div>

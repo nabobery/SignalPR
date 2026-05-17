@@ -35,9 +35,22 @@ describe("SessionDrawer", () => {
         requested_provider: "claude",
         selected_provider: "codex_app_server",
         selection_mode: "fallback",
-        checks: [],
+        checks: [
+          {
+            provider_id: "claude",
+            available: false,
+            reason: "unhealthy",
+            message: "missing key",
+          },
+          {
+            provider_id: "codex_app_server",
+            available: true,
+            reason: "selected",
+            message: null,
+          },
+        ],
         warnings: [
-          "Requested provider 'claude' was unavailable, so SignalPR selected 'codex_app_server'.",
+          "Requested provider 'claude' could not run (missing key), so SignalPR selected 'codex_app_server'.",
         ],
       },
     });
@@ -55,6 +68,7 @@ describe("SessionDrawer", () => {
         permission_model: "interactive_approval",
         opt_in_only: false,
         in_auto_fallback: true,
+        selection_eligibility: "auto_allowed",
         execution_support_tier: "supported",
         conformance_status: "covered",
         eval_status: "planned",
@@ -79,8 +93,10 @@ describe("SessionDrawer", () => {
     await user.click(screen.getByText("Session Info"));
 
     expect(screen.getByText("Provider selection")).toBeInTheDocument();
-    expect(screen.getByText("claude")).toBeInTheDocument();
-    expect(screen.getByText("codex_app_server")).toBeInTheDocument();
-    expect(screen.getByText(/was unavailable/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Requested/)[0]).toHaveTextContent(
+      "Requested claude, selected codex_app_server",
+    );
+    expect(screen.getByText(/could not run/)).toBeInTheDocument();
+    expect(screen.getByText(/health check failed: missing key/)).toBeInTheDocument();
   });
 });

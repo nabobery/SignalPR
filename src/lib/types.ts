@@ -764,6 +764,11 @@ export interface CredentialStatus {
 // --- Provider Capability Registry ---
 
 export type ToolGovernanceTier = "read_only" | "guarded_write" | "trusted_write";
+export type ProviderSelectionEligibility =
+  | "auto_allowed"
+  | "manual_only"
+  | "catalog_only"
+  | "unsupported";
 
 export interface ProviderCapabilities {
   provider_id: string;
@@ -778,6 +783,7 @@ export interface ProviderCapabilities {
   permission_model: string;
   opt_in_only: boolean;
   in_auto_fallback: boolean;
+  selection_eligibility: ProviderSelectionEligibility;
   execution_support_tier: "supported" | "discoverable_only" | "unsupported";
   conformance_status: string;
   eval_status: string;
@@ -845,6 +851,7 @@ export interface ProviderControlPlaneProvider {
   status_reason: string;
   setup_state: ProviderSetupState;
   execution_supported: boolean;
+  release_gate_status: ProviderReleaseGateStatus;
   release_gate_passed: boolean;
   currently_runnable: boolean;
   credential_source: CredentialSource | null;
@@ -871,6 +878,12 @@ export type ProviderSetupState =
   | "needs_auth"
   | "discoverable_only"
   | "unsupported";
+
+export type ProviderReleaseGateStatus =
+  | "passed"
+  | "blocked_conformance"
+  | "blocked_eval"
+  | "blocked_setup";
 
 export type ProviderSetupActionKind = "verify" | "open_docs" | "open_install" | "open_auth_docs";
 
@@ -906,6 +919,7 @@ export interface ProviderSetupCatalogEntry {
   readiness_reason: string;
   support_tier: string;
   execution_supported: boolean;
+  release_gate_status: ProviderReleaseGateStatus;
   release_gate_passed: boolean;
   currently_runnable: boolean;
   credential_source: CredentialSource | null;

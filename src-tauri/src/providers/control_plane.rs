@@ -10,7 +10,7 @@ use crate::config;
 use crate::errors::AppError;
 use crate::metrics::RunScorecard;
 use crate::providers::capabilities::{
-    canonical_provider_id, provider_registry, ProviderCapabilities,
+    canonical_provider_id, provider_registry, ProviderCapabilities, ProviderSelectionEligibility,
 };
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::claude_code::manager::ClaudeCodeManager;
@@ -30,7 +30,8 @@ use crate::providers::pi::manager::PiManager;
 use crate::providers::pi::provider::PiProvider;
 use crate::providers::setup::{
     currently_runnable, determine_setup_state, execution_supported, release_gate_passed,
-    ProviderSetupState,
+    release_gate_status, selection_eligible_for_auto, selection_eligible_for_manual,
+    ProviderReleaseGateStatus, ProviderSetupState,
 };
 use crate::providers::traits::{ProviderHealth, ReviewProvider};
 use crate::secrets::credentials::{self, CredentialSource};
@@ -83,6 +84,7 @@ pub struct ProviderControlPlaneProvider {
     pub status_reason: String,
     pub setup_state: ProviderSetupState,
     pub execution_supported: bool,
+    pub release_gate_status: ProviderReleaseGateStatus,
     pub release_gate_passed: bool,
     pub currently_runnable: bool,
     pub credential_source: Option<CredentialSource>,
@@ -262,6 +264,7 @@ fn build_status(
     String,
     ProviderSetupState,
     bool,
+    ProviderReleaseGateStatus,
     bool,
     bool,
     Vec<String>,
@@ -269,13 +272,32 @@ fn build_status(
     let mut warnings = Vec::new();
     let setup_state = determine_setup_state(caps, health, credential_source);
     let execution_supported = execution_supported(caps);
-    let release_gate_passed = release_gate_passed(caps);
+    let release_gate_status = release_gate_status(caps, &setup_state);
+    let release_gate_passed = release_gate_passed(caps, &setup_state);
     let currently_runnable = currently_runnable(caps, &setup_state);
     let status_reason = if !health.available {
         health
             .message
             .clone()
             .unwrap_or_else(|| "Health check failed".to_string())
+    } else if matches!(setup_state, ProviderSetupState::DiscoverableOnly) {
+        warnings.push("Catalog-only provider; review execution is not enabled yet.".to_string());
+        "Listed in the catalog, but review execution is not enabled yet.".to_string()
+    } else if !release_gate_passed {
+        match release_gate_status {
+            ProviderReleaseGateStatus::BlockedConformance => {
+                warnings.push("Conformance coverage is still incomplete.".to_string());
+                "Healthy, but blocked until conformance coverage is complete.".to_string()
+            }
+            ProviderReleaseGateStatus::BlockedEval => {
+                warnings.push("Eval coverage is still incomplete.".to_string());
+                "Healthy, but blocked until eval coverage is complete.".to_string()
+            }
+            ProviderReleaseGateStatus::BlockedSetup => {
+                "Setup is incomplete for review runs.".to_string()
+            }
+            ProviderReleaseGateStatus::Passed => "Ready for review runs".to_string(),
+        }
     } else if caps.opt_in_only {
         warnings.push("Opt-in provider; excluded from auto mode.".to_string());
         "Available but opt-in only".to_string()
@@ -289,16 +311,14 @@ fn build_status(
         {
             warnings.push("Credential-backed provider may be misconfigured.".to_string());
         }
-        if execution_supported && caps.conformance_status != "covered" {
-            warnings.push("Conformance coverage is still incomplete.".to_string());
-        }
-        if execution_supported && caps.eval_status != "covered" {
-            warnings.push("Eval coverage is still incomplete.".to_string());
-        }
         if caps.billing_risk == "paid_api" || caps.billing_risk == "subscription" {
             warnings.push("May incur paid usage.".to_string());
         }
-        let status = if caps.opt_in_only || health.message.is_some() {
+        let status = if caps.opt_in_only
+            || health.message.is_some()
+            || !release_gate_passed
+            || matches!(setup_state, ProviderSetupState::DiscoverableOnly)
+        {
             "degraded".to_string()
         } else {
             "ready".to_string()
@@ -308,6 +328,7 @@ fn build_status(
             status_reason,
             setup_state,
             execution_supported,
+            release_gate_status,
             release_gate_passed,
             currently_runnable,
             warnings,
@@ -318,6 +339,7 @@ fn build_status(
             status_reason,
             setup_state,
             execution_supported,
+            release_gate_status,
             release_gate_passed,
             currently_runnable,
             warnings,
@@ -339,9 +361,20 @@ fn recommendation_score(provider: &ProviderControlPlaneProvider, preferred_provi
     let preferred_matches = canonical_provider_id(preferred_provider) == provider.provider_id;
     if preferred_matches {
         score += 20.0;
-    } else if preferred_provider == "auto" && provider.capabilities.in_auto_fallback {
+    } else if preferred_provider == "auto"
+        && selection_eligible_for_auto(&provider.capabilities)
+        && matches!(
+            provider.release_gate_status,
+            ProviderReleaseGateStatus::Passed
+        )
+    {
         score += 15.0;
-    } else if !provider.capabilities.in_auto_fallback {
+    } else if preferred_provider == "auto"
+        && !matches!(
+            provider.capabilities.selection_eligibility,
+            ProviderSelectionEligibility::AutoAllowed
+        )
+    {
         score -= 12.0;
     }
 
@@ -368,6 +401,22 @@ fn recommendation_score(provider: &ProviderControlPlaneProvider, preferred_provi
     score
 }
 
+fn provider_is_recommendable(
+    provider: &ProviderControlPlaneProvider,
+    preferred_provider: &str,
+) -> bool {
+    if preferred_provider == "auto" {
+        provider.currently_runnable
+            && selection_eligible_for_auto(&provider.capabilities)
+            && matches!(
+                provider.release_gate_status,
+                ProviderReleaseGateStatus::Passed
+            )
+    } else {
+        provider.currently_runnable && selection_eligible_for_manual(&provider.capabilities)
+    }
+}
+
 fn recommendation_reason(
     provider: &ProviderControlPlaneProvider,
     preferred_provider: &str,
@@ -384,7 +433,9 @@ fn recommendation_reason(
 
     if canonical_provider_id(preferred_provider) == provider.provider_id {
         parts.push("It matches the current preference.".to_string());
-    } else if preferred_provider == "auto" {
+    } else if preferred_provider == "auto"
+        && provider_is_recommendable(provider, preferred_provider)
+    {
         parts.push("It fits the current auto-routing policy.".to_string());
     }
 
@@ -474,6 +525,7 @@ pub async fn build_provider_control_plane_snapshot(
             status_reason,
             setup_state,
             execution_supported,
+            release_gate_status,
             release_gate_passed,
             currently_runnable,
             warnings,
@@ -499,6 +551,7 @@ pub async fn build_provider_control_plane_snapshot(
             status_reason,
             setup_state,
             execution_supported,
+            release_gate_status,
             release_gate_passed,
             currently_runnable,
             credential_source,
@@ -512,7 +565,7 @@ pub async fn build_provider_control_plane_snapshot(
 
     let recommended_provider_id = providers
         .iter()
-        .filter(|provider| provider.status != "unavailable")
+        .filter(|provider| provider_is_recommendable(provider, &preferred_provider))
         .max_by(|left, right| {
             recommendation_score(left, &preferred_provider)
                 .partial_cmp(&recommendation_score(right, &preferred_provider))
@@ -546,6 +599,21 @@ pub async fn build_provider_control_plane_snapshot(
 pub async fn provider_health_by_provider(app: &AppHandle) -> HashMap<String, ProviderHealth> {
     let mut health = HashMap::new();
 
+    for caps in provider_registry() {
+        if caps.execution_support_tier == "discoverable_only" {
+            health.insert(
+                caps.provider_id.clone(),
+                ProviderHealth {
+                    available: false,
+                    version: None,
+                    message: Some(
+                        "Catalog entry only; review execution is not enabled yet.".into(),
+                    ),
+                },
+            );
+        }
+    }
+
     let codex_app_manager = app.state::<Arc<CodexAppServerManager>>().inner().clone();
     health.insert(
         "codex_app_server".to_string(),
@@ -563,21 +631,25 @@ pub async fn provider_health_by_provider(app: &AppHandle) -> HashMap<String, Pro
         ClaudeProvider::new().health_check().await,
     );
 
-    let copilot_manager = app.state::<Arc<CopilotManager>>().inner().clone();
-    health.insert(
-        "copilot".to_string(),
-        CopilotProvider::new(copilot_manager, None)
-            .health_check()
-            .await,
-    );
+    if !health.contains_key("copilot") {
+        let copilot_manager = app.state::<Arc<CopilotManager>>().inner().clone();
+        health.insert(
+            "copilot".to_string(),
+            CopilotProvider::new(copilot_manager, None)
+                .health_check()
+                .await,
+        );
+    }
 
-    let opencode_manager = app.state::<Arc<OpenCodeManager>>().inner().clone();
-    health.insert(
-        "opencode".to_string(),
-        OpenCodeProvider::new(opencode_manager, None)
-            .health_check()
-            .await,
-    );
+    if !health.contains_key("opencode") {
+        let opencode_manager = app.state::<Arc<OpenCodeManager>>().inner().clone();
+        health.insert(
+            "opencode".to_string(),
+            OpenCodeProvider::new(opencode_manager, None)
+                .health_check()
+                .await,
+        );
+    }
 
     let gemini_manager = app.state::<Arc<GeminiManager>>().inner().clone();
     health.insert(
@@ -624,10 +696,7 @@ pub fn build_selection_trace(
     let selection_mode = trace_mode(&requested, &selected, &checks);
     let mut warnings = Vec::new();
     if matches!(selection_mode, ProviderSelectionMode::Fallback) && requested != selected {
-        warnings.push(format!(
-            "Requested provider '{}' was unavailable, so SignalPR selected '{}'.",
-            requested, selected
-        ));
+        warnings.push(selection_fallback_warning(&requested, &selected, &checks));
     }
 
     ProviderSelectionTrace {
@@ -637,6 +706,58 @@ pub fn build_selection_trace(
         checks,
         warnings,
     }
+}
+
+fn selection_fallback_warning(
+    requested_provider: &str,
+    selected_provider: &str,
+    checks: &[ProviderSelectionCheck],
+) -> String {
+    if let Some(check) = checks
+        .iter()
+        .find(|check| check.provider_id == requested_provider)
+    {
+        match check.reason.as_str() {
+            "discoverable_only" => {
+                return format!(
+                    "Requested provider '{}' is listed in the catalog but review execution is not enabled yet, so SignalPR selected '{}'.",
+                    requested_provider, selected_provider
+                );
+            }
+            "gate_blocked" => {
+                return format!(
+                    "Requested provider '{}' is healthy but still blocked by readiness checks, so SignalPR selected '{}'.",
+                    requested_provider, selected_provider
+                );
+            }
+            "opt_in_only" => {
+                return format!(
+                    "Requested provider '{}' requires explicit opt-in and is excluded from auto mode, so SignalPR selected '{}'.",
+                    requested_provider, selected_provider
+                );
+            }
+            "unsupported" => {
+                return format!(
+                    "Requested provider '{}' is not supported for review runs, so SignalPR selected '{}'.",
+                    requested_provider, selected_provider
+                );
+            }
+            "unhealthy" => {
+                if let Some(message) = check.message.as_deref() {
+                    return format!(
+                        "Requested provider '{}' could not run ({message}), so SignalPR selected '{}'.",
+                        requested_provider, selected_provider
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    format!(
+        "Requested provider '{}' was unavailable, so SignalPR selected '{}'.",
+        requested_provider, selected_provider
+    )
 }
 
 #[cfg(test)]
@@ -752,6 +873,36 @@ mod tests {
     }
 
     #[test]
+    fn build_selection_trace_uses_specific_gate_warning() {
+        let trace = build_selection_trace(
+            "codex",
+            "claude",
+            vec![
+                ProviderSelectionCheck {
+                    provider_id: "codex".into(),
+                    available: false,
+                    reason: "gate_blocked".into(),
+                    message: None,
+                },
+                ProviderSelectionCheck {
+                    provider_id: "claude".into(),
+                    available: true,
+                    reason: "selected".into(),
+                    message: None,
+                },
+            ],
+        );
+
+        assert_eq!(
+            trace.warnings,
+            vec![
+                "Requested provider 'codex' is healthy but still blocked by readiness checks, so SignalPR selected 'claude'."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn build_selection_trace_for_auto_does_not_emit_fallback_warning() {
         let trace = build_selection_trace(
             "auto",
@@ -766,6 +917,70 @@ mod tests {
 
         assert!(matches!(trace.selection_mode, ProviderSelectionMode::Auto));
         assert!(trace.warnings.is_empty());
+    }
+
+    #[test]
+    fn build_status_marks_release_gated_provider_as_degraded() {
+        let caps = provider_registry()
+            .into_iter()
+            .find(|caps| caps.provider_id == "codex")
+            .expect("codex capabilities");
+        let health = ProviderHealth {
+            available: true,
+            version: Some("1.0.0".into()),
+            message: None,
+        };
+
+        let (status, reason, setup_state, _, release_gate_status, release_gate_passed, _, warnings) =
+            build_status(&caps, &health, Some(CredentialSource::Environment));
+
+        assert_eq!(status, "degraded");
+        assert_eq!(setup_state, ProviderSetupState::Ready);
+        assert_eq!(release_gate_status, ProviderReleaseGateStatus::BlockedEval);
+        assert!(!release_gate_passed);
+        assert_eq!(
+            reason,
+            "Healthy, but blocked until eval coverage is complete."
+        );
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("Eval coverage is still incomplete.")));
+    }
+
+    #[test]
+    fn recommendation_reason_only_mentions_auto_policy_when_provider_is_auto_runnable() {
+        let caps = provider_registry()
+            .into_iter()
+            .find(|caps| caps.provider_id == "codex")
+            .expect("codex capabilities");
+        let provider = ProviderControlPlaneProvider {
+            provider_id: caps.provider_id.clone(),
+            display_name: caps.display_name.clone(),
+            status: "degraded".into(),
+            status_reason: "blocked".into(),
+            setup_state: ProviderSetupState::Ready,
+            execution_supported: true,
+            release_gate_status: ProviderReleaseGateStatus::BlockedEval,
+            release_gate_passed: false,
+            currently_runnable: true,
+            credential_source: None,
+            capabilities: caps,
+            recent_metrics: ProviderRecentMetrics {
+                sample_count: 0,
+                avg_latency_ms: None,
+                avg_accept_rate: None,
+                avg_edit_rate: None,
+                avg_suppress_rate: None,
+                avg_anchor_validity: None,
+                avg_cost_usd: None,
+            },
+            fit_narrative: String::new(),
+            recommended_default: false,
+            warnings: Vec::new(),
+        };
+
+        let reason = recommendation_reason(&provider, "auto");
+        assert!(!reason.contains("auto-routing policy"));
     }
 
     #[test]

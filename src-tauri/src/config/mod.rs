@@ -12,7 +12,9 @@ use tauri::{AppHandle, Manager};
 use crate::agents::definition::AgentDefinition;
 use crate::agents::registry::AgentRegistry;
 use crate::cleaner::CleanerConfig;
-use crate::providers::capabilities::canonical_provider_id;
+use crate::providers::capabilities::{
+    canonical_provider_id, get_provider_caps, ProviderCapabilities,
+};
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::claude_code::manager::ClaudeCodeManager;
 use crate::providers::claude_code::provider::ClaudeCodeProvider;
@@ -32,6 +34,10 @@ use crate::providers::opencode::manager::OpenCodeManager;
 use crate::providers::opencode::provider::OpenCodeProvider;
 use crate::providers::pi::manager::PiManager;
 use crate::providers::pi::provider::PiProvider;
+use crate::providers::setup::{
+    determine_setup_state, execution_supported, release_gate_passed, selection_eligible_for_auto,
+    selection_eligible_for_manual,
+};
 use crate::providers::traits::ReviewProvider;
 use crate::storage::queries;
 
@@ -252,7 +258,14 @@ pub async fn select_provider_with_trace(app: &AppHandle, preference: &str) -> Se
     let canonical_preference = canonical_provider_id(preference).to_string();
 
     if preference != "auto" {
-        if let Some(selected) = try_select_named_provider(app, preference, &mut checks).await {
+        if let Some(selected) = try_select_named_provider(
+            app,
+            preference,
+            ProviderSelectionIntent::Manual,
+            &mut checks,
+        )
+        .await
+        {
             let selected_provider_id =
                 canonical_provider_id(selected.provider.provider_name()).to_string();
             return SelectedProvider {
@@ -264,7 +277,10 @@ pub async fn select_provider_with_trace(app: &AppHandle, preference: &str) -> Se
 
     let auto_chain = ["codex_app_server", "codex", "claude", "copilot", "opencode"];
     for provider_id in auto_chain {
-        if let Some(selected) = try_select_named_provider(app, provider_id, &mut checks).await {
+        if let Some(selected) =
+            try_select_named_provider(app, provider_id, ProviderSelectionIntent::Auto, &mut checks)
+                .await
+        {
             return SelectedProvider {
                 provider: selected.provider,
                 trace: build_selection_trace(&canonical_preference, provider_id, checks),
@@ -288,183 +304,171 @@ struct SelectedProviderInternal {
     provider: Arc<dyn ReviewProvider>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderSelectionIntent {
+    Auto,
+    Manual,
+}
+
+fn selection_preflight_skip_reason(
+    capabilities: &ProviderCapabilities,
+    intent: ProviderSelectionIntent,
+) -> Option<&'static str> {
+    if capabilities.execution_support_tier == "discoverable_only" {
+        return Some("discoverable_only");
+    }
+
+    if !execution_supported(capabilities) {
+        return Some("unsupported");
+    }
+
+    match intent {
+        ProviderSelectionIntent::Auto => {
+            if !selection_eligible_for_auto(capabilities) {
+                return Some("opt_in_only");
+            }
+        }
+        ProviderSelectionIntent::Manual => {
+            if !selection_eligible_for_manual(capabilities) {
+                return Some("unsupported");
+            }
+        }
+    }
+
+    None
+}
+
+fn selection_skip_reason(
+    capabilities: &ProviderCapabilities,
+    health: &crate::providers::traits::ProviderHealth,
+    intent: ProviderSelectionIntent,
+) -> Option<&'static str> {
+    if let Some(reason) = selection_preflight_skip_reason(capabilities, intent) {
+        return Some(reason);
+    }
+
+    if !health.available {
+        return Some("unhealthy");
+    }
+
+    if matches!(intent, ProviderSelectionIntent::Auto) {
+        let setup_state = determine_setup_state(capabilities, health, None);
+        if !release_gate_passed(capabilities, &setup_state) {
+            return Some("gate_blocked");
+        }
+    }
+
+    None
+}
+
 async fn try_select_named_provider(
     app: &AppHandle,
     provider_id: &str,
+    intent: ProviderSelectionIntent,
     checks: &mut Vec<ProviderSelectionCheck>,
 ) -> Option<SelectedProviderInternal> {
-    match canonical_provider_id(provider_id) {
+    let canonical_provider_id = canonical_provider_id(provider_id);
+    let capabilities = get_provider_caps(canonical_provider_id)?;
+
+    if let Some(skip_reason) = selection_preflight_skip_reason(&capabilities, intent) {
+        checks.push(ProviderSelectionCheck {
+            provider_id: canonical_provider_id.into(),
+            available: false,
+            reason: skip_reason.into(),
+            message: None,
+        });
+        return None;
+    }
+
+    let maybe_select = |health: crate::providers::traits::ProviderHealth,
+                        provider: Arc<dyn ReviewProvider>,
+                        checks: &mut Vec<ProviderSelectionCheck>,
+                        selected_provider_id: &str|
+     -> Option<SelectedProviderInternal> {
+        let skip_reason = selection_skip_reason(&capabilities, &health, intent);
+        checks.push(ProviderSelectionCheck {
+            provider_id: selected_provider_id.into(),
+            available: skip_reason.is_none(),
+            reason: skip_reason.unwrap_or("selected").into(),
+            message: health.message.clone(),
+        });
+        if skip_reason.is_none() {
+            Some(SelectedProviderInternal { provider })
+        } else {
+            None
+        }
+    };
+
+    match canonical_provider_id {
         "codex_app_server" => {
             let manager = app.state::<Arc<CodexAppServerManager>>().inner().clone();
             let provider = CodexAppServerProvider::new(manager);
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "codex_app_server".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) =
+                maybe_select(health, Arc::new(provider), checks, "codex_app_server")
+            {
                 tracing::info!("Using Codex App Server provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         "codex" => {
             let provider = CodexProvider::new(app.clone());
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "codex".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "codex") {
                 tracing::info!("Using Codex exec provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         "claude" => {
             let provider = ClaudeProvider::new();
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "claude".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "claude") {
+                return Some(selected);
             }
         }
         "copilot" => {
             let manager = app.state::<Arc<CopilotManager>>().inner().clone();
             let provider = CopilotProvider::new(manager, None);
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "copilot".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "copilot") {
                 tracing::info!("Using Copilot provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         "opencode" => {
             let manager = app.state::<Arc<OpenCodeManager>>().inner().clone();
             let provider = OpenCodeProvider::new(manager, None);
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "opencode".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "opencode") {
                 tracing::info!("Using OpenCode provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         "gemini" => {
             let manager = app.state::<Arc<GeminiManager>>().inner().clone();
             let provider = GeminiProvider::new(manager, None);
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "gemini".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "gemini") {
                 tracing::info!("Using Gemini provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         "cursor" => {
             let manager = app.state::<Arc<CursorManager>>().inner().clone();
             let provider = CursorProvider::new(manager, None);
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "cursor".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "cursor") {
                 tracing::info!("Using Cursor provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         "pi" => {
             let manager = app.state::<Arc<PiManager>>().inner().clone();
             let provider = PiProvider::new(manager, None);
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "pi".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "pi") {
                 tracing::info!("Using PI provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         "claude_code" => {
@@ -473,22 +477,10 @@ async fn try_select_named_provider(
             let sidecar_path = resolve_sidecar_path("claude-code-bridge");
             let provider = ClaudeCodeProvider::new(manager, sidecar_path, app_data_dir);
             let health = provider.health_check().await;
-            checks.push(ProviderSelectionCheck {
-                provider_id: "claude_code".into(),
-                available: health.available,
-                reason: if health.available {
-                    "selected"
-                } else {
-                    "health_check"
-                }
-                .into(),
-                message: health.message.clone(),
-            });
-            if health.available {
+            if let Some(selected) = maybe_select(health, Arc::new(provider), checks, "claude_code")
+            {
                 tracing::info!("Using Claude Code provider");
-                return Some(SelectedProviderInternal {
-                    provider: Arc::new(provider),
-                });
+                return Some(selected);
             }
         }
         _ => {}
@@ -605,6 +597,7 @@ fn current_target_triple() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::traits::ProviderHealth;
     use crate::storage::db::init_db_in_memory;
     use crate::storage::queries;
 
@@ -781,5 +774,61 @@ mod tests {
         assert_eq!(config.preferred_provider, "auto");
         // The config stores "auto" — select_provider will NOT resolve it to claude_code
         // because claude_code is in a named match arm, not in the auto fallback sequence.
+    }
+
+    #[test]
+    fn test_auto_selection_skips_catalog_only_provider_before_health() {
+        let caps = get_provider_caps("copilot").expect("copilot capabilities");
+
+        assert_eq!(
+            selection_preflight_skip_reason(&caps, ProviderSelectionIntent::Auto),
+            Some("discoverable_only")
+        );
+    }
+
+    #[test]
+    fn test_auto_selection_blocks_release_gated_provider_even_when_healthy() {
+        let caps = get_provider_caps("codex").expect("codex capabilities");
+        let healthy = ProviderHealth {
+            available: true,
+            version: Some("1.0.0".into()),
+            message: None,
+        };
+
+        assert_eq!(
+            selection_skip_reason(&caps, &healthy, ProviderSelectionIntent::Auto),
+            Some("gate_blocked")
+        );
+        assert_eq!(
+            selection_skip_reason(&caps, &healthy, ProviderSelectionIntent::Manual),
+            None
+        );
+    }
+
+    #[test]
+    fn test_auto_selection_skips_manual_only_provider_as_opt_in() {
+        let caps = get_provider_caps("gemini").expect("gemini capabilities");
+        let healthy = ProviderHealth {
+            available: true,
+            version: Some("1.0.0".into()),
+            message: None,
+        };
+
+        assert_eq!(
+            selection_preflight_skip_reason(&caps, ProviderSelectionIntent::Auto),
+            Some("opt_in_only")
+        );
+        assert_eq!(
+            selection_preflight_skip_reason(&caps, ProviderSelectionIntent::Manual),
+            None
+        );
+        assert_eq!(
+            selection_skip_reason(&caps, &healthy, ProviderSelectionIntent::Auto),
+            Some("opt_in_only")
+        );
+        assert_eq!(
+            selection_skip_reason(&caps, &healthy, ProviderSelectionIntent::Manual),
+            None
+        );
     }
 }
