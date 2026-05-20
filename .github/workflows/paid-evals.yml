@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
@@ -70,7 +70,7 @@ jobs:
 
       - name: Upload eval artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-results-${{ github.event.inputs.provider }}-${{ github.run_id }}
           path: evals/runs/
