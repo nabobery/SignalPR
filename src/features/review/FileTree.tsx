@@ -2,10 +2,10 @@ import { FileText, ShieldAlert, AlertTriangle, Zap, Info } from "lucide-react";
 import { useReviewContext } from "../../lib/store";
 
 const severityIcon: Record<string, { icon: typeof FileText; color: string }> = {
-  blocker: { icon: ShieldAlert, color: "text-red-400" },
-  critical: { icon: AlertTriangle, color: "text-orange-400" },
-  warning: { icon: Zap, color: "text-yellow-400" },
-  info: { icon: Info, color: "text-blue-400" },
+  blocker: { icon: ShieldAlert, color: "text-[--color-sev-blocker]" },
+  critical: { icon: AlertTriangle, color: "text-[--color-sev-critical]" },
+  warning: { icon: Zap, color: "text-[--color-sev-warning]" },
+  info: { icon: Info, color: "text-[--color-sev-info]" },
 };
 
 const severityOrder = ["blocker", "critical", "warning", "info", "nitpick"];
@@ -13,7 +13,6 @@ const severityOrder = ["blocker", "critical", "warning", "info", "nitpick"];
 export function FileTree() {
   const { state, setSelectedFile } = useReviewContext();
 
-  // Build file → highest severity map
   const fileSeverity = new Map<string, string>();
   for (const f of state.findings.filter((f) => f.status === "active" && f.file_path)) {
     const current = fileSeverity.get(f.file_path!);
@@ -23,14 +22,16 @@ export function FileTree() {
   }
 
   return (
-    <div className="overflow-y-auto p-3 space-y-0.5">
-      <div className="text-xs text-zinc-400 mb-2 font-medium">
-        Changed Files ({state.changedFiles.length})
+    <div className="overflow-y-auto p-2 space-y-0.5 h-full">
+      <div className="px-2 py-1 text-[11px] font-medium text-[--color-text-tertiary] uppercase tracking-wider">
+        Files ({state.changedFiles.length})
       </div>
       <button
         onClick={() => setSelectedFile(null)}
-        className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-zinc-800 ${
-          state.selectedFile === null ? "bg-zinc-800 text-zinc-100" : "text-zinc-400"
+        className={`w-full text-left px-2 py-1.5 rounded-md text-xs transition-colors ${
+          state.selectedFile === null
+            ? "bg-[--color-elevated] text-[--color-text-primary]"
+            : "text-[--color-text-secondary] hover:bg-[--color-elevated]/60 hover:text-[--color-text-primary]"
         }`}
       >
         All files
@@ -39,19 +40,21 @@ export function FileTree() {
         const sev = fileSeverity.get(file);
         const config = sev ? severityIcon[sev] : null;
         const Icon = config?.icon ?? FileText;
-        const color = config?.color ?? "text-zinc-500";
+        const color = config?.color ?? "text-[--color-text-tertiary]";
         const isSelected = state.selectedFile === file;
 
         return (
           <button
             key={file}
             onClick={() => setSelectedFile(file)}
-            className={`w-full text-left px-2 py-1 rounded text-xs flex items-center gap-2 hover:bg-zinc-800 ${
-              isSelected ? "bg-zinc-800 text-zinc-100" : "text-zinc-400"
+            className={`w-full text-left px-2 py-1.5 rounded-md text-xs flex items-center gap-2 transition-colors ${
+              isSelected
+                ? "bg-[--color-elevated] text-[--color-text-primary]"
+                : "text-[--color-text-secondary] hover:bg-[--color-elevated]/60 hover:text-[--color-text-primary]"
             }`}
           >
             <Icon className={`w-3 h-3 shrink-0 ${color}`} />
-            <span className="truncate">{file}</span>
+            <span className="truncate font-mono">{file}</span>
           </button>
         );
       })}

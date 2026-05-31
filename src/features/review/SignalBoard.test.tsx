@@ -203,7 +203,7 @@ describe("SignalBoard", () => {
       </ReviewContext.Provider>,
     );
 
-    expect(screen.getByRole("button", { name: "Fresh risk" })).toHaveClass("bg-zinc-700");
+    expect(screen.getByRole("button", { name: "Fresh risk" })).toHaveClass("bg-[--color-elevated]");
     expect(screen.getByText("New risk")).toBeInTheDocument();
     expect(screen.getByText("Stale risk")).toBeInTheDocument();
     expect(screen.queryByText("Existing unchanged risk")).not.toBeInTheDocument();

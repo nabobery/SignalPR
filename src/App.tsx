@@ -15,12 +15,12 @@ function ErrorFallback({
 }) {
   const message = error instanceof Error ? error.message : String(error);
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center gap-4">
-      <p className="text-red-400">Something went wrong</p>
-      <p className="text-zinc-400 text-sm">{message}</p>
+    <div className="min-h-screen bg-[--color-base] text-[--color-text-primary] flex flex-col items-center justify-center gap-4">
+      <p className="text-[--color-sev-blocker]">Something went wrong</p>
+      <p className="text-[--color-text-secondary] text-sm">{message}</p>
       <button
         onClick={resetErrorBoundary}
-        className="text-zinc-300 hover:text-zinc-100 text-sm underline"
+        className="text-[--color-text-secondary] hover:text-[--color-text-primary] text-sm underline transition-colors"
       >
         Try again
       </button>

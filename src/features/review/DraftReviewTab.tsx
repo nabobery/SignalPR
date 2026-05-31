@@ -192,7 +192,7 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
   if (loadingDraft) {
     return (
       <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-5 h-5 animate-spin text-zinc-500" />
+        <Loader2 className="w-5 h-5 animate-spin text-[--color-text-tertiary]" />
       </div>
     );
   }
@@ -203,30 +203,34 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
         {/* Summary editor */}
         <section>
           <div className="flex items-center gap-2 mb-2">
-            <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+            <h3 className="text-xs font-medium text-[--color-text-tertiary] uppercase tracking-wider">
               Review summary
             </h3>
-            {lastSaved && <span className="text-xs text-zinc-600">Saved {lastSaved}</span>}
+            {lastSaved && (
+              <span className="text-xs text-[--color-text-tertiary]">Saved {lastSaved}</span>
+            )}
           </div>
           <textarea
             value={summary}
             onChange={(e) => handleSummaryChange(e.target.value)}
             placeholder="Write an optional summary for the top of your review..."
             rows={4}
-            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 resize-y"
+            className="w-full bg-[--color-surface] border border-[--color-border] rounded-lg px-3 py-2 text-sm text-[--color-text-primary] placeholder:text-[--color-text-tertiary] focus:outline-none focus:border-[--color-border-strong] resize-y"
           />
         </section>
 
         {/* Pending comments preview */}
         <section>
-          <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+          <h3 className="text-xs font-medium text-[--color-text-tertiary] uppercase tracking-wider mb-2">
             Pending comments ({includedFindings.length})
           </h3>
           {includedFindings.length === 0 ? (
-            <p className="text-zinc-500 text-sm">No active findings to include in the review.</p>
+            <p className="text-[--color-text-tertiary] text-sm">
+              No active findings to include in the review.
+            </p>
           ) : (
             <div className="space-y-3">
-              <div className="flex items-center gap-3 text-xs text-zinc-400">
+              <div className="flex items-center gap-3 text-xs text-[--color-text-secondary]">
                 <span className="flex items-center gap-1">
                   <MessageSquare className="w-3 h-3" />
                   {anchoredCount} inline comment{anchoredCount !== 1 ? "s" : ""}
@@ -238,8 +242,11 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                 </span>
               </div>
               {Object.entries(findingsByFile).map(([file, findings]) => (
-                <div key={file} className="bg-zinc-900/50 border border-zinc-800/50 rounded-lg p-3">
-                  <code className="text-xs text-zinc-400 block mb-2">{file}</code>
+                <div
+                  key={file}
+                  className="bg-[--color-surface] border border-[--color-border-subtle] rounded-lg p-3"
+                >
+                  <code className="text-xs text-[--color-text-secondary] block mb-2">{file}</code>
                   <div className="space-y-1.5">
                     {findings.map((f) => {
                       const sev = (f.user_severity_override ?? f.severity).toUpperCase();
@@ -249,20 +256,22 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                       return (
                         <div
                           key={f.id}
-                          className="rounded border border-zinc-800/50 bg-zinc-950/30 p-2"
+                          className="rounded border border-[--color-border-subtle] bg-[--color-base] p-2"
                         >
                           <div className="flex items-start gap-2 text-xs">
-                            <span className="text-zinc-500 shrink-0 font-mono">
+                            <span className="text-[--color-text-tertiary] shrink-0 font-mono">
                               {f.is_anchored && f.line_start ? `L${f.line_start}` : "—"}
                             </span>
-                            <span className="text-zinc-400">[{sev}]</span>
-                            <span className="text-zinc-300 truncate">{f.title}</span>
+                            <span className="text-[--color-text-secondary]">[{sev}]</span>
+                            <span className="text-[--color-text-secondary] truncate">
+                              {f.title}
+                            </span>
                           </div>
                           <div className="mt-1 flex gap-1.5 flex-wrap">
                             {trust.provenanceBadges.map((badge) => (
                               <span
                                 key={badge.key}
-                                className="text-[11px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300"
+                                className="text-[11px] px-1.5 py-0.5 rounded bg-[--color-elevated] text-[--color-text-secondary]"
                               >
                                 {badge.label}
                               </span>
@@ -270,7 +279,7 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                             {trust.supportBadges.map((badge) => (
                               <span
                                 key={badge.key}
-                                className="text-[11px] px-1.5 py-0.5 rounded bg-sky-950/40 text-sky-300"
+                                className="text-[11px] px-1.5 py-0.5 rounded bg-[--color-sev-info-bg] text-[--color-sev-info]"
                               >
                                 {badge.label}
                               </span>
@@ -278,7 +287,7 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                             {trust.warningBadges.map((badge) => (
                               <span
                                 key={badge.key}
-                                className="text-[11px] px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-300"
+                                className="text-[11px] px-1.5 py-0.5 rounded bg-[--color-sev-warning-bg] text-yellow-300"
                               >
                                 {badge.label}
                               </span>
@@ -304,46 +313,46 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
           draftBatchCapability?.support !== "full") && (
           <section className="space-y-2">
             {hasPartialLanes && (
-              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 text-xs text-[--color-sev-warning] bg-[--color-sev-warning-bg] px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 Some analysis lanes failed. The review includes only findings from completed lanes.
               </div>
             )}
             {hasStaleAnchors && (
-              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 text-xs text-[--color-sev-warning] bg-[--color-sev-warning-bg] px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 Some findings have stale line anchors and will appear as body text only.
               </div>
             )}
             {hasAiOnlyFindings && (
-              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 text-xs text-[--color-sev-warning] bg-[--color-sev-warning-bg] px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 Some findings rely on AI inference without deterministic support. Review the
                 evidence trail before submitting.
               </div>
             )}
             {!authReady && (
-              <div className="flex items-center gap-2 text-xs text-red-300 bg-red-900/20 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 text-xs text-red-300 bg-[--color-sev-blocker-bg] px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 {authDiagnostic ?? "Platform authentication is not ready for submission."}
               </div>
             )}
             {capabilityMetadataMissing && (
-              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 text-xs text-[--color-sev-warning] bg-[--color-sev-warning-bg] px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 Refresh platform metadata to load the available review actions for this pull
                 request.
               </div>
             )}
             {selectedActionCapability?.support === "partial" && (
-              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 text-xs text-[--color-sev-warning] bg-[--color-sev-warning-bg] px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 {selectedActionCapability.constraints[0]?.message ??
                   "This platform only partially supports the selected review action."}
               </div>
             )}
             {draftBatchCapability && draftBatchCapability.support !== "full" && (
-              <div className="flex items-center gap-2 text-xs text-yellow-400 bg-yellow-900/20 px-3 py-2 rounded-lg">
+              <div className="flex items-center gap-2 text-xs text-[--color-sev-warning] bg-[--color-sev-warning-bg] px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 {draftBatchCapability.constraints[0]?.message ??
                   "This platform does not preserve pending review batches the same way SignalPR drafts do."}
@@ -354,7 +363,7 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
 
         {/* Review action selector */}
         <section>
-          <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+          <h3 className="text-xs font-medium text-[--color-text-tertiary] uppercase tracking-wider mb-2">
             Review action
           </h3>
           <div className="space-y-1.5">
@@ -371,8 +380,8 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                     disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
                   } ${
                     action === a.value
-                      ? "border-emerald-500/50 bg-emerald-900/10"
-                      : "border-zinc-800 hover:border-zinc-700"
+                      ? "border-emerald-500/50 bg-[--color-state-ready-bg]"
+                      : "border-[--color-border-subtle] hover:border-[--color-border]"
                   }`}
                 >
                   <input
@@ -385,8 +394,8 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
                     className="mt-0.5"
                   />
                   <div>
-                    <div className="text-sm font-medium text-zinc-100">{a.label}</div>
-                    <div className="text-xs text-zinc-400">{a.description}</div>
+                    <div className="text-sm font-medium text-[--color-text-primary]">{a.label}</div>
+                    <div className="text-xs text-[--color-text-secondary]">{a.description}</div>
                     {capability?.support === "partial" && capability.constraints[0] && (
                       <div className="mt-1 text-[11px] text-yellow-300">
                         {capability.constraints[0].message}
@@ -406,23 +415,25 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
       </div>
 
       {/* Footer submit bar */}
-      <div className="border-t border-zinc-800 px-4 py-3 shrink-0">
-        {error && <p className="text-red-400 text-sm mb-2">{error}</p>}
+      <div className="border-t border-[--color-border-subtle] px-4 py-3 shrink-0">
+        {error && <p className="text-[--color-sev-blocker] text-sm mb-2">{error}</p>}
 
         <div className="flex items-center gap-2">
-          {isSubmitted && <span className="text-xs text-zinc-500">Already submitted.</span>}
+          {isSubmitted && (
+            <span className="text-xs text-[--color-text-tertiary]">Already submitted.</span>
+          )}
           {!isSubmitted && !authReady && (
-            <span className="text-xs text-red-400">
+            <span className="text-xs text-[--color-sev-blocker]">
               {authDiagnostic ?? "Platform authentication is not ready for submission."}
             </span>
           )}
           {!isSubmitted && authReady && capabilityMetadataMissing && (
-            <span className="text-xs text-yellow-400">
+            <span className="text-xs text-[--color-sev-warning]">
               Refresh platform metadata to load the available review actions.
             </span>
           )}
           {!isSubmitted && selectedActionCapability?.support === "none" && (
-            <span className="text-xs text-red-400">
+            <span className="text-xs text-[--color-sev-blocker]">
               {selectedActionCapability.constraints[0]?.message ??
                 "This action is not available on the active platform."}
             </span>
@@ -432,7 +443,7 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
             <button
               onClick={() => handleSubmit(true)}
               disabled={submitting}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm border border-zinc-700 rounded-lg text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-2 text-sm border border-[--color-border] rounded-lg text-[--color-text-secondary] hover:bg-[--color-elevated] disabled:opacity-50"
             >
               {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
               Force resubmit
@@ -442,7 +453,7 @@ export function DraftReviewTab({ runId, onSubmitted }: { runId: string; onSubmit
             <button
               onClick={() => handleSubmit()}
               disabled={submitting || !canSubmit}
-              className="flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-500 disabled:opacity-50"
+              className="flex items-center gap-1.5 bg-[--color-accent] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[--color-accent-hover] disabled:opacity-50"
             >
               {submitting ? (
                 <Loader2 className="w-3 h-3 animate-spin" />

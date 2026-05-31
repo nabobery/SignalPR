@@ -76,16 +76,16 @@ export function IntakeView() {
   const onEnvReady = useCallback((ready: boolean) => setEnvReady(ready), []);
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-8 relative">
+    <main className="min-h-screen bg-[--color-base] text-[--color-text-primary] flex flex-col items-center justify-center p-8 relative">
       <button
         onClick={() => navigate("/settings")}
-        className="absolute top-4 right-4 text-zinc-500 hover:text-zinc-200 transition-colors"
+        className="absolute top-4 right-4 text-[--color-text-tertiary] hover:text-[--color-text-primary] transition-colors"
         title="Settings"
       >
         <Settings className="w-5 h-5" />
       </button>
       <h1 className="text-3xl font-bold mb-2">SignalPR</h1>
-      <p className="text-zinc-400 mb-6 text-center max-w-md">
+      <p className="text-[--color-text-secondary] mb-6 text-center max-w-md">
         Paste a GitHub PR URL to start a reviewer-first, AI-assisted code review.
       </p>
 
@@ -100,28 +100,28 @@ export function IntakeView() {
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && envReady && url.trim() && handleFetch()}
           placeholder="https://github.com/owner/repo/pull/123"
-          className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-zinc-500 placeholder-zinc-600"
+          className="flex-1 bg-[--color-surface] border border-[--color-border] rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-[--color-border-strong] placeholder:text-[--color-text-tertiary]"
         />
         <button
           onClick={handleFetch}
           disabled={!envReady || !url.trim() || loading}
-          className="bg-zinc-100 text-zinc-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+          className="bg-[--color-accent] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[--color-elevated] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
         >
           {loading && <Loader2 className="w-3 h-3 animate-spin" />}
           Fetch
         </button>
       </div>
 
-      {error && <p className="text-red-400 text-sm mt-3 max-w-lg">{error}</p>}
+      {error && <p className="text-[--color-sev-blocker] text-sm mt-3 max-w-lg">{error}</p>}
 
       {prResult && (
-        <div className="w-full max-w-lg mt-6 bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+        <div className="w-full max-w-lg mt-6 bg-[--color-surface] border border-[--color-border-subtle] rounded-lg p-4 space-y-3">
           <div>
-            <span className="text-zinc-400 text-xs">
+            <span className="text-[--color-text-secondary] text-xs">
               {prResult.owner}/{prResult.repo} #{prResult.pr_number}
             </span>
             <h2 className="text-lg font-semibold">{prResult.title}</h2>
-            <div className="text-zinc-400 text-sm flex gap-3 mt-1">
+            <div className="text-[--color-text-secondary] text-sm flex gap-3 mt-1">
               {prResult.author && <span>by {prResult.author}</span>}
               <span>{prResult.changed_file_count} files changed</span>
               {prResult.base_branch && (
@@ -133,20 +133,22 @@ export function IntakeView() {
           </div>
 
           <div>
-            <label className="text-zinc-400 text-xs block mb-1">Local repository path</label>
+            <label className="text-[--color-text-secondary] text-xs block mb-1">
+              Local repository path
+            </label>
             <input
               type="text"
               value={localPath}
               onChange={(e) => setLocalPath(e.target.value)}
               placeholder="/path/to/local/repo"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 placeholder-zinc-600"
+              className="w-full bg-[--color-elevated] border border-[--color-border] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[--color-border-strong] placeholder:text-[--color-text-tertiary]"
             />
           </div>
 
           <button
             onClick={handleConfirmAndStart}
             disabled={!localPath.trim() || confirming || starting}
-            className="w-full bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            className="w-full bg-[--color-accent] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[--color-accent-hover] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {(confirming || starting) && <Loader2 className="w-3 h-3 animate-spin" />}
             {confirming
@@ -159,13 +161,13 @@ export function IntakeView() {
       )}
 
       {!envReady && (
-        <p className="text-zinc-600 text-xs mt-4">
+        <p className="text-[--color-text-tertiary] text-xs mt-4">
           gh CLI must be authenticated before you can start a review.
         </p>
       )}
 
       {channelToast && (
-        <div className="fixed bottom-6 right-6 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-100 shadow-lg animate-in fade-in slide-in-from-bottom-2">
+        <div className="fixed bottom-6 right-6 bg-[--color-elevated] border border-[--color-border] rounded-lg px-4 py-3 text-sm text-[--color-text-primary] shadow-lg animate-in fade-in slide-in-from-bottom-2">
           {channelToast}
         </div>
       )}

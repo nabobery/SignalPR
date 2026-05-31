@@ -75,8 +75,8 @@ export function StreamingActivity({ laneId }: Props) {
 
   return (
     <div className="flex items-start gap-1.5 mt-1">
-      <Activity className="w-3 h-3 text-zinc-500 mt-0.5 shrink-0" />
-      <p className="text-xs text-zinc-500 font-mono truncate">{lastLine}</p>
+      <Activity className="w-3 h-3 text-[--color-text-tertiary] mt-0.5 shrink-0" />
+      <p className="text-xs text-[--color-text-tertiary] font-mono truncate">{lastLine}</p>
     </div>
   );
 }

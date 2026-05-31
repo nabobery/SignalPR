@@ -1,11 +1,11 @@
 import type { AnnotationPayload } from "./mapFindingsToLineAnnotations";
 
 const SEVERITY_COLORS: Record<string, string> = {
-  blocker: "bg-red-500 text-white",
-  critical: "bg-orange-500 text-white",
-  warning: "bg-yellow-500 text-black",
-  info: "bg-blue-500 text-white",
-  nitpick: "bg-zinc-500 text-white",
+  blocker: "bg-[--color-sev-blocker] text-white",
+  critical: "bg-[--color-sev-critical] text-white",
+  warning: "bg-[--color-sev-warning] text-black",
+  info: "bg-[--color-sev-info] text-white",
+  nitpick: "bg-[--color-sev-nitpick] text-white",
 };
 
 interface FindingAnnotationProps {

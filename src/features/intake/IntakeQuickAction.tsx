@@ -47,6 +47,9 @@ export function IntakeQuickAction() {
     }
   };
 
+  const inputCls =
+    "w-full rounded-md border border-[--color-border] bg-[--color-elevated] px-3 py-2 text-sm text-[--color-text-primary] placeholder:text-[--color-text-tertiary] focus:border-[--color-border-strong] focus:outline-none";
+
   return (
     <div className="space-y-3">
       <div className="flex gap-2">
@@ -56,46 +59,50 @@ export function IntakeQuickAction() {
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && url.trim() && handleFetch()}
           placeholder="https://github.com/owner/repo/pull/123"
-          className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 placeholder-zinc-600"
+          className={inputCls}
         />
         <button
           onClick={handleFetch}
           disabled={!url.trim() || loading}
-          className="bg-zinc-100 text-zinc-900 px-4 py-2 rounded-lg text-sm font-medium hover:bg-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+          className="inline-flex items-center gap-2 rounded-md bg-[--color-accent] px-4 py-2 text-sm font-medium text-white hover:bg-[--color-accent-hover] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {loading && <Loader2 className="w-3 h-3 animate-spin" />}
           Fetch
         </button>
       </div>
 
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {error && <p className="text-xs text-[--color-sev-blocker]">{error}</p>}
 
       {prResult && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 space-y-3">
+        <div className="rounded-lg border border-[--color-border] bg-[--color-surface] p-3 space-y-3">
           <div>
-            <span className="text-zinc-400 text-xs">
+            <span className="text-[11px] font-mono text-[--color-text-tertiary]">
               {prResult.owner}/{prResult.repo} #{prResult.pr_number}
             </span>
-            <h3 className="text-sm font-semibold">{prResult.title}</h3>
-            <div className="text-zinc-400 text-xs flex gap-3 mt-1">
+            <h3 className="text-sm font-semibold text-[--color-text-primary] mt-0.5">
+              {prResult.title}
+            </h3>
+            <div className="text-xs text-[--color-text-tertiary] flex gap-3 mt-1">
               {prResult.author && <span>by {prResult.author}</span>}
               <span>{prResult.changed_file_count} files changed</span>
             </div>
           </div>
           <div>
-            <label className="text-zinc-400 text-xs block mb-1">Local repository path</label>
+            <label className="text-xs text-[--color-text-tertiary] block mb-1">
+              Local repository path
+            </label>
             <input
               type="text"
               value={localPath}
               onChange={(e) => setLocalPath(e.target.value)}
               placeholder="/path/to/local/repo"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-500 placeholder-zinc-600"
+              className={inputCls}
             />
           </div>
           <button
             onClick={handleConfirmAndStart}
             disabled={!localPath.trim() || confirming || starting}
-            className="w-full bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-[--color-accent] px-3 py-2 text-sm font-medium text-white hover:bg-[--color-accent-hover] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {(confirming || starting) && <Loader2 className="w-3 h-3 animate-spin" />}
             {confirming ? "Validating..." : starting ? "Starting..." : "Start Review"}

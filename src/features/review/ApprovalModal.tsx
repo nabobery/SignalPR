@@ -177,36 +177,42 @@ export function ApprovalModal() {
   const observationalModeLabel = current.source === "cursor" ? "ask" : "plan";
   const observationalProvider = providerLabel[current.source];
 
+  const btnPrimary =
+    "flex items-center gap-1 bg-[--color-accent] text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-[--color-accent-hover] flex-1 justify-center transition-colors";
+  const btnSecondary =
+    "flex items-center gap-1 bg-[--color-elevated] text-[--color-text-secondary] px-3 py-1.5 rounded-md text-xs font-medium hover:text-[--color-text-primary] flex-1 justify-center transition-colors";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md mx-4">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="bg-[--color-surface] border border-[--color-border] rounded-xl shadow-2xl w-full max-w-md mx-4">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-[--color-border-subtle]">
           <ShieldAlert
-            className={`w-4 h-4 ${isObservational ? "text-zinc-500" : "text-yellow-400"}`}
+            className={`w-4 h-4 ${isObservational ? "text-[--color-text-tertiary]" : "text-[--color-sev-warning]"}`}
           />
-          <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
+          <h3 className="text-sm font-semibold text-[--color-text-primary]">{title}</h3>
           {queue.length > 1 && (
-            <span className="ml-auto text-xs text-zinc-500">{queue.length} pending</span>
+            <span className="ml-auto text-xs text-[--color-text-tertiary]">
+              {queue.length} pending
+            </span>
           )}
         </div>
 
         <div className="px-4 py-3 space-y-2">
-          <p className="text-xs text-zinc-400">{description}</p>
+          <p className="text-xs text-[--color-text-secondary]">{description}</p>
 
           {command && (
-            <div className="bg-zinc-950 rounded-lg p-2 font-mono text-xs text-zinc-300 break-all">
+            <div className="bg-[--color-base] rounded-md p-2 font-mono text-xs text-[--color-text-secondary] break-all border border-[--color-border-subtle]">
               {command}
             </div>
           )}
 
-          {cwd && <p className="text-xs text-zinc-500 truncate">in {cwd}</p>}
-
-          <p className="text-xs text-zinc-500">{identifier}</p>
+          {cwd && <p className="text-xs text-[--color-text-tertiary] truncate">in {cwd}</p>}
+          <p className="text-xs text-[--color-text-tertiary]">{identifier}</p>
         </div>
 
         {isObservational && (
           <div className="px-4 pb-3">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[--color-text-tertiary]">
               A future release will let you review and allow individual requests. For now,{" "}
               {observationalProvider} review lanes run under {observationalModeLabel} mode with
               deny-by-default tool permissions.
@@ -214,58 +220,35 @@ export function ApprovalModal() {
           </div>
         )}
 
-        <div className="flex gap-2 px-4 py-3 border-t border-zinc-800">
+        <div className="flex gap-2 px-4 py-3 border-t border-[--color-border-subtle]">
           {isObservational ? (
-            <button
-              onClick={() => setQueue((prev) => prev.slice(1))}
-              className="flex items-center gap-1 bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-zinc-600 flex-1 justify-center"
-            >
+            <button onClick={() => setQueue((prev) => prev.slice(1))} className={btnSecondary}>
               <Check className="w-3 h-3" />
               Acknowledge
             </button>
           ) : isOpenCode ? (
             <>
-              <button
-                onClick={() => handleDecision("once")}
-                className="flex items-center gap-1 bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-emerald-500 flex-1 justify-center"
-              >
-                <Check className="w-3 h-3" />
-                Allow Once
+              <button onClick={() => handleDecision("once")} className={btnPrimary}>
+                <Check className="w-3 h-3" /> Allow Once
               </button>
-              <button
-                onClick={() => handleDecision("always")}
-                className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-blue-500 flex-1 justify-center"
-              >
-                <CheckCheck className="w-3 h-3" />
-                Always
+              <button onClick={() => handleDecision("always")} className={btnSecondary}>
+                <CheckCheck className="w-3 h-3" /> Always
               </button>
-              <button
-                onClick={() => handleDecision("reject")}
-                className="flex items-center gap-1 bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-zinc-600 flex-1 justify-center"
-              >
-                <X className="w-3 h-3" />
-                Reject
+              <button onClick={() => handleDecision("reject")} className={btnSecondary}>
+                <X className="w-3 h-3" /> Reject
               </button>
             </>
           ) : (
             <>
-              <button
-                onClick={() => handleDecision("accept")}
-                className="flex items-center gap-1 bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-emerald-500 flex-1 justify-center"
-              >
-                <Check className="w-3 h-3" />
-                Accept
+              <button onClick={() => handleDecision("accept")} className={btnPrimary}>
+                <Check className="w-3 h-3" /> Accept
               </button>
-              <button
-                onClick={() => handleDecision("decline")}
-                className="flex items-center gap-1 bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-zinc-600 flex-1 justify-center"
-              >
-                <X className="w-3 h-3" />
-                Decline
+              <button onClick={() => handleDecision("decline")} className={btnSecondary}>
+                <X className="w-3 h-3" /> Decline
               </button>
               <button
                 onClick={() => handleDecision("cancel")}
-                className="text-xs text-zinc-500 hover:text-zinc-300 px-2"
+                className="text-xs text-[--color-text-tertiary] hover:text-[--color-text-secondary] px-2 transition-colors"
               >
                 Cancel turn
               </button>

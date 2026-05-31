@@ -142,32 +142,36 @@ export function GeneralPanel() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
-        <span className="ml-2 text-zinc-400">Loading settings...</span>
+        <Loader2 className="w-5 h-5 animate-spin text-[--color-text-secondary]" />
+        <span className="ml-2 text-[--color-text-secondary]">Loading settings...</span>
       </div>
     );
   }
 
   return (
     <div className="space-y-6 max-w-xl">
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {error && <p className="text-[--color-sev-blocker] text-sm">{error}</p>}
 
       <div>
-        <label className="text-zinc-400 text-xs block mb-1">Max Surface Findings</label>
+        <label className="text-[--color-text-secondary] text-xs block mb-1">
+          Max Surface Findings
+        </label>
         <input
           type="number"
           min={1}
           value={form.max_surface_findings}
           onChange={(e) => handleChange("max_surface_findings", e.target.value)}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          className="w-full bg-[--color-elevated] border border-[--color-border] rounded-lg px-3 py-2 text-[--color-text-primary] focus:outline-none focus:ring-2 focus:ring-emerald-500"
         />
-        <p className="text-zinc-500 text-xs mt-1">
+        <p className="text-[--color-text-tertiary] text-xs mt-1">
           Maximum number of findings shown to the reviewer.
         </p>
       </div>
 
       <div>
-        <label className="text-zinc-400 text-xs block mb-1">Similarity Threshold (0-1)</label>
+        <label className="text-[--color-text-secondary] text-xs block mb-1">
+          Similarity Threshold (0-1)
+        </label>
         <input
           type="number"
           min={0}
@@ -175,15 +179,17 @@ export function GeneralPanel() {
           step={0.05}
           value={form.similarity_threshold}
           onChange={(e) => handleChange("similarity_threshold", e.target.value)}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          className="w-full bg-[--color-elevated] border border-[--color-border] rounded-lg px-3 py-2 text-[--color-text-primary] focus:outline-none focus:ring-2 focus:ring-emerald-500"
         />
-        <p className="text-zinc-500 text-xs mt-1">
+        <p className="text-[--color-text-tertiary] text-xs mt-1">
           Threshold for clustering similar findings together.
         </p>
       </div>
 
       <div>
-        <label className="text-zinc-400 text-xs block mb-1">Preferred Provider</label>
+        <label className="text-[--color-text-secondary] text-xs block mb-1">
+          Preferred Provider
+        </label>
         {providerControl && (
           <ProviderControlSection
             control={providerControl}
@@ -193,7 +199,7 @@ export function GeneralPanel() {
         <select
           value={form.preferred_provider}
           onChange={(e) => handleChange("preferred_provider", e.target.value)}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          className="w-full bg-[--color-elevated] border border-[--color-border] rounded-lg px-3 py-2 text-[--color-text-primary] focus:outline-none focus:ring-2 focus:ring-emerald-500"
         >
           <option value="auto">Auto</option>
           <option value="codex">Codex</option>
@@ -205,7 +211,9 @@ export function GeneralPanel() {
           <option value="pi">PI</option>
           <option value="claude_code">Claude Code (opt-in, read-only)</option>
         </select>
-        <p className="text-zinc-500 text-xs mt-1">Which AI provider to use for analysis lanes.</p>
+        <p className="text-[--color-text-tertiary] text-xs mt-1">
+          Which AI provider to use for analysis lanes.
+        </p>
         {selectedProviderCatalogEntry && (
           <SelectedProviderSetupDetails provider={selectedProviderCatalogEntry} />
         )}
@@ -217,15 +225,17 @@ export function GeneralPanel() {
           id="drop_nitpicks"
           checked={form.drop_nitpicks === "true"}
           onChange={(e) => handleChange("drop_nitpicks", e.target.checked ? "true" : "false")}
-          className="w-4 h-4 rounded bg-zinc-800 border-zinc-700 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0 accent-emerald-500"
+          className="w-4 h-4 rounded bg-[--color-elevated] border-[--color-border] text-[--color-accent] focus:ring-emerald-500 focus:ring-offset-0 accent-emerald-500"
         />
-        <label htmlFor="drop_nitpicks" className="text-zinc-300 text-sm">
+        <label htmlFor="drop_nitpicks" className="text-[--color-text-secondary] text-sm">
           Drop nitpick-level findings automatically
         </label>
       </div>
 
       <div>
-        <label className="text-zinc-400 text-xs block mb-1">Min Confidence (0-1)</label>
+        <label className="text-[--color-text-secondary] text-xs block mb-1">
+          Min Confidence (0-1)
+        </label>
         <input
           type="number"
           min={0}
@@ -233,21 +243,25 @@ export function GeneralPanel() {
           step={0.05}
           value={form.min_confidence}
           onChange={(e) => handleChange("min_confidence", e.target.value)}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          className="w-full bg-[--color-elevated] border border-[--color-border] rounded-lg px-3 py-2 text-[--color-text-primary] focus:outline-none focus:ring-2 focus:ring-emerald-500"
         />
-        <p className="text-zinc-500 text-xs mt-1">Minimum confidence score to surface a finding.</p>
+        <p className="text-[--color-text-tertiary] text-xs mt-1">
+          Minimum confidence score to surface a finding.
+        </p>
       </div>
 
       <div>
-        <label className="text-zinc-400 text-xs block mb-1">Lane Timeout (seconds)</label>
+        <label className="text-[--color-text-secondary] text-xs block mb-1">
+          Lane Timeout (seconds)
+        </label>
         <input
           type="number"
           min={10}
           value={form.lane_timeout_secs}
           onChange={(e) => handleChange("lane_timeout_secs", e.target.value)}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          className="w-full bg-[--color-elevated] border border-[--color-border] rounded-lg px-3 py-2 text-[--color-text-primary] focus:outline-none focus:ring-2 focus:ring-emerald-500"
         />
-        <p className="text-zinc-500 text-xs mt-1">
+        <p className="text-[--color-text-tertiary] text-xs mt-1">
           How long each analysis lane runs before timing out.
         </p>
       </div>
@@ -256,12 +270,12 @@ export function GeneralPanel() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 disabled:opacity-50 flex items-center gap-2"
+          className="px-4 py-2 bg-[--color-accent] text-white rounded-lg hover:bg-[--color-accent-hover] disabled:opacity-50 flex items-center gap-2"
         >
           {saving && <Loader2 className="w-3 h-3 animate-spin" />}
           Save Settings
         </button>
-        {saved && <span className="text-emerald-400 text-sm">Saved!</span>}
+        {saved && <span className="text-[--color-accent] text-sm">Saved!</span>}
       </div>
 
       <ProviderCredentialsSection onCredentialsChanged={refreshProviderSignals} />
@@ -278,18 +292,20 @@ function ProviderControlSection({
   selectedProvider: string;
 }) {
   return (
-    <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-3">
+    <div className="mb-3 rounded-lg border border-[--color-border-subtle] bg-[--color-surface] p-3 space-y-3">
       {control.recommended_provider_id && (
-        <div className="rounded-md border border-emerald-900/40 bg-emerald-950/10 px-3 py-2">
+        <div className="rounded-md border border-emerald-900/40 bg-[--color-state-ready-bg] px-3 py-2">
           <div className="text-xs text-emerald-300">Recommended default</div>
-          <p className="mt-1 text-sm text-zinc-100">{control.recommendation_reason}</p>
+          <p className="mt-1 text-sm text-[--color-text-primary]">
+            {control.recommendation_reason}
+          </p>
         </div>
       )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-zinc-800 text-zinc-500">
+            <tr className="border-b border-[--color-border-subtle] text-[--color-text-tertiary]">
               <th className="text-left py-1.5 pr-3 font-medium">Provider</th>
               <th className="text-left py-1.5 px-2 font-medium">Status</th>
               <th className="text-left py-1.5 px-2 font-medium">Auth</th>
@@ -301,44 +317,51 @@ function ProviderControlSection({
           </thead>
           <tbody>
             {control.providers.map((provider) => (
-              <tr key={provider.provider_id} className="border-b border-zinc-800/40 align-top">
+              <tr
+                key={provider.provider_id}
+                className="border-b border-[--color-border-subtle] align-top"
+              >
                 <td className="py-2 pr-3">
-                  <div className="text-zinc-200">{provider.display_name}</div>
+                  <div className="text-[--color-text-primary]">{provider.display_name}</div>
                   <div className="mt-1 flex gap-1.5 flex-wrap">
                     {provider.provider_id === selectedProvider && (
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                      <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
                         selected
                       </span>
                     )}
                     {provider.recommended_default && (
-                      <span className="rounded bg-emerald-900/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                      <span className="rounded bg-[--color-state-ready-bg] px-1.5 py-0.5 text-[10px] text-emerald-300">
                         recommended
                       </span>
                     )}
                     {provider.capabilities.selection_eligibility === "manual_only" && (
-                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
+                      <span className="rounded bg-[--color-sev-warning-bg] px-1.5 py-0.5 text-[10px] text-[--color-sev-warning]">
                         opt-in
                       </span>
                     )}
                     {provider.capabilities.selection_eligibility === "catalog_only" && (
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                      <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
                         catalog-only
                       </span>
                     )}
                   </div>
                 </td>
                 <td className="py-2 px-2">
-                  <div className="text-zinc-300">{provider.status}</div>
-                  <div className="mt-1 text-[11px] text-zinc-500">{provider.status_reason}</div>
+                  <div className="text-[--color-text-secondary]">{provider.status}</div>
+                  <div className="mt-1 text-[11px] text-[--color-text-tertiary]">
+                    {provider.status_reason}
+                  </div>
                 </td>
-                <td className="py-2 px-2 text-zinc-400">{provider.credential_source ?? "none"}</td>
-                <td className="py-2 px-2 text-zinc-400">
+                <td className="py-2 px-2 text-[--color-text-secondary]">
+                  {provider.credential_source ?? "none"}
+                </td>
+                <td className="py-2 px-2 text-[--color-text-secondary]">
                   {percentMaybe(provider.recent_metrics.avg_accept_rate)}
                 </td>
-                <td className="py-2 px-2 text-zinc-400">
+                <td className="py-2 px-2 text-[--color-text-secondary]">
                   {secondsMaybe(provider.recent_metrics.avg_latency_ms)}
                 </td>
-                <td className="py-2 px-2 text-zinc-400">
+                <td className="py-2 px-2 text-[--color-text-secondary]">
                   {costMaybe(provider.recent_metrics.avg_cost_usd)}
                 </td>
                 <td className="py-2 pl-2">
@@ -346,14 +369,14 @@ function ProviderControlSection({
                     {provider.capabilities.fit_tags.map((tag) => (
                       <span
                         key={tag}
-                        className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300"
+                        className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]"
                       >
                         {tag.split("_").join(" ")}
                       </span>
                     ))}
                   </div>
                   {provider.warnings.slice(0, 1).map((warning) => (
-                    <div key={warning} className="mt-1 text-[11px] text-amber-300">
+                    <div key={warning} className="mt-1 text-[11px] text-[--color-sev-warning]">
                       {warning}
                     </div>
                   ))}
@@ -387,61 +410,61 @@ function SelectedProviderSetupDetails({ provider }: { provider: ProviderSetupCat
   const registry = provider.registry;
 
   return (
-    <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 text-xs space-y-2">
+    <div className="mt-2 rounded-lg border border-[--color-border-subtle] bg-[--color-surface] p-3 text-xs space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+        <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
           {humanizeToken(provider.provider_family)}
         </span>
-        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+        <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
           {humanizeToken(provider.setup_state)}
         </span>
-        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+        <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
           {humanizeToken(provider.capabilities.permission_model)}
         </span>
         {provider.currently_runnable && (
-          <span className="rounded bg-emerald-900/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
+          <span className="rounded bg-[--color-state-ready-bg] px-1.5 py-0.5 text-[10px] text-emerald-300">
             runnable
           </span>
         )}
         {provider.execution_supported && !provider.currently_runnable && (
-          <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
+          <span className="rounded bg-[--color-sev-warning-bg] px-1.5 py-0.5 text-[10px] text-[--color-sev-warning]">
             setup needed
           </span>
         )}
         {provider.execution_supported && !provider.release_gate_passed && (
-          <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+          <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
             validation pending
           </span>
         )}
       </div>
-      <p className="text-zinc-300">{provider.readiness_reason}</p>
+      <p className="text-[--color-text-secondary]">{provider.readiness_reason}</p>
       {provider.warnings.length > 0 && (
         <div className="space-y-1">
           {provider.warnings.map((warning) => (
-            <p key={warning} className="text-amber-300">
+            <p key={warning} className="text-[--color-sev-warning]">
               {warning}
             </p>
           ))}
         </div>
       )}
       {registry?.install_command && (
-        <p className="text-zinc-400">
-          Install: <code className="text-zinc-200">{registry.install_command}</code>
+        <p className="text-[--color-text-secondary]">
+          Install: <code className="text-[--color-text-primary]">{registry.install_command}</code>
         </p>
       )}
       {provider.capabilities.supported_session_modes.length > 0 && (
-        <p className="text-zinc-400">
+        <p className="text-[--color-text-secondary]">
           Modes: {provider.capabilities.supported_session_modes.join(", ")}
         </p>
       )}
       {registry?.config_options.length ? (
         <div className="space-y-1">
-          <div className="text-zinc-500">ACP config options</div>
+          <div className="text-[--color-text-tertiary]">ACP config options</div>
           <div className="flex flex-wrap gap-1.5">
             {registry.config_options.map((option) => (
               <span
                 key={option.id}
-                className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300"
+                className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]"
               >
                 {option.name}
               </span>
@@ -450,19 +473,19 @@ function SelectedProviderSetupDetails({ provider }: { provider: ProviderSetupCat
         </div>
       ) : null}
       {registry?.setup_notes.length ? (
-        <div className="space-y-1 text-zinc-400">
+        <div className="space-y-1 text-[--color-text-secondary]">
           {registry.setup_notes.map((note) => (
             <p key={note}>{note}</p>
           ))}
         </div>
       ) : null}
-      <div className="flex flex-wrap gap-3 text-zinc-400">
+      <div className="flex flex-wrap gap-3 text-[--color-text-secondary]">
         {registry?.docs_url && (
           <a
             href={registry.docs_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 hover:text-zinc-200"
+            className="inline-flex items-center gap-1 hover:text-[--color-text-primary]"
           >
             Docs <ExternalLink className="w-3 h-3" />
           </a>
@@ -472,7 +495,7 @@ function SelectedProviderSetupDetails({ provider }: { provider: ProviderSetupCat
             href={registry.auth_docs_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 hover:text-zinc-200"
+            className="inline-flex items-center gap-1 hover:text-[--color-text-primary]"
           >
             Auth <ExternalLink className="w-3 h-3" />
           </a>
@@ -507,11 +530,11 @@ function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnap
   };
 
   return (
-    <div className="border-t border-zinc-800 pt-6 mt-6">
+    <div className="border-t border-[--color-border-subtle] pt-6 mt-6">
       <div className="flex items-center justify-between gap-3 mb-3">
         <div>
-          <h3 className="text-zinc-200 text-sm font-medium">ACP Provider Catalog</h3>
-          <p className="text-zinc-500 text-xs mt-1">
+          <h3 className="text-[--color-text-primary] text-sm font-medium">ACP Provider Catalog</h3>
+          <p className="text-[--color-text-tertiary] text-xs mt-1">
             Registry source: {catalog.registry_source}
             {catalog.registry_fetched_at ? ` • fetched ${catalog.registry_fetched_at}` : ""}
           </p>
@@ -524,28 +547,28 @@ function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnap
           return (
             <div
               key={provider.provider_id}
-              className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-2"
+              className="rounded-lg border border-[--color-border-subtle] bg-[--color-surface] p-3 space-y-2"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-sm text-zinc-100">{provider.display_name}</div>
+                  <div className="text-sm text-[--color-text-primary]">{provider.display_name}</div>
                   <div className="mt-1 flex flex-wrap gap-1.5">
-                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                    <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
                       {humanizeToken(provider.setup_state)}
                     </span>
-                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                    <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
                       {provider.support_tier}
                     </span>
-                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                    <span className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]">
                       {humanizeToken(provider.capabilities.transport_family)}
                     </span>
                     {provider.currently_runnable && (
-                      <span className="rounded bg-emerald-900/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                      <span className="rounded bg-[--color-state-ready-bg] px-1.5 py-0.5 text-[10px] text-emerald-300">
                         runnable
                       </span>
                     )}
                     {provider.execution_supported && !provider.release_gate_passed && (
-                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
+                      <span className="rounded bg-[--color-sev-warning-bg] px-1.5 py-0.5 text-[10px] text-[--color-sev-warning]">
                         validation pending
                       </span>
                     )}
@@ -554,7 +577,7 @@ function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnap
                 <button
                   onClick={() => handleProbe(provider.provider_id)}
                   disabled={verifyDisabled}
-                  className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-500 disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded-md border border-[--color-border] px-2 py-1 text-xs text-[--color-text-secondary] hover:border-[--color-border-strong] disabled:opacity-50"
                 >
                   {busyProviderId === provider.provider_id ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -564,11 +587,13 @@ function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnap
                   Verify
                 </button>
               </div>
-              <p className="text-xs text-zinc-400">{provider.readiness_reason}</p>
+              <p className="text-xs text-[--color-text-secondary]">{provider.readiness_reason}</p>
               {provider.registry?.install_command && (
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-[--color-text-tertiary]">
                   Install:{" "}
-                  <code className="text-zinc-300">{provider.registry.install_command}</code>
+                  <code className="text-[--color-text-secondary]">
+                    {provider.registry.install_command}
+                  </code>
                 </p>
               )}
               {provider.registry?.config_options.length ? (
@@ -576,7 +601,7 @@ function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnap
                   {provider.registry.config_options.map((option) => (
                     <span
                       key={`${provider.provider_id}-${option.id}`}
-                      className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300"
+                      className="rounded bg-[--color-elevated] px-1.5 py-0.5 text-[10px] text-[--color-text-secondary]"
                     >
                       {option.name}
                     </span>
@@ -584,20 +609,20 @@ function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnap
                 </div>
               ) : null}
               {provider.registry?.setup_notes.length ? (
-                <div className="space-y-1 text-xs text-zinc-500">
+                <div className="space-y-1 text-xs text-[--color-text-tertiary]">
                   {provider.registry.setup_notes.map((note) => (
                     <p key={note}>{note}</p>
                   ))}
                 </div>
               ) : null}
               {provider.warnings.length > 0 && (
-                <div className="space-y-1 text-xs text-amber-300">
+                <div className="space-y-1 text-xs text-[--color-sev-warning]">
                   {provider.warnings.map((warning) => (
                     <p key={warning}>{warning}</p>
                   ))}
                 </div>
               )}
-              <div className="flex flex-wrap gap-3 text-xs text-zinc-400">
+              <div className="flex flex-wrap gap-3 text-xs text-[--color-text-secondary]">
                 {provider.actions
                   .filter((action) => action.url)
                   .map((action) => (
@@ -606,7 +631,7 @@ function ProviderCatalogSection({ catalog }: { catalog: ProviderSetupCatalogSnap
                       href={action.url ?? "#"}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 hover:text-zinc-200"
+                      className="inline-flex items-center gap-1 hover:text-[--color-text-primary]"
                     >
                       {action.label} <ExternalLink className="w-3 h-3" />
                     </a>
@@ -710,16 +735,16 @@ function ProviderCredentialsSection({
   if (loading) return null;
 
   return (
-    <div className="border-t border-zinc-800 pt-6 mt-6">
-      <h3 className="text-zinc-200 text-sm font-medium mb-3 flex items-center gap-2">
+    <div className="border-t border-[--color-border-subtle] pt-6 mt-6">
+      <h3 className="text-[--color-text-primary] text-sm font-medium mb-3 flex items-center gap-2">
         <KeyRound className="w-4 h-4" />
         Provider Credentials
       </h3>
-      <p className="text-zinc-500 text-xs mb-4">
+      <p className="text-[--color-text-tertiary] text-xs mb-4">
         Store API keys in your OS keychain. Environment variables take precedence over stored keys.
       </p>
 
-      {credError && <p className="text-red-400 text-xs mb-3">{credError}</p>}
+      {credError && <p className="text-[--color-sev-blocker] text-xs mb-3">{credError}</p>}
 
       <div className="space-y-3">
         {statuses.map((cred) => {
@@ -733,9 +758,9 @@ function ProviderCredentialsSection({
             <div key={cred.field} className="flex items-center gap-2">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-zinc-300 text-xs">{meta.label}</span>
+                  <span className="text-[--color-text-secondary] text-xs">{meta.label}</span>
                   {cred.source !== "none" && (
-                    <span className="inline-flex items-center gap-1 text-emerald-400 text-xs">
+                    <span className="inline-flex items-center gap-1 text-[--color-accent] text-xs">
                       <CheckCircle2 className="w-3 h-3" />
                       {cred.source}
                     </span>
@@ -752,7 +777,7 @@ function ProviderCredentialsSection({
                         [cred.field]: e.target.value,
                       }))
                     }
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-100 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    className="w-full bg-[--color-elevated] border border-[--color-border] rounded px-2 py-1 text-[--color-text-primary] text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   />
                 )}
               </div>
@@ -760,7 +785,7 @@ function ProviderCredentialsSection({
                 <button
                   onClick={() => handleStore(cred.field)}
                   disabled={isBusy || !secretInputs[cred.field]?.trim()}
-                  className="px-2 py-1 text-xs bg-emerald-700 text-white rounded hover:bg-emerald-600 disabled:opacity-50"
+                  className="px-2 py-1 text-xs bg-emerald-700 text-white rounded hover:bg-[--color-accent] disabled:opacity-50"
                 >
                   {isBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
                 </button>
@@ -768,7 +793,7 @@ function ProviderCredentialsSection({
                 <button
                   onClick={() => handleDelete(cred.field)}
                   disabled={isBusy}
-                  className="px-2 py-1 text-xs text-red-400 hover:text-red-300"
+                  className="px-2 py-1 text-xs text-[--color-sev-blocker] hover:text-red-300"
                   title="Remove from keychain"
                 >
                   {isBusy ? (

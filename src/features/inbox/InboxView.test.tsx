@@ -128,9 +128,9 @@ describe("InboxView", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByTestId("intake-quick-action")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText("Ready to review")).toBeInTheDocument();
+      expect(screen.getByTestId("intake-quick-action")).toBeInTheDocument();
+      expect(screen.getByText("Environment ready")).toBeInTheDocument();
     });
     expect(screen.getAllByText("Ready to submit").length).toBeGreaterThan(0);
     expect(screen.getByText("Tighten auth guards")).toBeInTheDocument();
@@ -215,7 +215,6 @@ describe("InboxView", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Updated since review").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText(/Review freshness: stale/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Rerun" })).toBeInTheDocument();
   });
 
@@ -248,10 +247,8 @@ describe("InboxView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Queue or setup needs attention")).toBeInTheDocument();
+      expect(screen.getByText("gh CLI not found")).toBeInTheDocument();
     });
-    expect(screen.getByText("gh CLI not found")).toBeInTheDocument();
-    expect(screen.getByText("2 PRs need attention")).toBeInTheDocument();
   });
 
   it("filters queue rows by search text", async () => {
@@ -288,10 +285,7 @@ describe("InboxView", () => {
       expect(screen.getByText("Add caching layer")).toBeInTheDocument();
     });
 
-    await user.type(
-      screen.getByPlaceholderText("Search PR, author, repo, workspace..."),
-      "caching",
-    );
+    await user.type(screen.getByPlaceholderText("Search PR, author, repo..."), "caching");
 
     expect(screen.queryByText("Tighten auth guards")).not.toBeInTheDocument();
     expect(screen.getByText("Add caching layer")).toBeInTheDocument();
@@ -407,10 +401,10 @@ describe("InboxView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Metadata stale")).toBeInTheDocument();
+      expect(screen.getByText("Platform metadata is stale")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Refresh"));
+    await user.click(screen.getByTitle("Refresh metadata"));
 
     await waitFor(() => {
       expect(mockRefreshPrMetadata).toHaveBeenCalledWith("pr-1");
@@ -432,8 +426,8 @@ describe("InboxView", () => {
       expect(screen.getByText("Tighten auth guards")).toBeInTheDocument();
     });
 
-    await user.type(screen.getByPlaceholderText("Search PR, author, repo, workspace..."), "nope");
+    await user.type(screen.getByPlaceholderText("Search PR, author, repo..."), "nope");
 
-    expect(screen.getByText("No queue items match the current filters.")).toBeInTheDocument();
+    expect(screen.getByText("No items match your filters")).toBeInTheDocument();
   });
 });

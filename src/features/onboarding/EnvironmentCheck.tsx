@@ -4,11 +4,15 @@ import { inspectEnvironment, parseError } from "../../lib/ipc";
 import type { ToolStatus } from "../../lib/types";
 
 const statusConfig = {
-  ready: { icon: CheckCircle, color: "text-green-400", label: "Ready" },
-  degraded: { icon: AlertTriangle, color: "text-yellow-400", label: "Degraded" },
-  incomplete: { icon: AlertTriangle, color: "text-yellow-400", label: "Incomplete" },
-  missing: { icon: XCircle, color: "text-red-400", label: "Missing" },
-  unauthenticated: { icon: AlertTriangle, color: "text-yellow-400", label: "Not authenticated" },
+  ready: { icon: CheckCircle, color: "text-[--color-state-ready]", label: "Ready" },
+  degraded: { icon: AlertTriangle, color: "text-[--color-sev-warning]", label: "Degraded" },
+  incomplete: { icon: AlertTriangle, color: "text-[--color-sev-warning]", label: "Incomplete" },
+  missing: { icon: XCircle, color: "text-[--color-sev-blocker]", label: "Missing" },
+  unauthenticated: {
+    icon: AlertTriangle,
+    color: "text-[--color-sev-warning]",
+    label: "Not authenticated",
+  },
 } as const;
 
 export function EnvironmentCheck({ onReady }: { onReady: (ready: boolean) => void }) {
@@ -35,7 +39,7 @@ export function EnvironmentCheck({ onReady }: { onReady: (ready: boolean) => voi
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-zinc-400 text-sm">
+      <div className="flex items-center gap-2 text-[--color-text-secondary] text-sm">
         <Loader2 className="w-4 h-4 animate-spin" />
         Checking environment...
       </div>
@@ -43,7 +47,9 @@ export function EnvironmentCheck({ onReady }: { onReady: (ready: boolean) => voi
   }
 
   if (error) {
-    return <div className="text-red-400 text-sm">Environment check failed: {error}</div>;
+    return (
+      <div className="text-[--color-sev-blocker] text-sm">Environment check failed: {error}</div>
+    );
   }
 
   return (
@@ -54,11 +60,11 @@ export function EnvironmentCheck({ onReady }: { onReady: (ready: boolean) => voi
         return (
           <div key={tool.tool_name} className="flex items-center gap-3 text-sm">
             <Icon className={`w-4 h-4 ${config.color}`} />
-            <span className="font-medium text-zinc-200 w-16">{tool.tool_name}</span>
+            <span className="font-medium text-[--color-text-primary] w-16">{tool.tool_name}</span>
             <span className={config.color}>{config.label}</span>
-            {tool.version && <span className="text-zinc-500">v{tool.version}</span>}
+            {tool.version && <span className="text-[--color-text-tertiary]">v{tool.version}</span>}
             {tool.message && (
-              <code className="text-zinc-500 text-xs bg-zinc-800 px-2 py-0.5 rounded">
+              <code className="text-[--color-text-tertiary] text-xs bg-[--color-elevated] px-2 py-0.5 rounded">
                 {tool.message}
               </code>
             )}

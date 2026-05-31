@@ -59,7 +59,7 @@ export function AgentPanel() {
 
   if (loading) {
     return (
-      <div className="text-zinc-500 py-12 text-center">
+      <div className="text-[--color-text-tertiary] py-12 text-center">
         <p className="text-sm">Loading agents...</p>
       </div>
     );
@@ -68,13 +68,13 @@ export function AgentPanel() {
   return (
     <div className="space-y-6 max-w-3xl">
       {error && (
-        <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300">
+        <div className="bg-[--color-sev-blocker-bg] border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300">
           {error}
         </div>
       )}
 
       <div>
-        <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wide mb-3">
+        <h2 className="text-sm font-medium text-[--color-text-secondary] uppercase tracking-wide mb-3">
           Built-in Agents
         </h2>
         <div className="space-y-3">
@@ -83,19 +83,19 @@ export function AgentPanel() {
             return (
               <div
                 key={agent.agent_type}
-                className="bg-zinc-900 rounded-lg border border-zinc-800 p-4"
+                className="bg-[--color-surface] rounded-lg border border-[--color-border-subtle] p-4"
               >
                 <div className="flex items-center gap-3 mb-2">
-                  <Icon className="w-4 h-4 text-zinc-400" />
-                  <span className="font-medium text-zinc-200">{agent.name}</span>
-                  <span className="bg-zinc-700 text-zinc-400 text-xs px-2 py-1 rounded">
+                  <Icon className="w-4 h-4 text-[--color-text-secondary]" />
+                  <span className="font-medium text-[--color-text-primary]">{agent.name}</span>
+                  <span className="bg-[--color-elevated] text-[--color-text-secondary] text-xs px-2 py-1 rounded">
                     built-in
                   </span>
-                  <span className="bg-zinc-700 text-zinc-400 text-xs px-2 py-1 rounded">
+                  <span className="bg-[--color-elevated] text-[--color-text-secondary] text-xs px-2 py-1 rounded">
                     {agent.agent_type}
                   </span>
                 </div>
-                <p className="text-sm text-zinc-400 pl-7">{agent.system_prompt}</p>
+                <p className="text-sm text-[--color-text-secondary] pl-7">{agent.system_prompt}</p>
               </div>
             );
           })}
@@ -104,13 +104,13 @@ export function AgentPanel() {
 
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
+          <h2 className="text-sm font-medium text-[--color-text-secondary] uppercase tracking-wide">
             Custom Agents
           </h2>
           {!showForm && !editingAgent && (
             <button
               onClick={() => setShowForm(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[--color-accent] hover:bg-[--color-accent-hover] text-white rounded-lg text-sm font-medium transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
               Add Agent
@@ -125,7 +125,7 @@ export function AgentPanel() {
         )}
 
         {customAgents.length === 0 && !showForm && (
-          <p className="text-sm text-zinc-500 py-4 text-center">
+          <p className="text-sm text-[--color-text-tertiary] py-4 text-center">
             No custom agents yet. Add one to extend your review pipeline.
           </p>
         )}
@@ -140,16 +140,16 @@ export function AgentPanel() {
                   onCancel={() => setEditingAgent(null)}
                 />
               ) : (
-                <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+                <div className="bg-[--color-surface] rounded-lg border border-[--color-border-subtle] p-4">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-3">
                       <Sparkles className="w-4 h-4 text-violet-400" />
-                      <span className="font-medium text-zinc-200">{agent.name}</span>
-                      <span className="bg-violet-900/40 text-violet-300 text-xs px-2 py-1 rounded">
+                      <span className="font-medium text-[--color-text-primary]">{agent.name}</span>
+                      <span className="bg-[--color-state-waiting-bg] text-[--color-state-waiting] text-xs px-2 py-1 rounded">
                         {agent.agent_type}
                       </span>
                       {agent.provider && (
-                        <span className="bg-zinc-700 text-zinc-400 text-xs px-2 py-1 rounded">
+                        <span className="bg-[--color-elevated] text-[--color-text-secondary] text-xs px-2 py-1 rounded">
                           {agent.provider}
                         </span>
                       )}
@@ -157,21 +157,23 @@ export function AgentPanel() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setEditingAgent(agent)}
-                        className="text-zinc-400 hover:text-zinc-200 transition-colors"
+                        className="text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors"
                         title="Edit agent"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => handleDelete(agent.name)}
-                        className="text-red-400 hover:text-red-300 transition-colors"
+                        className="text-[--color-sev-blocker] hover:text-red-300 transition-colors"
                         title="Delete agent"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
-                  <p className="text-sm text-zinc-400 pl-7 line-clamp-3">{agent.system_prompt}</p>
+                  <p className="text-sm text-[--color-text-secondary] pl-7 line-clamp-3">
+                    {agent.system_prompt}
+                  </p>
                 </div>
               )}
             </div>

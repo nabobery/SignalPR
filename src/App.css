@@ -1,1 +1,115 @@
 @import "tailwindcss";
+
+/* ── Geist variable fonts ─────────────────────────────────────── */
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Design token system ──────────────────────────────────────── */
+@theme {
+  /* Backgrounds — near-black with subtle indigo tint */
+  --color-base: oklch(8.5% 0.018 264);
+  --color-surface: oklch(12.5% 0.016 264);
+  --color-elevated: oklch(16.5% 0.014 264);
+  --color-overlay: oklch(21% 0.012 264);
+
+  /* Borders */
+  --color-border-subtle: oklch(19% 0.012 264);
+  --color-border: oklch(24% 0.013 264);
+  --color-border-strong: oklch(31% 0.015 264);
+
+  /* Text */
+  --color-text-primary: oklch(94% 0.005 264);
+  --color-text-secondary: oklch(66% 0.009 264);
+  --color-text-tertiary: oklch(46% 0.007 264);
+
+  /* Accent — calibrated jade-teal */
+  --color-accent: oklch(70% 0.155 168);
+  --color-accent-hover: oklch(76% 0.17 168);
+  --color-accent-subtle: oklch(70% 0.07 168 / 14%);
+  --color-accent-muted: oklch(40% 0.06 168);
+
+  /* Semantic severity */
+  --color-sev-blocker: oklch(63% 0.22 25);
+  --color-sev-critical: oklch(69% 0.19 40);
+  --color-sev-warning: oklch(77% 0.17 82);
+  --color-sev-info: oklch(70% 0.14 245);
+  --color-sev-nitpick: oklch(52% 0.01 264);
+
+  /* Severity background tints */
+  --color-sev-blocker-bg: oklch(63% 0.22 25 / 12%);
+  --color-sev-critical-bg: oklch(69% 0.19 40 / 12%);
+  --color-sev-warning-bg: oklch(77% 0.17 82 / 12%);
+  --color-sev-info-bg: oklch(70% 0.14 245 / 12%);
+  --color-sev-nitpick-bg: oklch(52% 0.01 264 / 12%);
+
+  /* Queue state palette */
+  --color-state-action: oklch(68% 0.14 245);
+  --color-state-progress: oklch(77% 0.17 82);
+  --color-state-ready: oklch(68% 0.15 148);
+  --color-state-alert: oklch(63% 0.22 25);
+  --color-state-waiting: oklch(70% 0.12 295);
+  --color-state-done: oklch(52% 0.009 264);
+
+  /* Queue state background tints */
+  --color-state-action-bg: oklch(68% 0.14 245 / 12%);
+  --color-state-progress-bg: oklch(77% 0.17 82 / 12%);
+  --color-state-ready-bg: oklch(68% 0.15 148 / 12%);
+  --color-state-alert-bg: oklch(63% 0.22 25 / 12%);
+  --color-state-waiting-bg: oklch(70% 0.12 295 / 12%);
+  --color-state-done-bg: oklch(52% 0.009 264 / 12%);
+
+  /* Typography */
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+}
+
+/* ── Base resets ──────────────────────────────────────────────── */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: oklch(8.5% 0.018 264);
+    color: oklch(94% 0.005 264);
+    margin: 0;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: oklch(28% 0.013 264);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(35% 0.015 264);
+  }
+}

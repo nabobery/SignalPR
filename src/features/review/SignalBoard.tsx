@@ -135,12 +135,16 @@ export function SignalBoard() {
   return (
     <div className="flex flex-col h-full">
       {/* Filter presets */}
-      <div className="flex items-center gap-1.5 px-4 py-2 border-b border-zinc-800 shrink-0 flex-wrap">
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-[--color-border-subtle] shrink-0 flex-wrap">
         {presets.map((p) => (
           <button
             key={p.value}
             onClick={() => setPreset(p.value)}
-            className={`text-xs px-2 py-1 rounded ${preset === p.value ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"}`}
+            className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+              preset === p.value
+                ? "bg-[--color-elevated] text-[--color-text-primary]"
+                : "text-[--color-text-tertiary] hover:text-[--color-text-secondary] hover:bg-[--color-elevated]/60"
+            }`}
           >
             {p.label}
           </button>
@@ -148,7 +152,7 @@ export function SignalBoard() {
       </div>
 
       {displayFindings.length === 0 ? (
-        <div className="flex items-center justify-center flex-1 text-zinc-500 text-sm">
+        <div className="flex items-center justify-center flex-1 text-[--color-text-tertiary] text-sm">
           {state.findings.length === 0
             ? "No findings to display."
             : selectedFile
@@ -157,7 +161,7 @@ export function SignalBoard() {
         </div>
       ) : (
         <div className="space-y-3 overflow-y-auto p-4 flex-1">
-          <div className="text-xs text-zinc-400 mb-2">
+          <div className="text-xs text-[--color-text-tertiary] mb-2">
             {displayFindings.length} finding{displayFindings.length !== 1 ? "s" : ""}
             {clusterGroups.length > 0 && ` in ${clusterGroups.length + unclustered.length} groups`}
             {selectedFile && <span> in {selectedFile}</span>}

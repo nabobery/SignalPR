@@ -72,13 +72,13 @@ export function FixPreview({
   };
 
   const renderDiffLine = (line: string, idx: number) => {
-    let className = "whitespace-pre text-zinc-400";
+    let className = "whitespace-pre text-[--color-text-secondary]";
     if (line.startsWith("-")) {
-      className = "whitespace-pre bg-red-900/30 text-red-300";
+      className = "whitespace-pre bg-[--color-sev-blocker-bg] text-red-300";
     } else if (line.startsWith("+")) {
-      className = "whitespace-pre bg-emerald-900/30 text-emerald-300";
+      className = "whitespace-pre bg-[--color-state-ready-bg] text-emerald-300";
     } else if (line.startsWith("@@")) {
-      className = "whitespace-pre text-blue-400";
+      className = "whitespace-pre text-[--color-sev-info]";
     }
     return (
       <div key={idx} className={className}>
@@ -89,19 +89,21 @@ export function FixPreview({
 
   return (
     <div className="mt-2 space-y-2">
-      {fixExplanation && <p className="text-xs text-zinc-400 italic">{fixExplanation}</p>}
+      {fixExplanation && (
+        <p className="text-xs text-[--color-text-secondary] italic">{fixExplanation}</p>
+      )}
 
       {loading && (
-        <div className="flex items-center gap-2 text-xs text-zinc-500">
+        <div className="flex items-center gap-2 text-xs text-[--color-text-tertiary]">
           <Loader2 className="w-3 h-3 animate-spin" />
           Loading diff preview...
         </div>
       )}
 
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p className="text-xs text-[--color-sev-blocker]">{error}</p>}
 
       {diff && !loading && (
-        <div className="font-mono text-sm bg-zinc-950 rounded-lg border border-zinc-800 p-3 overflow-x-auto">
+        <div className="font-mono text-sm bg-[--color-base] rounded-lg border border-[--color-border-subtle] p-3 overflow-x-auto">
           {diff.split("\n").map(renderDiffLine)}
         </div>
       )}
@@ -111,7 +113,7 @@ export function FixPreview({
           <button
             onClick={handleAccept}
             disabled={acting}
-            className="flex items-center gap-1 text-xs px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
+            className="flex items-center gap-1 text-xs px-3 py-1 rounded bg-[--color-accent] text-white hover:bg-[--color-accent-hover] disabled:opacity-50"
           >
             {acting ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
             Accept Fix
