@@ -29,30 +29,30 @@
     "eval:run": "node evals/run-paid.mjs"
   },
   "dependencies": {
-    "@pierre/diffs": "1.1.20",
+    "@pierre/diffs": "1.2.11",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
-    "lucide-react": "^1.7.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-error-boundary": "^6.1.1",
-    "react-router": "^7.13.2"
+    "lucide-react": "^1.20.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-error-boundary": "^6.1.2",
+    "react-router": "^7.18.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.2.2",
+    "@tailwindcss/vite": "^4.3.1",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/react": "^19.1.8",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
-    "jsdom": "^29.0.1",
-    "oxfmt": "0.47.0",
-    "oxlint": "1.62.0",
-    "tailwindcss": "^4.2.2",
+    "jsdom": "^29.1.1",
+    "oxfmt": "0.55.0",
+    "oxlint": "1.70.0",
+    "tailwindcss": "^4.3.1",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.9"
   }
 }
