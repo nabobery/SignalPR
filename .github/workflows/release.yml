@@ -26,7 +26,7 @@ jobs:
       release_id: ${{ steps.create.outputs.release_id }}
       tag_name: ${{ steps.resolve.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve tag name
         id: resolve
@@ -74,7 +74,7 @@ jobs:
             rust-target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Linux system dependencies
         if: startsWith(matrix.platform, 'ubuntu-')
@@ -86,7 +86,7 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
