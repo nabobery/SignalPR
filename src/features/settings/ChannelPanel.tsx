@@ -65,19 +65,19 @@ function ChannelSection({
   const connected = status?.connected ?? false;
 
   return (
-    <div className="bg-[--color-surface] rounded-lg border border-[--color-border-subtle] p-4">
+    <div className="bg-(--color-surface) rounded-lg border border-(--color-border-subtle) p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div
             className={
               connected
-                ? "w-2 h-2 rounded-full bg-[--color-accent]"
-                : "w-2 h-2 rounded-full bg-[--color-border]"
+                ? "w-2 h-2 rounded-full bg-(--color-accent)"
+                : "w-2 h-2 rounded-full bg-(--color-border)"
             }
           />
-          <h3 className="text-sm font-semibold text-[--color-text-primary]">{label}</h3>
+          <h3 className="text-sm font-semibold text-(--color-text-primary)">{label}</h3>
           {configured && (
-            <span className="text-xs text-[--color-text-tertiary] ml-1">
+            <span className="text-xs text-(--color-text-tertiary) ml-1">
               {connected ? "Connected" : "Configured"}
             </span>
           )}
@@ -86,7 +86,7 @@ function ChannelSection({
           <button
             onClick={handleRemove}
             disabled={removing}
-            className="px-3 py-1 text-[--color-sev-blocker] border border-red-800 rounded hover:bg-[--color-sev-blocker-bg] text-xs disabled:opacity-40"
+            className="px-3 py-1 text-(--color-sev-blocker) border border-red-800 rounded hover:bg-(--color-sev-blocker-bg) text-xs disabled:opacity-40"
           >
             {removing ? "Removing..." : "Remove"}
           </button>
@@ -94,10 +94,10 @@ function ChannelSection({
       </div>
 
       {status?.message && (
-        <p className="text-xs text-[--color-text-secondary] mb-3">{status.message}</p>
+        <p className="text-xs text-(--color-text-secondary) mb-3">{status.message}</p>
       )}
 
-      <p className="text-xs text-[--color-text-tertiary] mb-3">{description}</p>
+      <p className="text-xs text-(--color-text-tertiary) mb-3">{description}</p>
 
       <div className="flex gap-2">
         <input
@@ -105,18 +105,18 @@ function ChannelSection({
           value={token}
           onChange={(e) => setToken(e.target.value)}
           placeholder={placeholder}
-          className="flex-1 bg-[--color-elevated] border border-[--color-border] rounded-lg px-3 py-2 text-[--color-text-primary] text-sm focus:outline-none focus:border-[--color-border-strong] placeholder:text-[--color-text-tertiary]"
+          className="flex-1 bg-(--color-elevated) border border-(--color-border) rounded-lg px-3 py-2 text-(--color-text-primary) text-sm focus:outline-none focus:border-(--color-border-strong) placeholder:text-(--color-text-tertiary)"
         />
         <button
           onClick={handleConfigure}
           disabled={!token.trim() || saving}
-          className="px-4 py-2 bg-[--color-accent] text-white rounded-lg hover:bg-[--color-accent-hover] text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+          className="px-4 py-2 bg-(--color-accent) text-white rounded-lg hover:bg-(--color-accent-hover) text-sm disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? "Saving..." : configured ? "Update" : "Configure"}
         </button>
       </div>
 
-      {error && <p className="text-[--color-sev-blocker] text-xs mt-2">{error}</p>}
+      {error && <p className="text-(--color-sev-blocker) text-xs mt-2">{error}</p>}
     </div>
   );
 }
@@ -187,7 +187,7 @@ export function ChannelPanel() {
 
   if (loading) {
     return (
-      <div className="text-[--color-text-tertiary] py-12 text-center">
+      <div className="text-(--color-text-tertiary) py-12 text-center">
         <p className="text-sm">Loading channel configuration...</p>
       </div>
     );
@@ -197,10 +197,10 @@ export function ChannelPanel() {
     <div className="space-y-4 max-w-2xl">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-[--color-text-primary] mb-1">
+          <h2 className="text-lg font-semibold text-(--color-text-primary) mb-1">
             Notification Channels
           </h2>
-          <p className="text-sm text-[--color-text-secondary]">
+          <p className="text-sm text-(--color-text-secondary)">
             Connect Slack or Discord to receive PR review requests via DMs and bot mentions.
           </p>
         </div>
@@ -210,8 +210,8 @@ export function ChannelPanel() {
             disabled={toggling}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${
               anyConnected
-                ? "bg-[--color-elevated] text-[--color-text-primary] hover:bg-[--color-elevated]"
-                : "bg-[--color-accent] text-white hover:bg-[--color-accent-hover]"
+                ? "bg-(--color-elevated) text-(--color-text-primary) hover:bg-(--color-elevated)"
+                : "bg-(--color-accent) text-white hover:bg-(--color-accent-hover)"
             }`}
           >
             {toggling ? "..." : anyConnected ? "Disconnect" : "Connect"}

@@ -178,41 +178,41 @@ export function ApprovalModal() {
   const observationalProvider = providerLabel[current.source];
 
   const btnPrimary =
-    "flex items-center gap-1 bg-[--color-accent] text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-[--color-accent-hover] flex-1 justify-center transition-colors";
+    "flex items-center gap-1 bg-(--color-accent) text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-(--color-accent-hover) flex-1 justify-center transition-colors";
   const btnSecondary =
-    "flex items-center gap-1 bg-[--color-elevated] text-[--color-text-secondary] px-3 py-1.5 rounded-md text-xs font-medium hover:text-[--color-text-primary] flex-1 justify-center transition-colors";
+    "flex items-center gap-1 bg-(--color-elevated) text-(--color-text-secondary) px-3 py-1.5 rounded-md text-xs font-medium hover:text-(--color-text-primary) flex-1 justify-center transition-colors";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-      <div className="bg-[--color-surface] border border-[--color-border] rounded-xl shadow-2xl w-full max-w-md mx-4">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-[--color-border-subtle]">
+      <div className="bg-(--color-surface) border border-(--color-border) rounded-xl shadow-2xl w-full max-w-md mx-4">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-(--color-border-subtle)">
           <ShieldAlert
-            className={`w-4 h-4 ${isObservational ? "text-[--color-text-tertiary]" : "text-[--color-sev-warning]"}`}
+            className={`w-4 h-4 ${isObservational ? "text-(--color-text-tertiary)" : "text-(--color-sev-warning)"}`}
           />
-          <h3 className="text-sm font-semibold text-[--color-text-primary]">{title}</h3>
+          <h3 className="text-sm font-semibold text-(--color-text-primary)">{title}</h3>
           {queue.length > 1 && (
-            <span className="ml-auto text-xs text-[--color-text-tertiary]">
+            <span className="ml-auto text-xs text-(--color-text-tertiary)">
               {queue.length} pending
             </span>
           )}
         </div>
 
         <div className="px-4 py-3 space-y-2">
-          <p className="text-xs text-[--color-text-secondary]">{description}</p>
+          <p className="text-xs text-(--color-text-secondary)">{description}</p>
 
           {command && (
-            <div className="bg-[--color-base] rounded-md p-2 font-mono text-xs text-[--color-text-secondary] break-all border border-[--color-border-subtle]">
+            <div className="bg-(--color-base) rounded-md p-2 font-mono text-xs text-(--color-text-secondary) break-all border border-(--color-border-subtle)">
               {command}
             </div>
           )}
 
-          {cwd && <p className="text-xs text-[--color-text-tertiary] truncate">in {cwd}</p>}
-          <p className="text-xs text-[--color-text-tertiary]">{identifier}</p>
+          {cwd && <p className="text-xs text-(--color-text-tertiary) truncate">in {cwd}</p>}
+          <p className="text-xs text-(--color-text-tertiary)">{identifier}</p>
         </div>
 
         {isObservational && (
           <div className="px-4 pb-3">
-            <p className="text-xs text-[--color-text-tertiary]">
+            <p className="text-xs text-(--color-text-tertiary)">
               A future release will let you review and allow individual requests. For now,{" "}
               {observationalProvider} review lanes run under {observationalModeLabel} mode with
               deny-by-default tool permissions.
@@ -220,7 +220,7 @@ export function ApprovalModal() {
           </div>
         )}
 
-        <div className="flex gap-2 px-4 py-3 border-t border-[--color-border-subtle]">
+        <div className="flex gap-2 px-4 py-3 border-t border-(--color-border-subtle)">
           {isObservational ? (
             <button onClick={() => setQueue((prev) => prev.slice(1))} className={btnSecondary}>
               <Check className="w-3 h-3" />
@@ -248,7 +248,7 @@ export function ApprovalModal() {
               </button>
               <button
                 onClick={() => handleDecision("cancel")}
-                className="text-xs text-[--color-text-tertiary] hover:text-[--color-text-secondary] px-2 transition-colors"
+                className="text-xs text-(--color-text-tertiary) hover:text-(--color-text-secondary) px-2 transition-colors"
               >
                 Cancel turn
               </button>

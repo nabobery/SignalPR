@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">SignalPR app icon</title>
+  <desc id="desc">A signal path forming an abstract S inside a rounded charcoal tile.</desc>
+
+  <rect width="1024" height="1024" rx="220" fill="#0B0F12" />
+  <rect x="96" y="96" width="832" height="832" rx="164" stroke="#EDEDED" stroke-opacity="0.14" stroke-width="8" />
+
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path
+      d="M736 256H368A144 144 0 0 0 368 544H560"
+      stroke="#EDEDED"
+      stroke-width="48"
+    />
+    <path
+      d="M368 448H736"
+      stroke="#EDEDED"
+      stroke-width="48"
+    />
+    <path
+      d="M368 576H560C660 576 720 640 720 736C720 832 656 864 560 864H224"
+      stroke="#22C57E"
+      stroke-width="48"
+    />
+    <path
+      d="M224 704H560C628 704 656 672 656 640C656 604 624 576 560 576"
+      stroke="#22C57E"
+      stroke-width="48"
+    />
+  </g>
+
+  <circle cx="736" cy="256" r="36" fill="#EDEDED" />
+  <circle cx="736" cy="448" r="36" fill="#22C57E" />
+  <circle cx="224" cy="704" r="36" fill="#22C57E" />
+  <circle cx="224" cy="864" r="36" fill="#22C57E" />
+</svg>

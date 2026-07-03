@@ -22,14 +22,14 @@ export function LegacyDiffPanel({ state }: LegacyDiffPanelProps) {
             key={i}
             className={
               line.startsWith("+") && !line.startsWith("+++")
-                ? "bg-[--color-state-ready-bg] text-emerald-300"
+                ? "bg-(--color-state-ready-bg) text-emerald-300"
                 : line.startsWith("-") && !line.startsWith("---")
-                  ? "bg-[--color-sev-blocker-bg] text-red-300"
+                  ? "bg-(--color-sev-blocker-bg) text-red-300"
                   : line.startsWith("@@")
-                    ? "text-[--color-sev-info]"
+                    ? "text-(--color-sev-info)"
                     : line.startsWith("diff ")
-                      ? "text-[--color-text-secondary] font-bold mt-2"
-                      : "text-[--color-text-secondary]"
+                      ? "text-(--color-text-secondary) font-bold mt-2"
+                      : "text-(--color-text-secondary)"
             }
           >
             {line}

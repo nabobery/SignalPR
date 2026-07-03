@@ -14,11 +14,13 @@ vi.mock("../intake/IntakeQuickAction", () => ({
 }));
 
 const mockGetInboxOverview = vi.fn();
+const mockStartReview = vi.fn();
 const mockResumeReview = vi.fn();
 const mockRefreshPrMetadata = vi.fn();
 const mockRerunReview = vi.fn();
 vi.mock("../../lib/ipc", () => ({
   getInboxOverview: (...args: unknown[]) => mockGetInboxOverview(...args),
+  startReview: (...args: unknown[]) => mockStartReview(...args),
   resumeReview: (...args: unknown[]) => mockResumeReview(...args),
   refreshPrMetadata: (...args: unknown[]) => mockRefreshPrMetadata(...args),
   rerunReview: (...args: unknown[]) => mockRerunReview(...args),
@@ -369,6 +371,56 @@ describe("InboxView", () => {
       expect(mockResumeReview).toHaveBeenCalledWith("run-1");
       expect(mockNavigate).toHaveBeenCalledWith("/review/new-run-id");
     });
+  });
+
+  it("clicking Start review on a not-started row starts the PR and navigates", async () => {
+    mockGetInboxOverview.mockResolvedValue(
+      makeOverview({
+        sections: [
+          {
+            id: "ready_to_start",
+            title: "Ready to start",
+            items: [
+              makeRow({
+                run_id: "",
+                status: "not_started",
+                queue_state: "ready_to_start",
+                active_finding_count: 0,
+                providers_used: [],
+                allowed_actions: ["start_review"],
+                review_freshness: {
+                  state: "not_reviewed",
+                  reviewed_at: null,
+                  reviewed_head_sha: null,
+                  current_head_sha: "sha-1",
+                  has_unreviewed_updates: false,
+                },
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+    mockStartReview.mockResolvedValue("new-run-id");
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InboxView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start review" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(mockStartReview).toHaveBeenCalledWith("pr-1");
+      expect(mockNavigate).toHaveBeenCalledWith("/review/new-run-id");
+    });
+    expect(mockNavigate).not.toHaveBeenCalledWith("/review/");
   });
 
   it("clicking Refresh metadata refreshes the row data", async () => {

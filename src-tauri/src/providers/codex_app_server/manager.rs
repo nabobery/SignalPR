@@ -275,19 +275,26 @@ impl CodexAppServerManager {
             .map(|s| s.to_string())
     }
 
-    /// Start a new conversation thread. Returns the server-assigned thread id.
-    pub async fn start_thread(&self, cwd: &Path, model: &str) -> Result<String, ProviderError> {
-        let transport = self.get_transport().await?;
+    fn build_start_thread_params(cwd: &Path, model: Option<&str>) -> Value {
+        let mut params = json!({ "cwd": cwd.to_string_lossy() });
+        if let Some(model) = model {
+            params["model"] = json!(model);
+        }
+        params
+    }
 
-        let result = transport
-            .send_request(
-                "thread/start",
-                Some(json!({
-                    "cwd": cwd.to_string_lossy(),
-                    "model": model,
-                })),
-            )
-            .await?;
+    /// Start a new conversation thread. Returns the server-assigned thread id.
+    /// When `model` is None, the model key is omitted so the app-server uses
+    /// the user's configured default (required for ChatGPT-account auth).
+    pub async fn start_thread(
+        &self,
+        cwd: &Path,
+        model: Option<&str>,
+    ) -> Result<String, ProviderError> {
+        let transport = self.get_transport().await?;
+        let params = Self::build_start_thread_params(cwd, model);
+
+        let result = transport.send_request("thread/start", Some(params)).await?;
 
         let thread_id = Self::parse_thread_id(&result).ok_or_else(|| {
             ProviderError::CodexFailed(format!(
@@ -440,6 +447,25 @@ mod tests {
     }
 
     #[test]
+    fn test_start_thread_params_omit_model_when_unset() {
+        let params = CodexAppServerManager::build_start_thread_params(Path::new("/tmp/repo"), None);
+
+        assert_eq!(params["cwd"], "/tmp/repo");
+        assert!(params.get("model").is_none());
+    }
+
+    #[test]
+    fn test_start_thread_params_include_model_when_set() {
+        let params = CodexAppServerManager::build_start_thread_params(
+            Path::new("/tmp/repo"),
+            Some("gpt-5.2-codex"),
+        );
+
+        assert_eq!(params["cwd"], "/tmp/repo");
+        assert_eq!(params["model"], "gpt-5.2-codex");
+    }
+
+    #[test]
     fn test_approval_request_serialization() {
         let req = ApprovalRequest {
             request_id: json!("req-1"),
@@ -467,7 +493,7 @@ mod tests {
 
         // Operations before ensure_started should return errors
         let result = manager
-            .start_thread(Path::new("/tmp"), "gpt-5.2-codex")
+            .start_thread(Path::new("/tmp"), Some("gpt-5.2-codex"))
             .await;
         assert!(result.is_err());
         match result {

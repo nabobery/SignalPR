@@ -16,7 +16,10 @@ use super::traits::{CodexReviewOutput, ProviderHealth, RawFinding, ReviewInput, 
 #[allow(dead_code)]
 pub struct CodexProvider {
     app_handle: tauri::AppHandle,
-    model: String,
+    /// None means "use the user's configured default model" — hardcoding a
+    /// model breaks ChatGPT-subscription accounts, which reject explicit
+    /// API-only model ids.
+    model: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -24,14 +27,32 @@ impl CodexProvider {
     pub fn new(app_handle: tauri::AppHandle) -> Self {
         Self {
             app_handle,
-            model: "gpt-5.2-codex".to_string(),
+            model: None,
         }
     }
 
     #[allow(dead_code)]
     pub fn with_model(app_handle: tauri::AppHandle, model: String) -> Self {
-        Self { app_handle, model }
+        Self {
+            app_handle,
+            model: Some(model),
+        }
     }
+}
+
+/// Build the `codex exec` argument list. Extracted for regression testing —
+/// codex-cli renames flags between releases (`--output-schema-file` became
+/// `--output-schema` in 0.14x) and a stale flag fails as an opaque broken pipe.
+fn build_exec_args(model: Option<&str>, schema_path: &str) -> Vec<String> {
+    let mut args = vec!["exec".to_string()];
+    if let Some(model) = model {
+        args.push("--model".into());
+        args.push(model.to_string());
+    }
+    args.push("--output-schema".into());
+    args.push(schema_path.to_string());
+    args.push("-".into()); // read prompt from stdin
+    args
 }
 
 #[async_trait]
@@ -81,14 +102,10 @@ impl ReviewProvider for CodexProvider {
 
         // Execute codex exec (prompt via stdin to avoid argv size limits)
         let mut cmd = tokio::process::Command::new("codex");
-        cmd.args([
-            "exec",
-            "--model",
-            &self.model,
-            "--output-schema-file",
+        cmd.args(build_exec_args(
+            self.model.as_deref(),
             &schema_path.to_string_lossy(),
-            "-", // force stdin
-        ])
+        ))
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -98,11 +115,16 @@ impl ReviewProvider for CodexProvider {
             .spawn()
             .map_err(|e| ProviderError::CodexFailed(format!("Failed to spawn codex: {}", e)))?;
 
+        // A write failure here usually means codex exited immediately (bad
+        // flag, auth error). Don't bail yet — fall through so the child's
+        // stderr (the actual cause) is captured and reported instead of an
+        // opaque EPIPE.
+        let mut prompt_write_error: Option<std::io::Error> = None;
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-                ProviderError::CodexFailed(format!("Failed to write prompt: {}", e))
-            })?;
+            if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
+                prompt_write_error = Some(e);
+            }
         }
 
         let mut stdout = child
@@ -144,11 +166,18 @@ impl ReviewProvider for CodexProvider {
             .map_err(|e| ProviderError::CodexFailed(format!("stderr join error: {}", e)))?
             .map_err(|e| ProviderError::CodexFailed(format!("stderr read error: {}", e)))?;
 
-        if !status.success() {
-            let stderr = String::from_utf8_lossy(&stderr_buf);
+        if !status.success() || prompt_write_error.is_some() {
+            let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+            let detail = if !stderr.is_empty() {
+                stderr
+            } else if let Some(e) = prompt_write_error {
+                format!("Failed to write prompt: {}", e)
+            } else {
+                format!("exit status {:?} with empty stderr", status.code())
+            };
             return Err(ProviderError::CodexFailed(format!(
                 "Codex exited with error: {}",
-                stderr
+                detail
             )));
         }
 
@@ -262,6 +291,28 @@ impl ReviewProvider for MockProvider {
 mod tests {
     use super::*;
     use crate::providers::prompts;
+
+    #[test]
+    fn test_build_exec_args_uses_output_schema_flag() {
+        // Regression guard: codex-cli renamed --output-schema-file to
+        // --output-schema; a stale flag fails as an opaque broken pipe.
+        let args = build_exec_args(Some("gpt-5.2-codex"), "/tmp/schema.json");
+        assert!(args.contains(&"--output-schema".to_string()));
+        assert!(!args.iter().any(|a| a == "--output-schema-file"));
+        assert_eq!(args.first().map(String::as_str), Some("exec"));
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        let model_pos = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[model_pos + 1], "gpt-5.2-codex");
+    }
+
+    #[test]
+    fn test_build_exec_args_omits_model_when_none() {
+        // No --model means codex uses the user's configured default, which is
+        // required for ChatGPT-subscription accounts.
+        let args = build_exec_args(None, "/tmp/schema.json");
+        assert!(!args.iter().any(|a| a == "--model"));
+        assert!(args.contains(&"--output-schema".to_string()));
+    }
 
     #[test]
     fn test_prompt_concatenation() {

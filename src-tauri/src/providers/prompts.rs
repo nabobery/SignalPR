@@ -1,5 +1,9 @@
 use super::traits::ReviewInput;
 
+// OpenAI structured-output (strict) rules: every object needs
+// `additionalProperties: false`, and every property must be listed in
+// `required` (optionality is expressed with a nullable `["type", "null"]`).
+// Codex rejects schemas that violate this with a 400 `invalid_json_schema`.
 pub const OUTPUT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
@@ -10,31 +14,34 @@ pub const OUTPUT_SCHEMA: &str = r#"{
         "properties": {
           "title": { "type": "string" },
           "body": { "type": "string" },
-          "file_path": { "type": "string" },
-          "line_start": { "type": "integer" },
-          "line_end": { "type": "integer" },
+          "file_path": { "type": ["string", "null"] },
+          "line_start": { "type": ["integer", "null"] },
+          "line_end": { "type": ["integer", "null"] },
           "severity": { "type": "string", "enum": ["blocker", "critical", "warning", "info", "nitpick"] },
-          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "evidence": { "type": "array", "items": { "type": "string" } },
+          "confidence": { "type": "number" },
+          "evidence": { "type": ["array", "null"], "items": { "type": "string" } },
           "agent_type": { "type": "string" },
           "fix_suggestion": {
-            "type": "object",
+            "type": ["object", "null"],
             "properties": {
               "search": { "type": "string" },
               "replace": { "type": "string" },
               "file_path": { "type": "string" },
-              "explanation": { "type": "string" }
+              "explanation": { "type": ["string", "null"] }
             },
-            "required": ["search", "replace", "file_path"]
+            "required": ["search", "replace", "file_path", "explanation"],
+            "additionalProperties": false
           }
         },
-        "required": ["title", "body", "severity", "confidence", "agent_type"]
+        "required": ["title", "body", "file_path", "line_start", "line_end", "severity", "confidence", "evidence", "agent_type", "fix_suggestion"],
+        "additionalProperties": false
       }
     },
-    "overall_assessment": { "type": "string" },
-    "overall_confidence": { "type": "number" }
+    "overall_assessment": { "type": ["string", "null"] },
+    "overall_confidence": { "type": ["number", "null"] }
   },
-  "required": ["findings"]
+  "required": ["findings", "overall_assessment", "overall_confidence"],
+  "additionalProperties": false
 }"#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

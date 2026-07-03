@@ -824,6 +824,8 @@ pub fn list_inbox_pr_candidates(
     conn: &Connection,
     limit: i32,
 ) -> Result<Vec<InboxPrCandidate>, rusqlite::Error> {
+    // Include fetched PRs even when they do not have review runs yet so the
+    // inbox can surface first-review candidates as "Ready to start".
     let mut stmt = conn.prepare(
         "SELECT
             p.id,
@@ -856,7 +858,6 @@ pub fn list_inbox_pr_candidates(
             ) AS last_activity_at
          FROM pull_requests p
          JOIN workspaces w ON w.id = p.workspace_id
-         WHERE EXISTS (SELECT 1 FROM review_runs rr WHERE rr.pr_id = p.id)
          ORDER BY last_activity_at DESC
          LIMIT ?1",
     )?;

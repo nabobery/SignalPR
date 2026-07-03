@@ -118,6 +118,12 @@ fn extract_agent_message_text(item: &serde_json::Value) -> Option<&str> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // GUI apps on macOS/Linux don't inherit the shell $PATH, so CLIs like
+    // `gh`, `codex`, and `opencode` are invisible without this.
+    if let Err(e) = fix_path_env::fix() {
+        eprintln!("failed to fix PATH env: {e}");
+    }
+
     tracing_subscriber::fmt::init();
 
     tauri::Builder::default()

@@ -53,7 +53,9 @@ fn extract_authoritative_text_from_item(item: &serde_json::Value) -> Option<Stri
 /// approval flows.
 pub struct CodexAppServerProvider {
     manager: Arc<CodexAppServerManager>,
-    model: String,
+    /// None means "use the user's configured default model" — a hardcoded
+    /// API-only model id is rejected by ChatGPT-subscription accounts.
+    model: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -62,11 +64,17 @@ impl CodexAppServerProvider {
     ///
     /// This does NOT start the child process; `health_check` or `run_review` trigger lazy startup.
     pub fn new(manager: Arc<CodexAppServerManager>) -> Self {
-        Self::with_model(manager, "gpt-5.2-codex".to_string())
+        Self {
+            manager,
+            model: None,
+        }
     }
 
     pub fn with_model(manager: Arc<CodexAppServerManager>, model: String) -> Self {
-        Self { manager, model }
+        Self {
+            manager,
+            model: Some(model),
+        }
     }
 
     /// Get a reference to the underlying manager for direct thread/turn control.
@@ -110,7 +118,10 @@ impl ReviewProvider for CodexAppServerProvider {
         self.manager.ensure_started().await?;
 
         // Start an ephemeral thread for this lane
-        let thread_id = self.manager.start_thread(cwd, &self.model).await?;
+        let thread_id = self
+            .manager
+            .start_thread(cwd, self.model.as_deref())
+            .await?;
         info!("Started app-server thread {} for review", thread_id);
         self.manager
             .register_thread_lane(thread_id.clone(), input.lane_id.clone())

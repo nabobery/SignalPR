@@ -102,7 +102,7 @@ pub async fn rerun_review(
     };
 
     let selected_provider =
-        config::select_provider_with_trace(&app, &resolved.preferred_provider).await;
+        config::select_provider_with_trace(&app, &resolved.preferred_provider).await?;
     let provider: Arc<dyn ReviewProvider> = selected_provider.provider.clone();
     let provider_selection_json = serde_json::to_string(&selected_provider.trace)
         .map_err(|e| AppError::InvalidInput(e.to_string()))?;

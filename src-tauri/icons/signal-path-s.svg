@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">SignalPR signal path S mark</title>
+  <desc id="desc">A precise signal path forming an abstract S with off-white review lanes and green verified signal lanes.</desc>
+
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#0B0F12" />
+  <rect x="48" y="48" width="416" height="416" rx="82" stroke="#EDEDED" stroke-opacity="0.14" stroke-width="4" />
+
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M368 128H184A72 72 0 0 0 184 272H280" stroke="#EDEDED" stroke-width="24" />
+    <path d="M184 224H368" stroke="#EDEDED" stroke-width="24" />
+    <path
+      d="M184 288H280C330 288 360 320 360 368C360 416 328 432 280 432H112"
+      stroke="#22C57E"
+      stroke-width="24"
+    />
+    <path
+      d="M112 352H280C314 352 328 336 328 320C328 302 312 288 280 288"
+      stroke="#22C57E"
+      stroke-width="24"
+    />
+  </g>
+
+  <circle cx="368" cy="128" r="18" fill="#EDEDED" />
+  <circle cx="368" cy="224" r="18" fill="#22C57E" />
+  <circle cx="112" cy="352" r="18" fill="#22C57E" />
+  <circle cx="112" cy="432" r="18" fill="#22C57E" />
+</svg>

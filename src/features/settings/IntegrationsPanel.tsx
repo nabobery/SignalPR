@@ -31,7 +31,7 @@ export function IntegrationsPanel() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12 text-[--color-text-secondary]">
+      <div className="flex items-center justify-center py-12 text-(--color-text-secondary)">
         <Loader2 className="w-5 h-5 animate-spin mr-2" />
         Loading integrations…
       </div>
@@ -40,7 +40,7 @@ export function IntegrationsPanel() {
 
   if (error) {
     return (
-      <div className="text-[--color-sev-blocker] text-sm p-4 bg-[--color-sev-blocker-bg] border border-red-800 rounded-lg">
+      <div className="text-(--color-sev-blocker) text-sm p-4 bg-(--color-sev-blocker-bg) border border-red-800 rounded-lg">
         {error}
       </div>
     );
@@ -51,7 +51,7 @@ export function IntegrationsPanel() {
 
   return (
     <div className="space-y-8 max-w-2xl">
-      <p className="text-sm text-[--color-text-secondary]">
+      <p className="text-sm text-(--color-text-secondary)">
         Connect external issue trackers to enrich review context with linked issue data.
       </p>
 
@@ -190,11 +190,11 @@ function IntegrationCard({
   };
 
   return (
-    <div className="border border-[--color-border-subtle] rounded-lg p-5 bg-[--color-surface]">
+    <div className="border border-(--color-border-subtle) rounded-lg p-5 bg-(--color-surface)">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h3 className="text-base font-medium text-[--color-text-primary]">{label}</h3>
-          <p className="text-sm text-[--color-text-tertiary] mt-0.5">{description}</p>
+          <h3 className="text-base font-medium text-(--color-text-primary)">{label}</h3>
+          <p className="text-sm text-(--color-text-tertiary) mt-0.5">{description}</p>
         </div>
         <button
           type="button"
@@ -203,7 +203,7 @@ function IntegrationCard({
           aria-checked={enabled}
           aria-label={`${label} integration`}
           className={`relative w-10 h-5 rounded-full transition-colors ${
-            enabled ? "bg-[--color-accent]" : "bg-[--color-elevated]"
+            enabled ? "bg-(--color-accent)" : "bg-(--color-elevated)"
           }`}
         >
           <span
@@ -215,36 +215,36 @@ function IntegrationCard({
       </div>
 
       {enabled && (
-        <div className="space-y-3 mt-4 pt-4 border-t border-[--color-border-subtle]">
+        <div className="space-y-3 mt-4 pt-4 border-t border-(--color-border-subtle)">
           {settingsFields.map((f) => (
             <div key={f.key}>
-              <label className="block text-xs text-[--color-text-secondary] mb-1">{f.label}</label>
+              <label className="block text-xs text-(--color-text-secondary) mb-1">{f.label}</label>
               <input
                 type="text"
                 value={fieldValues[f.key] || ""}
                 onChange={(e) => setFieldValues({ ...fieldValues, [f.key]: e.target.value })}
                 onBlur={() => handleFieldBlur(f.key)}
                 placeholder={f.placeholder}
-                className="w-full bg-[--color-elevated] border border-[--color-border] rounded px-3 py-1.5 text-sm text-[--color-text-primary] placeholder:text-[--color-text-tertiary] focus:outline-none focus:border-emerald-600"
+                className="w-full bg-(--color-elevated) border border-(--color-border) rounded px-3 py-1.5 text-sm text-(--color-text-primary) placeholder:text-(--color-text-tertiary) focus:outline-none focus:border-emerald-600"
               />
             </div>
           ))}
 
           <div>
-            <label className="block text-xs text-[--color-text-secondary] mb-1">
+            <label className="block text-xs text-(--color-text-secondary) mb-1">
               {secretLabel}
             </label>
             <div className="flex items-center gap-2">
               {hasSecret ? (
                 <>
-                  <span className="flex items-center gap-1 text-xs text-[--color-accent]">
+                  <span className="flex items-center gap-1 text-xs text-(--color-accent)">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Stored in keychain
                   </span>
                   <button
                     onClick={handleDeleteSecret}
                     disabled={saving}
-                    className="ml-auto text-xs text-[--color-sev-blocker] hover:text-red-300 flex items-center gap-1"
+                    className="ml-auto text-xs text-(--color-sev-blocker) hover:text-red-300 flex items-center gap-1"
                   >
                     <Trash2 className="w-3 h-3" />
                     Remove
@@ -252,7 +252,7 @@ function IntegrationCard({
                 </>
               ) : (
                 <>
-                  <div className="flex items-center gap-1 text-xs text-[--color-text-tertiary]">
+                  <div className="flex items-center gap-1 text-xs text-(--color-text-tertiary)">
                     <AlertCircle className="w-3.5 h-3.5" />
                     Not configured
                   </div>
@@ -261,18 +261,18 @@ function IntegrationCard({
             </div>
             {!hasSecret && (
               <div className="flex items-center gap-2 mt-2">
-                <KeyRound className="w-4 h-4 text-[--color-text-tertiary]" />
+                <KeyRound className="w-4 h-4 text-(--color-text-tertiary)" />
                 <input
                   type="password"
                   value={secretInput}
                   onChange={(e) => setSecretInput(e.target.value)}
                   placeholder={`Enter ${secretLabel.toLowerCase()}…`}
-                  className="flex-1 bg-[--color-elevated] border border-[--color-border] rounded px-3 py-1.5 text-sm text-[--color-text-primary] placeholder:text-[--color-text-tertiary] focus:outline-none focus:border-emerald-600"
+                  className="flex-1 bg-(--color-elevated) border border-(--color-border) rounded px-3 py-1.5 text-sm text-(--color-text-primary) placeholder:text-(--color-text-tertiary) focus:outline-none focus:border-emerald-600"
                 />
                 <button
                   onClick={handleSaveSecret}
                   disabled={saving || !secretInput.trim()}
-                  className="px-3 py-1.5 text-xs font-medium bg-emerald-700 text-emerald-100 rounded hover:bg-[--color-accent] disabled:opacity-40"
+                  className="px-3 py-1.5 text-xs font-medium bg-emerald-700 text-emerald-100 rounded hover:bg-(--color-accent) disabled:opacity-40"
                 >
                   {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Save"}
                 </button>

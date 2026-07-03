@@ -25,53 +25,53 @@ function laneStatusStyle(status: string): { color: string; bg: string; label: st
   switch (status) {
     case "pending":
       return {
-        color: "text-[--color-text-tertiary]",
-        bg: "bg-[--color-elevated]",
+        color: "text-(--color-text-tertiary)",
+        bg: "bg-(--color-elevated)",
         label: "Pending",
       };
     case "running":
-      return { color: "text-[--color-sev-info]", bg: "bg-[--color-sev-info-bg]", label: "Running" };
+      return { color: "text-(--color-sev-info)", bg: "bg-(--color-sev-info-bg)", label: "Running" };
     case "completed":
       return {
-        color: "text-[--color-state-ready]",
-        bg: "bg-[--color-state-ready-bg]",
+        color: "text-(--color-state-ready)",
+        bg: "bg-(--color-state-ready-bg)",
         label: "Done",
       };
     case "failed":
       return {
-        color: "text-[--color-sev-blocker]",
-        bg: "bg-[--color-sev-blocker-bg]",
+        color: "text-(--color-sev-blocker)",
+        bg: "bg-(--color-sev-blocker-bg)",
         label: "Failed",
       };
     case "timed_out":
       return {
-        color: "text-[--color-sev-critical]",
-        bg: "bg-[--color-sev-critical-bg]",
+        color: "text-(--color-sev-critical)",
+        bg: "bg-(--color-sev-critical-bg)",
         label: "Timed Out",
       };
     case "cancelled":
       return {
-        color: "text-[--color-text-tertiary]",
-        bg: "bg-[--color-elevated]",
+        color: "text-(--color-text-tertiary)",
+        bg: "bg-(--color-elevated)",
         label: "Cancelled",
       };
     default:
-      return { color: "text-[--color-text-tertiary]", bg: "bg-[--color-elevated]", label: status };
+      return { color: "text-(--color-text-tertiary)", bg: "bg-(--color-elevated)", label: status };
   }
 }
 
 function StatusIcon({ status }: { status: string }) {
   switch (status) {
     case "running":
-      return <Loader2 className="w-3.5 h-3.5 animate-spin text-[--color-sev-info]" />;
+      return <Loader2 className="w-3.5 h-3.5 animate-spin text-(--color-sev-info)" />;
     case "completed":
-      return <CheckCircle2 className="w-3.5 h-3.5 text-[--color-state-ready]" />;
+      return <CheckCircle2 className="w-3.5 h-3.5 text-(--color-state-ready)" />;
     case "failed":
-      return <XCircle className="w-3.5 h-3.5 text-[--color-sev-blocker]" />;
+      return <XCircle className="w-3.5 h-3.5 text-(--color-sev-blocker)" />;
     case "timed_out":
-      return <Clock className="w-3.5 h-3.5 text-[--color-sev-critical]" />;
+      return <Clock className="w-3.5 h-3.5 text-(--color-sev-critical)" />;
     default:
-      return <div className="w-3.5 h-3.5 rounded-full bg-[--color-border]" />;
+      return <div className="w-3.5 h-3.5 rounded-full bg-(--color-border)" />;
   }
 }
 
@@ -84,10 +84,10 @@ export default function LaneProgress({ lanes }: LaneProgressProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-[--color-text-tertiary]">
+        <span className="text-[11px] font-medium uppercase tracking-wider text-(--color-text-tertiary)">
           Analysis Lanes
         </span>
-        <span className="text-[11px] text-[--color-text-tertiary]">
+        <span className="text-[11px] text-(--color-text-tertiary)">
           {completed}/{total}
         </span>
       </div>
@@ -98,7 +98,7 @@ export default function LaneProgress({ lanes }: LaneProgressProps) {
           return (
             <div
               key={lane.lane_id}
-              className={`flex flex-col gap-0.5 px-3 py-1.5 rounded-md border border-[--color-border-subtle] min-w-0 ${style.bg}`}
+              className={`flex flex-col gap-0.5 px-3 py-1.5 rounded-md border border-(--color-border-subtle) min-w-0 ${style.bg}`}
             >
               <div className="flex items-center gap-2 min-w-0">
                 <Icon className={`w-3.5 h-3.5 shrink-0 ${style.color}`} />
@@ -107,7 +107,7 @@ export default function LaneProgress({ lanes }: LaneProgressProps) {
                 </span>
                 <StatusIcon status={lane.status} />
                 {lane.status === "completed" && lane.finding_count > 0 && (
-                  <span className="text-[11px] text-[--color-text-tertiary]">
+                  <span className="text-[11px] text-(--color-text-tertiary)">
                     {lane.finding_count}
                   </span>
                 )}
@@ -118,7 +118,7 @@ export default function LaneProgress({ lanes }: LaneProgressProps) {
         })}
       </div>
       {lanes.some((l) => l.error_message) && (
-        <div className="text-[11px] text-[--color-sev-blocker]">
+        <div className="text-[11px] text-(--color-sev-blocker)">
           {lanes
             .filter((l) => l.error_message)
             .map((l) => `${l.lane_id}: ${l.error_message}`)

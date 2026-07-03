@@ -683,7 +683,7 @@ export interface InboxMetadataFreshness {
 }
 
 export interface InboxReviewFreshness {
-  state: "current" | "stale";
+  state: "current" | "stale" | "not_reviewed";
   reviewed_at: string | null;
   reviewed_head_sha: string | null;
   current_head_sha: string | null;

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1580 360" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">SignalPR logo</title>
+  <desc id="desc">SignalPR wordmark with a signal path forming an abstract S.</desc>
+
+  <defs>
+    <linearGradient id="surface" x1="20" y1="20" x2="340" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#11181A" />
+      <stop offset="1" stop-color="#0B0F12" />
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(20 20)">
+    <rect width="320" height="320" rx="72" fill="url(#surface)" />
+    <rect x="16" y="16" width="288" height="288" rx="58" stroke="#EDEDED" stroke-opacity="0.14" stroke-width="4" />
+
+    <g stroke-linecap="round" stroke-linejoin="round">
+      <path d="M230 80H115A45 45 0 0 0 115 170H175" stroke="#EDEDED" stroke-width="15" />
+      <path d="M115 140H230" stroke="#EDEDED" stroke-width="15" />
+      <path d="M115 180H175C206 180 225 200 225 230C225 260 205 270 175 270H70" stroke="#22C57E" stroke-width="15" />
+      <path d="M70 220H175C196 220 205 210 205 200C205 189 195 180 175 180" stroke="#22C57E" stroke-width="15" />
+    </g>
+
+    <circle cx="230" cy="80" r="11" fill="#EDEDED" />
+    <circle cx="230" cy="140" r="11" fill="#22C57E" />
+    <circle cx="70" cy="220" r="11" fill="#22C57E" />
+    <circle cx="70" cy="270" r="11" fill="#22C57E" />
+  </g>
+
+  <g fill="#EDEDED" transform="translate(410 95)">
+    <path d="M0 132C34 154 77 166 122 166C192 166 236 134 236 86C236 43 207 20 140 8L96 0C62 -6 46 -16 46 -35C46 -58 70 -72 109 -72C146 -72 182 -61 216 -40V-86C184 -104 148 -113 108 -113C43 -113 1 -80 1 -31C1 13 31 38 94 49L138 57C174 64 190 74 190 92C190 114 166 126 123 126C80 126 39 113 0 88V132Z" />
+    <path d="M284 160H328V-107H284V160Z" />
+    <path d="M390 160H434V32C434 -9 461 -36 500 -36C538 -36 561 -12 561 28V160H605V21C605 -42 567 -78 509 -78C475 -78 449 -65 432 -40V-73H390V160Z" />
+    <path d="M662 160H706V60H773C834 60 873 27 873 -24C873 -76 834 -107 773 -107H662V160ZM706 20V-67H768C807 -67 828 -52 828 -24C828 4 807 20 768 20H706Z" />
+    <path d="M921 160H965V58H1019L1083 160H1135L1065 50C1104 37 1127 9 1127 -27C1127 -78 1088 -107 1028 -107H921V160ZM965 19V-67H1024C1062 -67 1083 -52 1083 -25C1083 3 1062 19 1024 19H965Z" />
+  </g>
+
+  <text x="414" y="294" fill="#9CA3AF" font-family="Geist Mono, SFMono-Regular, ui-monospace, monospace" font-size="30" letter-spacing="7">HIGH-SIGNAL PULL REQUEST REVIEW</text>
+</svg>

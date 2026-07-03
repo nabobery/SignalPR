@@ -240,22 +240,47 @@ pub fn resolve_config(
 }
 
 /// Select a review provider based on preference and availability.
-/// Falls back through: preferred → codex (app-server) → codex (exec) → claude → mock.
+/// Falls back through: preferred → codex (app-server) → codex (exec) → claude → copilot → opencode.
 ///
 /// The `codex` preference now means "Codex App Server" (managed child process).
 /// Use `codex_exec` for the legacy one-shot `codex exec` provider.
+///
+/// The mock provider is never selected implicitly: it is only used when the
+/// preference is explicitly set to `mock`. When no provider is healthy the
+/// selection fails with a per-provider reason list instead of silently
+/// producing fixture findings.
 pub struct SelectedProvider {
     pub provider: Arc<dyn ReviewProvider>,
     pub trace: ProviderSelectionTrace,
 }
 
-pub async fn select_provider(app: &AppHandle, preference: &str) -> Arc<dyn ReviewProvider> {
-    select_provider_with_trace(app, preference).await.provider
+pub async fn select_provider(
+    app: &AppHandle,
+    preference: &str,
+) -> Result<Arc<dyn ReviewProvider>, crate::errors::AppError> {
+    Ok(select_provider_with_trace(app, preference).await?.provider)
 }
 
-pub async fn select_provider_with_trace(app: &AppHandle, preference: &str) -> SelectedProvider {
+pub async fn select_provider_with_trace(
+    app: &AppHandle,
+    preference: &str,
+) -> Result<SelectedProvider, crate::errors::AppError> {
     let mut checks = Vec::new();
     let canonical_preference = canonical_provider_id(preference).to_string();
+
+    // Mock is an explicit opt-in for development and tests only.
+    if preference == "mock" {
+        checks.push(ProviderSelectionCheck {
+            provider_id: "mock".into(),
+            available: true,
+            reason: "explicit_preference".into(),
+            message: Some("Mock provider explicitly selected in settings".into()),
+        });
+        return Ok(SelectedProvider {
+            provider: Arc::new(MockProvider::with_default_fixture()),
+            trace: build_selection_trace(&canonical_preference, "mock", checks),
+        });
+    }
 
     if preference != "auto" {
         if let Some(selected) = try_select_named_provider(
@@ -268,36 +293,69 @@ pub async fn select_provider_with_trace(app: &AppHandle, preference: &str) -> Se
         {
             let selected_provider_id =
                 canonical_provider_id(selected.provider.provider_name()).to_string();
-            return SelectedProvider {
+            return Ok(SelectedProvider {
                 provider: selected.provider,
                 trace: build_selection_trace(&canonical_preference, &selected_provider_id, checks),
-            };
+            });
         }
     }
 
     let auto_chain = ["codex_app_server", "codex", "claude", "copilot", "opencode"];
+
+    // First pass: prefer a fully release-gated provider.
     for provider_id in auto_chain {
         if let Some(selected) =
             try_select_named_provider(app, provider_id, ProviderSelectionIntent::Auto, &mut checks)
                 .await
         {
-            return SelectedProvider {
+            return Ok(SelectedProvider {
                 provider: selected.provider,
                 trace: build_selection_trace(&canonical_preference, provider_id, checks),
-            };
+            });
         }
     }
 
-    checks.push(ProviderSelectionCheck {
-        provider_id: "mock".into(),
-        available: true,
-        reason: "fallback".into(),
-        message: Some("No configured providers were healthy, using mock provider".into()),
-    });
-    SelectedProvider {
-        provider: Arc::new(MockProvider::with_default_fixture()),
-        trace: build_selection_trace(&canonical_preference, "mock", checks),
+    // Second pass: no gated provider was available, so fall back to any healthy
+    // provider even if its eval/conformance coverage is still incomplete. The
+    // release gate is governance metadata, not a runtime availability check;
+    // blocking on it strands users whose only installed CLI is "planned".
+    // The trace records these as `selected_ungated` and the UI already surfaces
+    // the caveat via the "Degraded provider warnings" panel.
+    for provider_id in auto_chain {
+        if let Some(selected) = try_select_named_provider(
+            app,
+            provider_id,
+            ProviderSelectionIntent::AutoRelaxed,
+            &mut checks,
+        )
+        .await
+        {
+            return Ok(SelectedProvider {
+                provider: selected.provider,
+                trace: build_selection_trace(&canonical_preference, provider_id, checks),
+            });
+        }
     }
+
+    let detail = if checks.is_empty() {
+        "no providers were checked".to_string()
+    } else {
+        checks
+            .iter()
+            .map(|c| match &c.message {
+                Some(msg) => format!("{}: {} ({})", c.provider_id, c.reason, msg),
+                None => format!("{}: {}", c.provider_id, c.reason),
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    Err(crate::errors::AppError::Provider(
+        crate::errors::ProviderError::NotAvailable(format!(
+            "No review provider is available (preference: {canonical_preference}). \
+             Install and authenticate a provider CLI, or check Settings > Providers. \
+             Checks — {detail}"
+        )),
+    ))
 }
 
 struct SelectedProviderInternal {
@@ -306,7 +364,13 @@ struct SelectedProviderInternal {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProviderSelectionIntent {
+    /// Auto fallback that enforces the release gate (conformance + eval).
     Auto,
+    /// Auto fallback that ignores the release gate. Used as a second pass so a
+    /// healthy provider is never rejected purely because its eval coverage is
+    /// still "planned" — the release gate is governance metadata, not a runtime
+    /// availability signal. The trace records this as `selected_ungated`.
+    AutoRelaxed,
     Manual,
 }
 
@@ -323,7 +387,7 @@ fn selection_preflight_skip_reason(
     }
 
     match intent {
-        ProviderSelectionIntent::Auto => {
+        ProviderSelectionIntent::Auto | ProviderSelectionIntent::AutoRelaxed => {
             if !selection_eligible_for_auto(capabilities) {
                 return Some("opt_in_only");
             }
@@ -361,6 +425,19 @@ fn selection_skip_reason(
     None
 }
 
+/// Whether a healthy provider is only being selected because the release gate
+/// was relaxed (i.e. strict Auto would have rejected it as `gate_blocked`).
+fn selected_despite_gate(
+    capabilities: &ProviderCapabilities,
+    health: &crate::providers::traits::ProviderHealth,
+    intent: ProviderSelectionIntent,
+) -> bool {
+    matches!(intent, ProviderSelectionIntent::AutoRelaxed) && health.available && {
+        let setup_state = determine_setup_state(capabilities, health, None);
+        !release_gate_passed(capabilities, &setup_state)
+    }
+}
+
 async fn try_select_named_provider(
     app: &AppHandle,
     provider_id: &str,
@@ -386,10 +463,15 @@ async fn try_select_named_provider(
                         selected_provider_id: &str|
      -> Option<SelectedProviderInternal> {
         let skip_reason = selection_skip_reason(&capabilities, &health, intent);
+        let selected_reason = if selected_despite_gate(&capabilities, &health, intent) {
+            "selected_ungated"
+        } else {
+            "selected"
+        };
         checks.push(ProviderSelectionCheck {
             provider_id: selected_provider_id.into(),
             available: skip_reason.is_none(),
-            reason: skip_reason.unwrap_or("selected").into(),
+            reason: skip_reason.unwrap_or(selected_reason).into(),
             message: health.message.clone(),
         });
         if skip_reason.is_none() {
@@ -803,6 +885,64 @@ mod tests {
             selection_skip_reason(&caps, &healthy, ProviderSelectionIntent::Manual),
             None
         );
+    }
+
+    #[test]
+    fn test_auto_relaxed_selects_gated_provider_when_healthy() {
+        // codex is healthy but gate-blocked under strict Auto (eval "planned").
+        // The relaxed pass must select it and mark it selected_ungated.
+        let caps = get_provider_caps("codex").expect("codex capabilities");
+        let healthy = ProviderHealth {
+            available: true,
+            version: Some("1.0.0".into()),
+            message: None,
+        };
+
+        assert_eq!(
+            selection_skip_reason(&caps, &healthy, ProviderSelectionIntent::AutoRelaxed),
+            None
+        );
+        assert!(selected_despite_gate(
+            &caps,
+            &healthy,
+            ProviderSelectionIntent::AutoRelaxed
+        ));
+    }
+
+    #[test]
+    fn test_auto_relaxed_still_skips_unhealthy_provider() {
+        let caps = get_provider_caps("codex").expect("codex capabilities");
+        let unhealthy = ProviderHealth {
+            available: false,
+            version: None,
+            message: Some("not found".into()),
+        };
+        assert_eq!(
+            selection_skip_reason(&caps, &unhealthy, ProviderSelectionIntent::AutoRelaxed),
+            Some("unhealthy")
+        );
+        assert!(!selected_despite_gate(
+            &caps,
+            &unhealthy,
+            ProviderSelectionIntent::AutoRelaxed
+        ));
+    }
+
+    #[test]
+    fn test_fully_gated_provider_not_marked_ungated() {
+        // claude has eval "covered", so even under AutoRelaxed it is a normal
+        // "selected", not "selected_ungated".
+        let caps = get_provider_caps("claude").expect("claude capabilities");
+        let healthy = ProviderHealth {
+            available: true,
+            version: None,
+            message: None,
+        };
+        assert!(!selected_despite_gate(
+            &caps,
+            &healthy,
+            ProviderSelectionIntent::AutoRelaxed
+        ));
     }
 
     #[test]

@@ -117,7 +117,7 @@ export function PierreDiffPanel({ state, onRevealFinding }: PierreDiffPanelProps
         (SEVERITY_RANK[a.severity] ?? 4) <= (SEVERITY_RANK[b.severity] ?? 4) ? a : b,
       );
       return (
-        <span className="text-xs px-1.5 py-0.5 rounded bg-[--color-elevated] text-[--color-text-secondary]">
+        <span className="text-xs px-1.5 py-0.5 rounded bg-(--color-elevated) text-(--color-text-secondary)">
           {fileFindings.length} file-level &middot; {highest.severity}
         </span>
       );
@@ -140,7 +140,7 @@ export function PierreDiffPanel({ state, onRevealFinding }: PierreDiffPanelProps
 
   if (fileDiffs.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-[--color-text-tertiary] text-sm">
+      <div className="flex items-center justify-center h-full text-(--color-text-tertiary) text-sm">
         No diff available.
       </div>
     );

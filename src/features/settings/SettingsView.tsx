@@ -19,10 +19,10 @@ export function SettingsView() {
   const [activeTab, setActiveTab] = useState<Tab>("general");
 
   return (
-    <div className="h-full flex bg-[--color-base] text-[--color-text-primary]">
+    <div className="h-full flex bg-(--color-base) text-(--color-text-primary)">
       {/* Vertical tab list */}
-      <aside className="w-44 shrink-0 border-r border-[--color-border-subtle] py-5 px-3">
-        <h1 className="px-2 mb-4 text-xs font-semibold uppercase tracking-wider text-[--color-text-tertiary]">
+      <aside className="w-44 shrink-0 border-r border-(--color-border-subtle) py-5 px-3">
+        <h1 className="px-2 mb-4 text-xs font-semibold uppercase tracking-wider text-(--color-text-tertiary)">
           Settings
         </h1>
         <nav className="flex flex-col gap-0.5">
@@ -32,8 +32,8 @@ export function SettingsView() {
               onClick={() => setActiveTab(tab.id)}
               className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-colors ${
                 activeTab === tab.id
-                  ? "bg-[--color-elevated] text-[--color-text-primary] font-medium"
-                  : "text-[--color-text-secondary] hover:text-[--color-text-primary] hover:bg-[--color-elevated]/60"
+                  ? "bg-(--color-elevated) text-(--color-text-primary) font-medium"
+                  : "text-(--color-text-secondary) hover:text-(--color-text-primary) hover:bg-(--color-elevated)/60"
               }`}
             >
               {tab.label}

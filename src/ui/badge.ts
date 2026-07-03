@@ -5,6 +5,7 @@ export type BadgeStyle = {
 };
 
 export const queueLabels: Record<string, string> = {
+  ready_to_start: "Ready to start",
   needs_your_review: "Needs your review",
   updated_since_review: "Updated since review",
   review_requested: "Review requested",
@@ -16,45 +17,50 @@ export const queueLabels: Record<string, string> = {
 };
 
 const queueStyles: Record<string, BadgeStyle> = {
+  ready_to_start: {
+    text: "text-(--color-state-action)",
+    bg: "bg-(--color-state-action-bg)",
+    border: "border-(--color-state-action)/25",
+  },
   needs_your_review: {
-    text: "text-[--color-state-action]",
-    bg: "bg-[--color-state-action-bg]",
-    border: "border-[--color-state-action]/25",
+    text: "text-(--color-state-action)",
+    bg: "bg-(--color-state-action-bg)",
+    border: "border-(--color-state-action)/25",
   },
   updated_since_review: {
-    text: "text-[--color-state-action]",
-    bg: "bg-[--color-state-action-bg]",
-    border: "border-[--color-state-action]/25",
+    text: "text-(--color-state-action)",
+    bg: "bg-(--color-state-action-bg)",
+    border: "border-(--color-state-action)/25",
   },
   review_requested: {
-    text: "text-[--color-state-action]",
-    bg: "bg-[--color-state-action-bg]",
-    border: "border-[--color-state-action]/25",
+    text: "text-(--color-state-action)",
+    bg: "bg-(--color-state-action-bg)",
+    border: "border-(--color-state-action)/25",
   },
   attention_needed: {
-    text: "text-[--color-state-alert]",
-    bg: "bg-[--color-state-alert-bg]",
-    border: "border-[--color-state-alert]/25",
+    text: "text-(--color-state-alert)",
+    bg: "bg-(--color-state-alert-bg)",
+    border: "border-(--color-state-alert)/25",
   },
   in_progress: {
-    text: "text-[--color-state-progress]",
-    bg: "bg-[--color-state-progress-bg]",
-    border: "border-[--color-state-progress]/25",
+    text: "text-(--color-state-progress)",
+    bg: "bg-(--color-state-progress-bg)",
+    border: "border-(--color-state-progress)/25",
   },
   ready_to_submit: {
-    text: "text-[--color-state-ready]",
-    bg: "bg-[--color-state-ready-bg]",
-    border: "border-[--color-state-ready]/25",
+    text: "text-(--color-state-ready)",
+    bg: "bg-(--color-state-ready-bg)",
+    border: "border-(--color-state-ready)/25",
   },
   waiting_on_author: {
-    text: "text-[--color-state-waiting]",
-    bg: "bg-[--color-state-waiting-bg]",
-    border: "border-[--color-state-waiting]/25",
+    text: "text-(--color-state-waiting)",
+    bg: "bg-(--color-state-waiting-bg)",
+    border: "border-(--color-state-waiting)/25",
   },
   submitted_recently: {
-    text: "text-[--color-state-done]",
-    bg: "bg-[--color-state-done-bg]",
-    border: "border-[--color-state-done]/25",
+    text: "text-(--color-state-done)",
+    bg: "bg-(--color-state-done-bg)",
+    border: "border-(--color-state-done)/25",
   },
 };
 
@@ -62,42 +68,44 @@ export const statusLabels: Record<string, string> = {
   running_agents: "Analyzing",
   cleaning: "Cleaning",
   created: "Queued",
+  not_started: "Not started",
 };
 
 const statusStyles: Record<string, string> = {
-  ready: "text-[--color-state-ready]",
-  submitted: "text-[--color-state-action]",
-  failed: "text-[--color-state-alert]",
-  running_agents: "text-[--color-state-progress]",
-  cleaning: "text-[--color-state-progress]",
-  created: "text-[--color-text-tertiary]",
+  ready: "text-(--color-state-ready)",
+  submitted: "text-(--color-state-action)",
+  failed: "text-(--color-state-alert)",
+  running_agents: "text-(--color-state-progress)",
+  cleaning: "text-(--color-state-progress)",
+  created: "text-(--color-text-tertiary)",
+  not_started: "text-(--color-state-action)",
 };
 
 export const severityStyles: Record<string, BadgeStyle> = {
   blocker: {
-    text: "text-[--color-sev-blocker]",
-    bg: "bg-[--color-sev-blocker-bg]",
-    border: "border-[--color-sev-blocker]/25",
+    text: "text-(--color-sev-blocker)",
+    bg: "bg-(--color-sev-blocker-bg)",
+    border: "border-(--color-sev-blocker)/25",
   },
   critical: {
-    text: "text-[--color-sev-critical]",
-    bg: "bg-[--color-sev-critical-bg]",
-    border: "border-[--color-sev-critical]/25",
+    text: "text-(--color-sev-critical)",
+    bg: "bg-(--color-sev-critical-bg)",
+    border: "border-(--color-sev-critical)/25",
   },
   warning: {
-    text: "text-[--color-sev-warning]",
-    bg: "bg-[--color-sev-warning-bg]",
-    border: "border-[--color-sev-warning]/25",
+    text: "text-(--color-sev-warning)",
+    bg: "bg-(--color-sev-warning-bg)",
+    border: "border-(--color-sev-warning)/25",
   },
   info: {
-    text: "text-[--color-sev-info]",
-    bg: "bg-[--color-sev-info-bg]",
-    border: "border-[--color-sev-info]/25",
+    text: "text-(--color-sev-info)",
+    bg: "bg-(--color-sev-info-bg)",
+    border: "border-(--color-sev-info)/25",
   },
   nitpick: {
-    text: "text-[--color-sev-nitpick]",
-    bg: "bg-[--color-sev-nitpick-bg]",
-    border: "border-[--color-sev-nitpick]/25",
+    text: "text-(--color-sev-nitpick)",
+    bg: "bg-(--color-sev-nitpick-bg)",
+    border: "border-(--color-sev-nitpick)/25",
   },
 };
 
@@ -110,7 +118,7 @@ export function queueBadgeLabel(state: string): string {
 }
 
 export function statusTextClass(status: string): string {
-  return statusStyles[status] ?? "text-[--color-text-tertiary]";
+  return statusStyles[status] ?? "text-(--color-text-tertiary)";
 }
 
 export function statusLabel(status: string): string {

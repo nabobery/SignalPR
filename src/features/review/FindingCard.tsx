@@ -132,34 +132,34 @@ export function FindingCard({
     return (
       <div
         ref={cardRef}
-        className={`border rounded-lg p-3 bg-[--color-surface] ${focused ? "border-[--color-sev-info] ring-1 ring-[--color-sev-info]/40" : "border-[--color-border-subtle]"}`}
+        className={`border rounded-lg p-3 bg-(--color-surface) ${focused ? "border-(--color-sev-info) ring-1 ring-(--color-sev-info)/40" : "border-(--color-border-subtle)"}`}
       >
         <div className="flex items-start gap-2">
-          <Info className="w-4 h-4 mt-0.5 shrink-0 text-[--color-text-tertiary]" />
+          <Info className="w-4 h-4 mt-0.5 shrink-0 text-(--color-text-tertiary)" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-semibold uppercase text-[--color-text-tertiary]">
+              <span className="text-xs font-semibold uppercase text-(--color-text-tertiary)">
                 suppressed
               </span>
-              <span className="text-sm font-medium text-[--color-text-secondary] truncate">
+              <span className="text-sm font-medium text-(--color-text-secondary) truncate">
                 {finding.title}
               </span>
-              <span className="text-xs text-[--color-text-tertiary] ml-auto shrink-0">
+              <span className="text-xs text-(--color-text-tertiary) ml-auto shrink-0">
                 {Math.round(finding.confidence * 100)}%
               </span>
             </div>
             {finding.file_path && (
-              <code className="text-xs text-[--color-text-tertiary] font-mono block mb-2">
+              <code className="text-xs text-(--color-text-tertiary) font-mono block mb-2">
                 {finding.file_path}
               </code>
             )}
-            <p className="text-sm text-[--color-text-tertiary] whitespace-pre-wrap">
+            <p className="text-sm text-(--color-text-tertiary) whitespace-pre-wrap">
               {displayBody}
             </p>
             <div className="flex gap-3 mt-2 items-center">
               <button
                 onClick={handleRestore}
-                className="flex items-center gap-1 text-xs text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors"
+                className="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-text-primary) transition-colors"
               >
                 <Check className="w-3 h-3" /> Restore
               </button>
@@ -173,7 +173,7 @@ export function FindingCard({
   return (
     <div
       ref={cardRef}
-      className={`border rounded-lg p-3 ${config.bg} ${focused ? "border-[--color-accent] ring-1 ring-[--color-accent]/40" : "border-[--color-border-subtle]"}`}
+      className={`border rounded-lg p-3 ${config.bg} ${focused ? "border-(--color-accent) ring-1 ring-(--color-accent)/40" : "border-(--color-border-subtle)"}`}
     >
       <div className="flex items-start gap-2">
         <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${config.color}`} />
@@ -183,22 +183,22 @@ export function FindingCard({
               {effectiveSeverity}
             </span>
             {!STANDARD_AGENT_TYPES.has(finding.agent_type) && (
-              <span className="bg-[--color-state-waiting-bg] text-[--color-state-waiting] text-xs px-1.5 py-0.5 rounded capitalize">
+              <span className="bg-(--color-state-waiting-bg) text-(--color-state-waiting) text-xs px-1.5 py-0.5 rounded capitalize">
                 {finding.agent_type.replace(/_/g, " ")}
               </span>
             )}
-            <span className="text-sm font-medium text-[--color-text-primary] truncate">
+            <span className="text-sm font-medium text-(--color-text-primary) truncate">
               {finding.title}
             </span>
             {sessionDecision && (
               <span
-                className={`text-xs px-1.5 py-0.5 rounded ${sessionDecision === "accept" ? "bg-[--color-state-ready-bg] text-[--color-state-ready]" : "bg-[--color-elevated] text-[--color-text-secondary]"}`}
+                className={`text-xs px-1.5 py-0.5 rounded ${sessionDecision === "accept" ? "bg-(--color-state-ready-bg) text-(--color-state-ready)" : "bg-(--color-elevated) text-(--color-text-secondary)"}`}
               >
                 {sessionDecision === "accept" ? "Accepted" : "Deferred"}
               </span>
             )}
             {finding.baseline_decision && !sessionDecision && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-[--color-elevated] text-[--color-text-tertiary] italic">
+              <span className="text-xs px-1.5 py-0.5 rounded bg-(--color-elevated) text-(--color-text-tertiary) italic">
                 Prev: {finding.baseline_decision}
               </span>
             )}
@@ -206,22 +206,22 @@ export function FindingCard({
               <span
                 className={`text-xs px-1.5 py-0.5 rounded ${
                   finding.delta_state === "new"
-                    ? "bg-[--color-state-ready-bg] text-[--color-state-ready]"
+                    ? "bg-(--color-state-ready-bg) text-(--color-state-ready)"
                     : finding.delta_state === "stale"
-                      ? "bg-[--color-sev-warning-bg] text-[--color-sev-warning]"
-                      : "bg-[--color-elevated] text-[--color-text-tertiary]"
+                      ? "bg-(--color-sev-warning-bg) text-(--color-sev-warning)"
+                      : "bg-(--color-elevated) text-(--color-text-tertiary)"
                 }`}
               >
                 {finding.delta_state}
               </span>
             )}
-            <span className="text-xs text-[--color-text-tertiary] ml-auto shrink-0">
+            <span className="text-xs text-(--color-text-tertiary) ml-auto shrink-0">
               {Math.round(finding.confidence * 100)}%
             </span>
           </div>
 
           {finding.file_path && (
-            <code className="text-xs text-[--color-text-secondary] font-mono block mb-2">
+            <code className="text-xs text-(--color-text-secondary) font-mono block mb-2">
               {finding.file_path}
               {finding.is_anchored && finding.line_start && (
                 <>
@@ -241,8 +241,8 @@ export function FindingCard({
                   key={badge.key}
                   className={`text-xs px-1.5 py-0.5 rounded ${
                     badge.tone === "support"
-                      ? "bg-[--color-state-ready-bg] text-[--color-state-ready]"
-                      : "bg-[--color-elevated] text-[--color-text-secondary]"
+                      ? "bg-(--color-state-ready-bg) text-(--color-state-ready)"
+                      : "bg-(--color-elevated) text-(--color-text-secondary)"
                   }`}
                 >
                   {badge.label}
@@ -254,7 +254,7 @@ export function FindingCard({
                 {trust.supportBadges.map((badge) => (
                   <span
                     key={badge.key}
-                    className="text-xs px-1.5 py-0.5 rounded bg-[--color-sev-info-bg] text-[--color-sev-info]"
+                    className="text-xs px-1.5 py-0.5 rounded bg-(--color-sev-info-bg) text-(--color-sev-info)"
                   >
                     {badge.label}
                   </span>
@@ -262,7 +262,7 @@ export function FindingCard({
                 {trust.warningBadges.map((badge) => (
                   <span
                     key={badge.key}
-                    className="text-xs px-1.5 py-0.5 rounded bg-[--color-sev-warning-bg] text-[--color-sev-warning]"
+                    className="text-xs px-1.5 py-0.5 rounded bg-(--color-sev-warning-bg) text-(--color-sev-warning)"
                   >
                     {badge.label}
                   </span>
@@ -277,13 +277,13 @@ export function FindingCard({
                 value={editBody}
                 onChange={(e) => setEditBody(e.target.value)}
                 rows={3}
-                className="w-full bg-[--color-elevated] border border-[--color-border] rounded px-2 py-1 text-sm text-[--color-text-primary] focus:outline-none focus:border-[--color-border-strong] resize-y"
+                className="w-full bg-(--color-elevated) border border-(--color-border) rounded px-2 py-1 text-sm text-(--color-text-primary) focus:outline-none focus:border-(--color-border-strong) resize-y"
               />
               <div className="flex gap-2">
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex items-center gap-1 text-xs text-[--color-state-ready] hover:opacity-80 transition-opacity"
+                  className="flex items-center gap-1 text-xs text-(--color-state-ready) hover:opacity-80 transition-opacity"
                 >
                   <Check className="w-3 h-3" /> Save
                 </button>
@@ -292,14 +292,14 @@ export function FindingCard({
                     setEditing(false);
                     setEditBody(displayBody);
                   }}
-                  className="flex items-center gap-1 text-xs text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors"
+                  className="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-text-primary) transition-colors"
                 >
                   <X className="w-3 h-3" /> Cancel
                 </button>
               </div>
             </div>
           ) : (
-            <p className="text-sm text-[--color-text-secondary] whitespace-pre-wrap">
+            <p className="text-sm text-(--color-text-secondary) whitespace-pre-wrap">
               {displayBody}
             </p>
           )}
@@ -310,13 +310,13 @@ export function FindingCard({
                 <>
                   <button
                     onClick={handleAccept}
-                    className="flex items-center gap-1 text-xs text-[--color-accent] hover:opacity-80 transition-opacity"
+                    className="flex items-center gap-1 text-xs text-(--color-accent) hover:opacity-80 transition-opacity"
                   >
                     <ThumbsUp className="w-3 h-3" /> Accept
                   </button>
                   <button
                     onClick={handleDefer}
-                    className="flex items-center gap-1 text-xs text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors"
+                    className="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-text-primary) transition-colors"
                   >
                     <Clock className="w-3 h-3" /> Defer
                   </button>
@@ -324,38 +324,38 @@ export function FindingCard({
               )}
               <button
                 onClick={() => setEditing(true)}
-                className="flex items-center gap-1 text-xs text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors"
+                className="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-text-primary) transition-colors"
               >
                 <Pencil className="w-3 h-3" /> Edit
               </button>
               <button
                 onClick={handleSuppress}
-                className="flex items-center gap-1 text-xs text-[--color-text-secondary] hover:text-[--color-sev-blocker] transition-colors"
+                className="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-sev-blocker) transition-colors"
               >
                 <X className="w-3 h-3" /> Suppress
               </button>
               {hasPendingFix && (
                 <button
                   onClick={() => setShowFix((v) => !v)}
-                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-[--color-sev-warning-bg] text-[--color-sev-warning] hover:opacity-80 transition-opacity"
+                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-(--color-sev-warning-bg) text-(--color-sev-warning) hover:opacity-80 transition-opacity"
                 >
                   <Wrench className="w-3 h-3" /> Fix available
                 </button>
               )}
               {fixApplied && (
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-[--color-state-ready-bg] text-[--color-state-ready]">
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-(--color-state-ready-bg) text-(--color-state-ready)">
                   <Check className="w-3 h-3" /> Fix applied
                 </span>
               )}
               {fixRejected && (
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-[--color-elevated] text-[--color-text-tertiary]">
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-(--color-elevated) text-(--color-text-tertiary)">
                   Fix rejected
                 </span>
               )}
               {finding.evidence && (
                 <button
                   onClick={() => setShowEvidence((v) => !v)}
-                  className="text-xs text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors"
+                  className="text-xs text-(--color-text-secondary) hover:text-(--color-text-primary) transition-colors"
                 >
                   {showEvidence ? "Hide evidence" : "Evidence"}
                 </button>
@@ -363,7 +363,7 @@ export function FindingCard({
               {trust.explanation && (
                 <button
                   onClick={() => setShowWhy((v) => !v)}
-                  className="flex items-center gap-1 text-xs text-[--color-text-secondary] hover:text-[--color-text-primary] transition-colors"
+                  className="flex items-center gap-1 text-xs text-(--color-text-secondary) hover:text-(--color-text-primary) transition-colors"
                 >
                   <HelpCircle className="w-3 h-3" /> {showWhy ? "Hide why" : "Why?"}
                 </button>
@@ -372,16 +372,16 @@ export function FindingCard({
           )}
 
           {showEvidence && finding.evidence && (
-            <div className="mt-2 p-2 rounded bg-[--color-elevated] border border-[--color-border]">
-              <pre className="text-xs text-[--color-text-secondary] font-mono whitespace-pre-wrap break-words">
+            <div className="mt-2 p-2 rounded bg-(--color-elevated) border border-(--color-border)">
+              <pre className="text-xs text-(--color-text-secondary) font-mono whitespace-pre-wrap break-words">
                 {finding.evidence}
               </pre>
             </div>
           )}
 
           {showWhy && trust.explanation && (
-            <div className="mt-2 p-2 rounded bg-[--color-elevated] border border-[--color-border] space-y-1.5">
-              <div className="text-xs text-[--color-text-tertiary] font-medium uppercase tracking-wider">
+            <div className="mt-2 p-2 rounded bg-(--color-elevated) border border-(--color-border) space-y-1.5">
+              <div className="text-xs text-(--color-text-tertiary) font-medium uppercase tracking-wider">
                 Why this finding was surfaced
               </div>
               <TrustSection
@@ -447,10 +447,10 @@ export function FindingCard({
                 />
               )}
               {trust.explanation.ranking && (
-                <div className="text-xs text-[--color-text-secondary]">
+                <div className="text-xs text-(--color-text-secondary)">
                   Confidence: {Math.round(trust.explanation.ranking.confidence_raw * 100)}%
                   {trust.explanation.ranking.suppressed_reason && (
-                    <span className="ml-2 text-[--color-sev-warning]">
+                    <span className="ml-2 text-(--color-sev-warning)">
                       Suppressed: {trust.explanation.ranking.suppressed_reason}
                     </span>
                   )}
@@ -487,9 +487,9 @@ function TrustSection({ label, lines }: { label: string; lines: Array<string | n
 
   return (
     <div className="space-y-0.5">
-      <div className="text-xs text-[--color-text-tertiary]">{label}</div>
+      <div className="text-xs text-(--color-text-tertiary)">{label}</div>
       {visibleLines.map((line) => (
-        <div key={line} className="text-xs text-[--color-text-secondary]">
+        <div key={line} className="text-xs text-(--color-text-secondary)">
           {line}
         </div>
       ))}

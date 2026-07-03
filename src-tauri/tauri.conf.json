@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "signalpr",
-        "width": 800,
-        "height": 600
+        "title": "SignalPR",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "center": true
       }
     ],
     "security": {

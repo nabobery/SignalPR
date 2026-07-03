@@ -12,7 +12,7 @@ export function DiffPanel({ onRevealFinding }: DiffPanelProps) {
 
   if (!state.diffText) {
     return (
-      <div className="flex items-center justify-center h-full text-[--color-text-tertiary] text-sm">
+      <div className="flex items-center justify-center h-full text-(--color-text-tertiary) text-sm">
         No diff available.
       </div>
     );

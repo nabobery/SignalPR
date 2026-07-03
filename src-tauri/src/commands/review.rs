@@ -208,7 +208,7 @@ pub async fn start_review(
 
     // Choose the provider from the resolved preference and persist the selection trace.
     let selected_provider =
-        config::select_provider_with_trace(&app, &resolved.preferred_provider).await;
+        config::select_provider_with_trace(&app, &resolved.preferred_provider).await?;
     let provider: Arc<dyn ReviewProvider> = selected_provider.provider.clone();
     let provider_selection_json = serde_json::to_string(&selected_provider.trace)
         .map_err(|e| AppError::InvalidInput(e.to_string()))?;
@@ -2202,7 +2202,7 @@ pub async fn resume_review(
         config::resolve_config(&conn, repo_config.as_ref(), Some(Path::new(&cwd)))
     };
     let provider: Arc<dyn ReviewProvider> =
-        config::select_provider(&app, &resolved.preferred_provider).await;
+        config::select_provider(&app, &resolved.preferred_provider).await?;
 
     let cwd_path = PathBuf::from(&cwd);
     let lanes = {

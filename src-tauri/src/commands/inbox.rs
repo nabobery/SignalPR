@@ -132,13 +132,90 @@ fn load_projection_data(
     })
 }
 
+/// Build a synthesized inbox row for a fetched-but-never-reviewed PR.
+/// `run_id` is empty (the frontend treats "" as "no run yet") and the only
+/// offered action is starting a review.
+fn build_not_started_row(
+    candidate: &InboxPrCandidate,
+    github_login: Option<&str>,
+) -> DerivedQueueRow {
+    let metadata = parse_platform_metadata(candidate.platform_metadata_json.as_deref());
+    let platform_capabilities =
+        parse_platform_capabilities(candidate.platform_capabilities_json.as_deref());
+    let metadata_freshness =
+        derive_metadata_freshness(candidate.platform_metadata_fetched_at.as_deref());
+    let reviewer_signal = derive_reviewer_signal(&metadata, github_login);
+
+    let row = InboxReviewRow {
+        run_id: String::new(),
+        pr_id: candidate.pr_id.clone(),
+        pr_number: candidate.pr_number,
+        title: candidate.title.clone(),
+        author: candidate.author.clone(),
+        pr_url: candidate.pr_url.clone(),
+        status: "not_started".into(),
+        last_updated: candidate.last_activity_at.clone(),
+        active_finding_count: 0,
+        providers_used: Vec::new(),
+        queue_state: "ready_to_start".into(),
+        platform: metadata.platform.clone(),
+        repo_owner: candidate.repo_owner.clone(),
+        repo_name: candidate.repo_name.clone(),
+        remote_host: candidate.remote_host.clone(),
+        workspace_id: candidate.workspace_id.clone(),
+        workspace_path: candidate.workspace_path.clone(),
+        draft: metadata.draft,
+        has_saved_review_draft: false,
+        metadata_freshness: metadata_freshness.clone(),
+        platform_capabilities,
+        platform_capabilities_fetched_at: candidate.platform_capabilities_fetched_at.clone(),
+        review_freshness: InboxReviewFreshness {
+            state: "not_reviewed".into(),
+            reviewed_at: None,
+            reviewed_head_sha: None,
+            current_head_sha: metadata.head_sha.clone(),
+            has_unreviewed_updates: false,
+        },
+        reviewer_signal,
+        lane_health: InboxLaneHealth {
+            state: "none".into(),
+            failed_count: 0,
+            timed_out_count: 0,
+            running_count: 0,
+            completed_count: 0,
+        },
+        submission_health: InboxSubmissionHealth {
+            state: "none".into(),
+            submitted_at: None,
+            review_action: None,
+            commit_id: None,
+            error_message: None,
+        },
+        attention_reasons: Vec::new(),
+        allowed_actions: vec!["start_review".into()],
+    };
+
+    DerivedQueueRow {
+        attention_failed_run: false,
+        attention_failed_submission: false,
+        attention_stale_metadata: metadata_freshness.is_stale,
+        attention_degraded_run: false,
+        row,
+    }
+}
+
 fn build_queue_row(
     candidate: &InboxPrCandidate,
     github_login: Option<&str>,
     projection: &InboxProjectionData,
     environment_summary: &EnvironmentSummary,
 ) -> Option<DerivedQueueRow> {
-    let latest_run = projection.latest_runs_by_pr.get(&candidate.pr_id)?;
+    // A PR that has been fetched but never reviewed has no run. Surface it as a
+    // "ready to start" row rather than dropping it — otherwise a freshly fetched
+    // PR (the most common first-run state) never appears in the inbox.
+    let Some(latest_run) = projection.latest_runs_by_pr.get(&candidate.pr_id) else {
+        return Some(build_not_started_row(candidate, github_login));
+    };
     let agent_runs = projection
         .agent_runs_by_review
         .get(&latest_run.id)
@@ -638,6 +715,7 @@ fn build_attention_summary(rows: &[DerivedQueueRow]) -> InboxAttentionSummary {
 }
 
 fn build_sections(rows: Vec<DerivedQueueRow>) -> Vec<InboxSection> {
+    let mut ready_to_start = Vec::new();
     let mut needs_your_review = Vec::new();
     let mut updated_since_review = Vec::new();
     let mut review_requested = Vec::new();
@@ -649,6 +727,7 @@ fn build_sections(rows: Vec<DerivedQueueRow>) -> Vec<InboxSection> {
 
     for row in rows {
         match row.row.queue_state.as_str() {
+            "ready_to_start" => ready_to_start.push(row.row),
             "needs_your_review" => needs_your_review.push(row.row),
             "updated_since_review" => updated_since_review.push(row.row),
             "review_requested" => review_requested.push(row.row),
@@ -662,6 +741,12 @@ fn build_sections(rows: Vec<DerivedQueueRow>) -> Vec<InboxSection> {
     }
 
     let mut sections = Vec::new();
+    push_section(
+        &mut sections,
+        "ready_to_start",
+        "Ready to start",
+        ready_to_start,
+    );
     push_section(
         &mut sections,
         "needs_your_review",
@@ -1009,6 +1094,47 @@ mod tests {
         .unwrap();
         assert_eq!(row.row.queue_state, "needs_your_review");
         assert_eq!(row.row.reviewer_signal.precision, "exact");
+    }
+
+    #[test]
+    fn fetched_pr_without_review_run_becomes_ready_to_start() {
+        let db = init_db_in_memory().unwrap();
+        let conn = db.0.lock().unwrap();
+        insert_workspace_and_pr(
+            &conn,
+            Some(
+                r#"{"platform":"github","pr_body":null,"head_sha":"sha-1","base_sha":"sha-base","base_ref":"main","head_ref":"feature/auth","draft":false,"labels":[],"requested_reviewers":["mona"],"requested_teams":["platform"],"review_state_summary":[],"linked_issue_numbers":[],"text_issue_refs":[]}"#,
+            ),
+        );
+
+        let (candidate, projection) = load_candidate_and_projection(&conn);
+        let row = build_queue_row(
+            &candidate,
+            Some("mona"),
+            &projection,
+            &test_environment_summary(),
+        )
+        .unwrap();
+
+        assert_eq!(row.row.run_id, "");
+        assert_eq!(row.row.status, "not_started");
+        assert_eq!(row.row.queue_state, "ready_to_start");
+        assert_eq!(row.row.allowed_actions, vec!["start_review"]);
+        assert_eq!(row.row.review_freshness.state, "not_reviewed");
+        assert_eq!(
+            row.row.metadata_freshness.fetched_at.as_deref(),
+            candidate.platform_metadata_fetched_at.as_deref()
+        );
+        assert!(!row.row.metadata_freshness.is_stale);
+        assert_eq!(row.row.reviewer_signal.precision, "exact");
+        assert_eq!(row.row.reviewer_signal.requested_reviewers, vec!["mona"]);
+        assert_eq!(row.row.reviewer_signal.requested_teams, vec!["platform"]);
+
+        let sections = build_sections(vec![row]);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].id, "ready_to_start");
+        assert_eq!(sections[0].title, "Ready to start");
+        assert_eq!(sections[0].items[0].pr_id, "pr-1");
     }
 
     #[test]
